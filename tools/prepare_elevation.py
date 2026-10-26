@@ -23,7 +23,7 @@ import numpy as np
 import tifffile
 
 ETOPO_URL = (
-    "https://www.ngdc.noaa.gov/thredds/fileServer/global/ETOPO2022/60s/"
+    "https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/data/60s/"
     "60s_surface_elev_gtif/ETOPO_2022_v1_60s_N90W180_surface.tif"
 )
 ETOPO_PAGE = "https://www.ncei.noaa.gov/products/etopo-global-relief-model"

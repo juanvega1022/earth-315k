@@ -24,6 +24,9 @@ def make_tif(path, step_deg=1.0):
     tifffile.imwrite(
         path,
         data,
+        # Same encoding as the real ETOPO file: deflate with the floating-point predictor.
+        compression="zlib",
+        predictor=True,
         extratags=[
             (33550, "d", 3, (step_deg, step_deg, 0.0), False),
             (33922, "d", 6, (0.0, 0.0, 0.0, -180.0, 90.0, 0.0), False),

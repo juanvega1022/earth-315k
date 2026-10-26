@@ -6,7 +6,7 @@ This first version shows a 3D globe of the whole planet, with a higher-detail pa
 
 ## What you need (Windows)
 
-- **Unreal Engine 5.4 or newer** from the Epic Games Launcher
+- **Unreal Engine 5.8** (5.4 or newer should also work) from the Epic Games Launcher
 - **Visual Studio 2022** with the "Game development with C++" workload (the Epic installer guide lists the exact options)
 - **Python 3.10 or newer** from python.org (tick "Add Python to PATH" when installing)
 - **Git**, or GitHub Desktop, to download this repository
@@ -25,7 +25,7 @@ An RTX 4060 is plenty for this.
    python tools/prepare_elevation.py
    ```
 
-   This downloads NOAA's ETOPO 2022 global elevation model (about 1 GB, once) and writes `global` and `region` files into `Content/Data/`. If the download fails, download the 60 arc-second "surface" GeoTIFF by hand from <https://www.ncei.noaa.gov/products/etopo-global-relief-model> and run `python tools/prepare_elevation.py --source path\to\file.tif`.
+   This downloads NOAA's ETOPO 2022 global elevation model (about 450 MB, once) and writes `global` and `region` files into `Content/Data/`. If the download fails, download the 60 arc-second "surface" GeoTIFF by hand from <https://www.ncei.noaa.gov/products/etopo-global-relief-model> and run `python tools/prepare_elevation.py --source path\to\file.tif`.
 
 3. **Open the project.** Right-click `Earth315k.uproject` and pick "Generate Visual Studio project files", then double-click `Earth315k.uproject`. Say yes when Unreal asks to build the `Earth315k` module. The first build takes a few minutes.
 
