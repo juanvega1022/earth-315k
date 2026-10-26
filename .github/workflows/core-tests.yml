@@ -1,0 +1,24 @@
+name: Core tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run planet core tests
+        run: |
+          mkdir -p tests/build
+          g++ -std=c++17 -O2 -Wall -Wextra -Wshadow -Werror -I Source/Earth315k/Public tests/core_tests.cpp -o tests/build/core_tests
+          tests/build/core_tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test elevation script
+        run: |
+          pip install -r tools/requirements.txt
+          python tests/test_prepare_elevation.py
