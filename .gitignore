@@ -1,0 +1,21 @@
+# Unreal
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+*.VC.db
+*.opensdf
+*.sdf
+*.suo
+*.xcworkspace
+
+# Generated elevation data (run tools/prepare_elevation.py)
+Content/Data/*.bin
+Content/Data/*.json
+tools/cache/
+
+# Local test builds
+tests/build/
+__pycache__/
