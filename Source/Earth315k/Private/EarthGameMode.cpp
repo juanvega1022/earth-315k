@@ -1,5 +1,6 @@
 #include "EarthGameMode.h"
 
+#include "LifeSimulation.h"
 #include "PlanetGlobe.h"
 
 #include "Engine/DirectionalLight.h"
@@ -42,6 +43,17 @@ APlanetGlobe* AEarthGameMode::EnsureWorldSetUp()
 	{
 		// Light coming from over the camera's shoulder.
 		World->SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator(-20.f, 30.f, 0.f));
+	}
+
+	bool bHasLife = false;
+	for (TActorIterator<ALifeSimulation> It(World); It; ++It)
+	{
+		bHasLife = true;
+		break;
+	}
+	if (!bHasLife)
+	{
+		World->SpawnActor<ALifeSimulation>();
 	}
 	return Globe;
 }

@@ -19,3 +19,4 @@ tools/cache/
 # Local test builds
 tests/build/
 __pycache__/
+Simulation/build/

@@ -1,3 +1,4 @@
+using System.IO;
 using UnrealBuildTool;
 
 public class Earth315k : ModuleRules
@@ -15,5 +16,8 @@ public class Earth315k : ModuleRules
 			"ProceduralMeshComponent",
 			"Json"
 		});
+
+		// The simulation core lives outside Unreal so it can also run headless and be tested on its own.
+		PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "..", "..", "Simulation", "include"));
 	}
 }

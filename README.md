@@ -2,7 +2,11 @@
 
 A simulation of Earth starting 315,000 years ago, around the time of the oldest known *Homo sapiens* fossils. The planet is built from real elevation data, with seeded procedural generation (the No Man's Sky idea) adding detail finer than the data. AI NPCs with early-human traits come later.
 
-This first version shows a 3D globe of the whole planet, with a higher-detail patch over Africa, Arabia and the Levant.
+The goal is to watch AI NPCs grow and develop from early-human starting traits. The work goes in steps:
+
+1. **The planet and its life (now).** A 3D globe of the whole planet from real elevation data, with a higher-detail patch over Africa, Arabia and the Levant. Plants grow and die back with the seasons, and 25 animal species of the time (elephants, mammoths, cave lions, Smilodon, Diprotodon and more) graze, hunt, breed and die out.
+2. **The first NPC band** in East Africa, with needs, a small brain that learns, and children who inherit from parents.
+3. **Watching tools:** time speed, following one NPC, and a timeline of firsts.
 
 ## What you need (Windows)
 
@@ -29,7 +33,31 @@ An RTX 4060 is plenty for this.
 
 3. **Open the project.** Right-click `Earth315k.uproject` and pick "Generate Visual Studio project files", then double-click `Earth315k.uproject`. Say yes when Unreal asks to build the `Earth315k` module. The first build takes a few minutes.
 
-4. **Press Play.** In the editor, File > New Level > Empty Level, then press Play. The planet, a sun and a flying camera appear automatically. Fly with W A S D, Q and E for down and up, and the mouse to look.
+4. **Press Play.** In the editor, File > New Level > Empty Level, then press Play. The planet, its plants and animals, a sun and a flying camera appear automatically. Fly with W A S D, Q and E for down and up, and the mouse to look.
+
+## Watching life
+
+Land is coloured by plant cover: deep green where plants are thick, brown where they are thin. Each coloured ball is a group of animals of one species, bigger for bigger animals and bigger herds. The top left of the screen shows the year, the season, how many animals are alive and which species have died out.
+
+| Key | What it does |
+| --- | --- |
+| `]` | Twice as fast (up to 100 years per second, if your PC keeps up) |
+| `[` | Half as fast |
+| `P` | Pause or carry on |
+
+Drag a `LifeSimulation` into the level to change its `Seed`, starting speed or marker size.
+
+## Running life without graphics
+
+The simulation itself is plain C++ in `Simulation/` and can run on its own, much faster than with graphics. With CMake installed (Visual Studio includes it):
+
+```
+cmake -S Simulation -B Simulation/build
+cmake --build Simulation/build --config Release
+Simulation/build/Release/earth315k_sim --years 1000 --csv populations.csv
+```
+
+(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's populations and any species that died out, and `--csv` saves the populations for charts. Run it with no data and it tells you to fetch the elevation first.
 
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 
@@ -46,13 +74,15 @@ To change the planet while editing, drag `PlanetGlobe` from the Place Actors pan
 ## How it works
 
 - `tools/prepare_elevation.py` turns the ETOPO model into a coarse global grid and a detailed regional grid.
-- `Source/Earth315k/Public/PlanetCore/` is the planet maths in plain C++ with no Unreal code: elevation sampling, seeded noise, cube-sphere geometry and terrain colouring. It is unit tested on its own (`tests/core_tests.cpp`).
+- `Simulation/include/PlanetCore/` is the simulation in plain C++ with no Unreal code, so it can be tested and run on its own: elevation sampling, seeded noise, cube-sphere geometry and terrain colouring, plus `Ecosystem.h` (plants and animals) and `Species.h` (the species list, with sizes, diets, ranges and speeds). The same seed always gives the same history.
+- `ALifeSimulation` runs the ecosystem inside Unreal and draws it on the globe.
 - `APlanetGlobe` builds the mesh: six cube faces for the globe, plus a latitude/longitude patch for the region where the noise adds detail. Real data decides where land and sea are, and the noise is never allowed to move a coastline.
 - `AEarthGameMode` sets up the planet, sun and camera when you press Play.
 
 ## Known limits of this first version
 
-- Colours are a placeholder by height and latitude, not a real climate or vegetation model.
+- Plant growth comes from latitude, height and a desert belt, not a real climate model, and it is worked out in 2° squares.
+- Animals move as herds and packs, not as individuals. Some species don't balance yet: wild horses multiply until they fill the group limit, and some hunters die out early.
 - Sea level is the only change from today's map. Ice sheets, the Green Sahara and lakes of 315,000 years ago are not modelled yet.
 - The planet is not to real scale; it's a model globe you fly around.
 - The engine's built-in vertex colour material is used, so lighting is basic.
@@ -60,6 +90,8 @@ To change the planet while editing, drag `PlanetGlobe` from the Place Actors pan
 ## Running the tests
 
 ```
-g++ -std=c++17 -O2 -I Source/Earth315k/Public tests/core_tests.cpp -o tests/build/core_tests && tests/build/core_tests
+cmake -S Simulation -B Simulation/build
+cmake --build Simulation/build --config Release
+ctest --test-dir Simulation/build -C Release
 python tests/test_prepare_elevation.py
 ```

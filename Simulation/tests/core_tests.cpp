@@ -1,5 +1,5 @@
 // Unit tests for the engine-independent planet core.
-// Build: g++ -std=c++17 -O2 -I Source/Earth315k/Public tests/core_tests.cpp -o tests/build/core_tests
+// Build: see Simulation/CMakeLists.txt
 #include "PlanetCore/ElevationGrid.h"
 #include "PlanetCore/Noise.h"
 #include "PlanetCore/Sphere.h"

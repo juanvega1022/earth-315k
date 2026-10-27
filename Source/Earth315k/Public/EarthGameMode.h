@@ -9,7 +9,7 @@ class APlanetGlobe;
 
 /**
  * Default game mode. Pressing Play in any level spawns the planet (if the level
- * doesn't already have one), a sun, and a free-flying camera facing Africa.
+ * doesn't already have one), its plants and animals, a sun, and a free-flying camera facing Africa.
  */
 UCLASS()
 class EARTH315K_API AEarthGameMode : public AGameModeBase
