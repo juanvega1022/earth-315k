@@ -36,6 +36,8 @@ namespace
 		TArray<FVector2D> UVs;
 		TArray<FLinearColor> Colors;
 		TArray<bool> InRegion;
+		TArray<FVector2D> LatLon;
+		TArray<bool> CanGrowPlants;
 
 		// Adds the triangle facing both ways so it renders regardless of winding convention.
 		void AddTriangle(int32 A, int32 B, int32 C)
@@ -152,6 +154,7 @@ void APlanetGlobe::BuildPlanet()
 		return;
 	}
 	Mesh->ClearAllMeshSections();
+	Sections.Reset();
 
 	const bool bHaveGlobal = LoadGrid(TEXT("global"), GlobalGrid);
 	const bool bHaveRegion = bBuildRegion && LoadGrid(TEXT("region"), RegionGrid);
@@ -186,6 +189,18 @@ void APlanetGlobe::BuildPlanet()
 		Data.UVs.Add(FVector2D((P.Lon + 180.0) / 360.0, (90.0 - P.Lat) / 180.0));
 		Data.Colors.Add(FLinearColor(static_cast<float>(C.R), static_cast<float>(C.G), static_cast<float>(C.B)));
 		Data.InRegion.Add(bHaveRegion && RegionGrid.Contains(P.Lat, P.Lon));
+		Data.LatLon.Add(FVector2D(P.Lat, P.Lon));
+		Data.CanGrowPlants.Add(H > SeaLevelMeters && H - SeaLevelMeters < 3000.0 && FMath::Abs(P.Lat) < 72.0);
+	};
+	auto KeepSection = [this](const FMeshData& Data)
+	{
+		FPlanetSection& S = Sections.AddDefaulted_GetRef();
+		S.Vertices = Data.Vertices;
+		S.Normals = Data.Normals;
+		S.UVs = Data.UVs;
+		S.BaseColors = Data.Colors;
+		S.LatLon = Data.LatLon;
+		S.CanGrowPlants = Data.CanGrowPlants;
 	};
 
 	// Six cube faces at globe resolution, skipping triangles the region patch covers.
@@ -224,6 +239,7 @@ void APlanetGlobe::BuildPlanet()
 		Mesh->CreateMeshSection_LinearColor(Face, Data.Vertices, Data.Triangles, Data.Normals, Data.UVs, Data.Colors,
 			TArray<FProcMeshTangent>(), false);
 		Mesh->SetMaterial(Face, Material);
+		KeepSection(Data);
 	}
 
 	// Detailed region patch on a latitude/longitude grid, with seeded procedural detail.
@@ -263,6 +279,7 @@ void APlanetGlobe::BuildPlanet()
 		Mesh->CreateMeshSection_LinearColor(6, Data.Vertices, Data.Triangles, Data.Normals, Data.UVs, Data.Colors,
 			TArray<FProcMeshTangent>(), false);
 		Mesh->SetMaterial(6, Material);
+		KeepSection(Data);
 	}
 
 	UE_LOG(LogPlanet, Log, TEXT("Planet built: global data %s, region data %s, seed %lld"),
@@ -274,4 +291,56 @@ FVector2D APlanetGlobe::WorldToLatLon(const FVector& WorldLocation) const
 	const FVector Local = GetActorTransform().InverseTransformPosition(WorldLocation);
 	const earth::LatLon P = earth::DirectionToLatLon(FromUnreal(Local));
 	return FVector2D(P.Lat, P.Lon);
+}
+
+void APlanetGlobe::EnsureBuilt()
+{
+	if (!GlobalGrid.IsValid() || Sections.IsEmpty())
+	{
+		BuildPlanet();
+	}
+}
+
+FVector APlanetGlobe::SurfacePoint(double Lat, double Lon, double LiftUnits) const
+{
+	double H = 0.0;
+	if (RegionGrid.IsValid() && RegionGrid.Contains(Lat, Lon))
+	{
+		H = RegionGrid.Sample(Lat, Lon);
+	}
+	else if (GlobalGrid.IsValid())
+	{
+		H = GlobalGrid.Sample(Lat, Lon);
+	}
+	const double MetresToUnits = GlobeRadius * ElevationExaggeration / earth::kEarthRadiusMeters;
+	const double Above = FMath::Max(H, static_cast<double>(SeaLevelMeters)) - SeaLevelMeters;
+	const double Radius = GlobeRadius + Above * MetresToUnits + LiftUnits;
+	return GetActorTransform().TransformPosition(ToUnreal(earth::LatLonToDirection(Lat, Lon)) * Radius);
+}
+
+void APlanetGlobe::TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover)
+{
+	if (!Mesh)
+	{
+		return;
+	}
+	const FLinearColor Bare(0.60f, 0.52f, 0.38f);
+	const FLinearColor Lush(0.13f, 0.38f, 0.10f);
+	TArray<FLinearColor> Colors;
+	for (int32 Index = 0; Index < Sections.Num(); ++Index)
+	{
+		const FPlanetSection& S = Sections[Index];
+		Colors = S.BaseColors;
+		for (int32 v = 0; v < Colors.Num(); ++v)
+		{
+			if (S.CanGrowPlants[v])
+			{
+				const float Cover = FMath::Clamp(PlantCover(S.LatLon[v].X, S.LatLon[v].Y), 0.f, 1.f);
+				// Ground shows through where plants are thin; dense growth is deep green.
+				const FLinearColor Ground = FMath::Lerp(S.BaseColors[v], Bare, 0.5f);
+				Colors[v] = FMath::Lerp(Ground, Lush, Cover);
+			}
+		}
+		Mesh->UpdateMeshSection_LinearColor(Index, S.Vertices, S.Normals, S.UVs, Colors, TArray<FProcMeshTangent>());
+	}
 }
