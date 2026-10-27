@@ -4,8 +4,8 @@ A simulation of Earth starting 315,000 years ago, around the time of the oldest 
 
 The goal is to watch AI NPCs grow and develop from early-human starting traits. The work goes in steps:
 
-1. **The planet and its life (now).** A 3D globe of the whole planet from real elevation data, with a higher-detail patch over Africa, Arabia and the Levant. Plants grow and die back with the seasons, and 25 animal species of the time (elephants, mammoths, cave lions, Smilodon, Diprotodon and more) graze, hunt, breed and die out.
-2. **The first NPC band** in East Africa, with needs, a small brain that learns, and children who inherit from parents.
+1. **The planet and its life.** A 3D globe of the whole planet from real elevation data, with a higher-detail patch over Africa, Arabia and the Levant. Plants grow and die back with the seasons, and 25 animal species of the time (elephants, mammoths, cave lions, Smilodon, Diprotodon and more) graze, hunt, breed and die out.
+2. **The first NPC band (now)** in East Africa, with needs, a small brain that learns, and children who inherit from parents.
 3. **Watching tools:** time speed, following one NPC, and a timeline of firsts.
 
 ## What you need (Windows)
@@ -44,8 +44,28 @@ Land is coloured by plant cover: deep green where plants are thick, brown where 
 | `]` | Twice as fast (up to 100 years per second, if your PC keeps up) |
 | `[` | Half as fast |
 | `P` | Pause or carry on |
+| `F` | Follow an NPC with the camera; press again for the next one |
+| `G` | Stop following |
+| `B` | Show or hide the followed NPC's brain |
+| Mouse wheel | Zoom in or out while following |
+| `R` | Start a new world with the next seed |
 
 Drag a `LifeSimulation` into the level to change its `Seed`, starting speed or marker size.
+
+## The NPCs
+
+Thirty people start in a camp at Omo Kibish in southern Ethiopia, knowing nothing about the world. They are the bright pink balls (children are smaller). Each adult decides for itself every day whether to forage, hunt, drink, rest, share food, scout, hide or spend time with others.
+
+- **Brain.** Each NPC has a small neural network: 16 senses (hunger, thirst, tiredness, fear, loneliness, the urge to mate, plants, game and water nearby, the season, age, health, band size, food carried, hunting skill), 12 hidden neurons and 8 actions.
+- **Instincts.** The first band is born with simple drives: eat when hungry, drink when thirsty, rest when tired, hide from danger, seek company, and a weak urge to chase game. Everything else has to be learned or evolved.
+- **Learning.** After each day, choices that made an NPC feel better than usual get stronger and ones that made it feel worse get weaker. Lessons slowly fade unless they keep being confirmed.
+- **Culture.** Children copy their mothers, and adults sometimes copy an older camp mate who is doing better.
+- **Children.** A baby's inborn wiring is a mix of both parents' with a few random changes, so useful instincts spread over generations.
+- **Bands.** People live in camps that move on when food or water runs low, towards the best place their scouts have found. Camps split when they grow past about 40, and small camps that meet join up.
+
+Press `F` to follow someone. The panel on the right shows their brain live: senses on the left, hidden neurons in the middle and the 8 actions on the right with the chance of each. Green lines push towards an action and red lines push away, brighter for stronger. Below are their needs, skills and how they have spent their days. The top left lists "firsts" as they happen: the first hunt, the first child, the first band split, the first person to set foot outside Africa.
+
+`earth315k_sim --brain brain.json` saves the brain of the oldest NPC at the end of a run, for charts and other tools.
 
 ## Running life without graphics
 
@@ -57,7 +77,7 @@ cmake --build Simulation/build --config Release
 Simulation/build/Release/earth315k_sim --years 1000 --csv populations.csv
 ```
 
-(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's populations and any species that died out, and `--csv` saves the populations for charts. Run it with no data and it tells you to fetch the elevation first.
+(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's animals and people, the people's firsts and any species that died out, and `--csv` saves the populations for charts. Run it with no data and it tells you to fetch the elevation first.
 
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 
@@ -82,6 +102,8 @@ To change the planet while editing, drag `PlanetGlobe` from the Place Actors pan
 ## Known limits of this first version
 
 - Plant growth comes from latitude, height and a desert belt, not a real climate model, and it is worked out in 2° squares.
+- Water comes from how green a place can be, not from real rivers and lakes.
+- The NPCs have been tuned on a made-up test continent; on the real map some balancing may be needed.
 - Animals move as herds and packs, not as individuals. Some species don't balance yet: wild horses multiply until they fill the group limit, and some hunters die out early.
 - Sea level is the only change from today's map. Ice sheets, the Green Sahara and lakes of 315,000 years ago are not modelled yet.
 - The planet is not to real scale; it's a model globe you fly around.

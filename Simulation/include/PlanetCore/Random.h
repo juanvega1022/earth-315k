@@ -1,6 +1,7 @@
 // Small deterministic random number generator, so a run with the same seed always plays out the same way.
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace earth
@@ -26,6 +27,14 @@ public:
 	double Range(double Lo, double Hi) { return Lo + (Hi - Lo) * Uniform(); }
 
 	bool Chance(double P) { return Uniform() < P; }
+
+	// Normally distributed with mean 0 and standard deviation 1.
+	double Gaussian()
+	{
+		const double U1 = 1.0 - Uniform();
+		const double U2 = Uniform();
+		return std::sqrt(-2.0 * std::log(U1)) * std::cos(6.283185307179586 * U2);
+	}
 
 private:
 	uint64_t State;

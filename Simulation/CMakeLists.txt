@@ -27,3 +27,7 @@ add_test(NAME core_tests COMMAND core_tests)
 add_executable(ecosystem_tests tests/ecosystem_tests.cpp)
 target_link_libraries(ecosystem_tests PRIVATE planet_core)
 add_test(NAME ecosystem_tests COMMAND ecosystem_tests)
+
+add_executable(people_tests tests/people_tests.cpp)
+target_link_libraries(people_tests PRIVATE planet_core)
+add_test(NAME people_tests COMMAND people_tests)
