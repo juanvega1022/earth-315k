@@ -3,29 +3,137 @@
 //
 // Plants: a 2-degree grid of edible plant food that grows with the seasons and gets eaten.
 // Animals: groups of one species that move, graze or hunt, give birth, starve and die.
+//          Each group has a tiny brain that decides how it weighs food, danger and roaming
+//          when it moves. When a group splits, the new group inherits the brain with small
+//          mutations, so herds that move well grow, split more and pass their wiring on.
 #pragma once
 
 #include "ElevationGrid.h"
+#include "Parallel.h"
 #include "Random.h"
 #include "Species.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace earth
 {
 
+constexpr int kAnimalInputs = 6;
+constexpr int kAnimalHidden = 5;
+constexpr int kAnimalOutputs = 4;
+
+inline const char* AnimalInputName(int I)
+{
+	static const char* Names[kAnimalInputs] = {"Hunger", "Food here", "Better food near", "Danger here", "Season", "Crowding"};
+	return (I >= 0 && I < kAnimalInputs) ? Names[I] : "?";
+}
+
+// What each output does when the group picks where to go next.
+inline const char* AnimalOutputName(int O)
+{
+	static const char* Names[kAnimalOutputs] = {"Pull of food", "Caution", "Urge to roam", "Urge to stay"};
+	return (O >= 0 && O < kAnimalOutputs) ? Names[O] : "?";
+}
+
+enum class AnimalMove : int
+{
+	Stayed,
+	ToFood,
+	Fled,
+	Roamed
+};
+
+inline const char* AnimalMoveName(int M)
+{
+	static const char* Names[4] = {"Staying put", "Moving to better food", "Moving away from hunters", "Roaming"};
+	return (M >= 0 && M < 4) ? Names[M] : "?";
+}
+
+// Inputs -> tanh hidden layer -> outputs that are never negative.
+struct AnimalBrain
+{
+	std::array<float, kAnimalInputs * kAnimalHidden> W1{};
+	std::array<float, kAnimalHidden> B1{};
+	std::array<float, kAnimalHidden * kAnimalOutputs> W2{};
+	std::array<float, kAnimalOutputs> B2{};
+
+	void Think(const float* In, float* Hidden, float* Out) const
+	{
+		for (int h = 0; h < kAnimalHidden; ++h)
+		{
+			float Sum = B1[h];
+			for (int i = 0; i < kAnimalInputs; ++i)
+			{
+				Sum += In[i] * W1[i * kAnimalHidden + h];
+			}
+			Hidden[h] = std::tanh(Sum);
+		}
+		for (int o = 0; o < kAnimalOutputs; ++o)
+		{
+			float Sum = B2[o];
+			for (int h = 0; h < kAnimalHidden; ++h)
+			{
+				Sum += Hidden[h] * W2[h * kAnimalOutputs + o];
+			}
+			Out[o] = std::max(0.0f, Sum);
+		}
+	}
+};
+
+// The wiring every species starts with: hunger strengthens the pull of food, danger makes
+// the group careful, crowding makes it roam.
+inline AnimalBrain InstinctAnimalBrain()
+{
+	AnimalBrain B;
+	auto Link1 = [&](int In, int Hid, float W) { B.W1[In * kAnimalHidden + Hid] = W; };
+	auto Link2 = [&](int Hid, int Out, float W) { B.W2[Hid * kAnimalOutputs + Out] = W; };
+	Link1(0, 0, 2.0f); B.B1[0] = -1.0f; // hunger
+	Link1(3, 1, 3.0f);                  // danger
+	Link1(2, 2, 3.0f);                  // better food nearby
+	Link1(5, 3, 2.0f); B.B1[3] = -1.0f; // crowding
+	Link1(4, 4, 2.0f); B.B1[4] = -1.0f; // season
+	Link2(0, 0, 0.3f);
+	Link2(1, 1, 0.5f);
+	Link2(3, 2, 0.3f);
+	B.B2 = {1.0f, 0.5f, 0.3f, 0.0f};
+	return B;
+}
+
 struct AnimalGroup
 {
 	int SpeciesIndex = 0;
+	uint32_t Id = 0;
+	int Generation = 0;   // How many splits separate this group from the first groups.
 	double Lat = 0.0;
 	double Lon = 0.0;
 	double Count = 0.0;
 	double WellFed = 1.0; // 0 starving .. 1 full, smoothed over recent days.
 	double Heading = 0.0; // Radians; groups keep roughly the same direction when nothing pulls them elsewhere.
+	AnimalBrain Brain;
+	// The last decision, kept so it can be shown.
+	std::array<float, kAnimalInputs> LastInputs{};
+	std::array<float, kAnimalHidden> LastHidden{};
+	std::array<float, kAnimalOutputs> LastOutputs{};
+	int LastMove = static_cast<int>(AnimalMove::Stayed);
+};
+
+// What a patch of plants is doing, for viewing tools.
+struct PlantPatch
+{
+	double Plants = 0.0;      // kg per km^2 now.
+	double Capacity = 0.0;    // kg per km^2 at the best time of year.
+	double Peak = 1.0;        // The planet's best possible, kg per km^2.
+	double Season = 0.0;      // 0 deep winter .. 1 peak growing season.
+	double EatenPerDay = 0.0; // kg per km^2 eaten by animals per day, recently.
+	double Lat = 0.0;         // Centre of the patch.
+	double Lon = 0.0;
+	double SizeDegrees = 2.0;
 };
 
 struct EcoEvent
@@ -43,6 +151,8 @@ struct EcosystemSettings
 	double PeakPlantsPerKm2 = 2000.0;
 	// Fraction of the remaining room a cell's plants regrow per day in the growing season.
 	double PlantGrowthPerDay = 0.03;
+	// CPU threads used to move the animals; 0 uses all cores, 1 runs everything on the caller's thread.
+	int Threads = 0;
 };
 
 class Ecosystem
@@ -52,8 +162,12 @@ public:
 
 	Ecosystem(const ElevationGrid* InElevation, std::vector<Species> InSpecies, uint64_t Seed,
 		const EcosystemSettings& InSettings = EcosystemSettings())
-		: Elevation(InElevation), SpeciesList(std::move(InSpecies)), Random(Seed), Settings(InSettings)
+		: Elevation(InElevation), SpeciesList(std::move(InSpecies)), Random(Seed), BaseSeed(Seed), Settings(InSettings)
 	{
+		if (Settings.Threads != 1)
+		{
+			Pool = std::make_unique<WorkerPool>(Settings.Threads > 1 ? Settings.Threads - 1 : 0);
+		}
 		Cols = static_cast<int>(std::lround(360.0 / Settings.CellDegrees));
 		Rows = static_cast<int>(std::lround(180.0 / Settings.CellDegrees));
 		BuildAltitude();
@@ -77,6 +191,34 @@ public:
 	const std::vector<Species>& GetSpecies() const { return SpeciesList; }
 	const std::vector<AnimalGroup>& Groups() const { return AnimalGroups; }
 	const std::vector<EcoEvent>& Events() const { return EventLog; }
+
+	const AnimalGroup* FindGroup(uint32_t Id) const
+	{
+		for (const AnimalGroup& G : AnimalGroups)
+		{
+			if (G.Id == Id)
+			{
+				return &G;
+			}
+		}
+		return nullptr;
+	}
+
+	PlantPatch PlantsAt(double Lat, double Lon) const
+	{
+		const int Index = CellIndex(Lat, Lon);
+		const PlantCell& C = Cells[Index];
+		PlantPatch P;
+		P.Plants = C.Plants;
+		P.Capacity = C.Capacity;
+		P.Peak = Settings.PeakPlantsPerKm2;
+		P.Season = GrowingSeason(C.Lat);
+		P.EatenPerDay = C.EatenPerDay;
+		P.Lat = C.Lat;
+		P.Lon = -180.0 + (Index % Cols + 0.5) * Settings.CellDegrees;
+		P.SizeDegrees = Settings.CellDegrees;
+		return P;
+	}
 
 	bool IsLand(double Lat, double Lon) const { return AltitudeAt(Lat, Lon) > 0.0; }
 
@@ -235,20 +377,47 @@ public:
 
 	// ---- Simulation -------------------------------------------------------------------------
 
-	void StepDay()
+	void StepDay() { Step(1); }
+
+	// Advances Days days in one go. Steps longer than a day are coarser (groups move and eat
+	// once for the whole span) but much faster, for fast forward. Up to 10 days at a time.
+	void Step(int Days)
 	{
-		GrowPlants();
+		Days = std::clamp(Days, 1, 10);
+		GrowPlants(Days);
 		BuildGroupIndex();
+		// Every group decides where to go from the same picture of the world, in parallel,
+		// then they eat one after another.
+		const std::function<void(size_t)> MoveOne = [&](size_t i)
+		{
+			AnimalGroup& G = AnimalGroups[i];
+			if (G.Count > 0.0)
+			{
+				Rng Dice(BaseSeed ^ (static_cast<uint64_t>(DayNumber) * 0x9E3779B97F4A7C15ull) ^ (static_cast<uint64_t>(G.Id) * 0xBF58476D1CE4E5B9ull));
+				Move(G, SpeciesList[G.SpeciesIndex], Days, Dice);
+			}
+		};
+		if (Pool)
+		{
+			Pool->For(AnimalGroups.size(), MoveOne);
+		}
+		else
+		{
+			for (size_t i = 0; i < AnimalGroups.size(); ++i)
+			{
+				MoveOne(i);
+			}
+		}
 		const size_t Existing = AnimalGroups.size();
 		for (size_t i = 0; i < Existing; ++i)
 		{
 			if (AnimalGroups[i].Count > 0.0)
 			{
-				LiveOneDay(i);
+				LiveOneDay(i, Days);
 			}
 		}
 		RemoveDeadAndSplit();
-		DayNumber += 1.0;
+		DayNumber += Days;
 	}
 
 	void StepDays(int N)
@@ -265,6 +434,7 @@ private:
 		double Capacity = 0.0; // kg per km^2 at the best time of year.
 		double Plants = 0.0;   // kg per km^2 right now.
 		double Lat = 0.0;
+		double EatenPerDay = 0.0; // kg per km^2, during the last step.
 	};
 
 	static constexpr int kAltitudeCellsPerDegree = 4;
@@ -276,7 +446,10 @@ private:
 	std::vector<int> TouchedCells;
 	std::vector<Species> SpeciesList;
 	Rng Random;
+	uint64_t BaseSeed = 0;
 	EcosystemSettings Settings;
+	std::unique_ptr<WorkerPool> Pool;
+	uint32_t NextGroupId = 1;
 
 	int Cols = 180;
 	int Rows = 90;
@@ -373,6 +546,7 @@ private:
 
 	void SpawnAnimals()
 	{
+		const AnimalBrain Instinct = InstinctAnimalBrain();
 		// Plant eaters first, so hunters can start next to their prey.
 		for (int Pass = 0; Pass < 2; ++Pass)
 		{
@@ -422,6 +596,8 @@ private:
 							G.Lon = Lon;
 							G.Count = S.GroupSize * Random.Range(0.6, 1.4);
 							G.Heading = Random.Range(0.0, 6.283185307179586);
+							G.Id = NextGroupId++;
+							G.Brain = Instinct;
 							AnimalGroups.push_back(G);
 							break;
 						}
@@ -431,7 +607,7 @@ private:
 		}
 	}
 
-	void GrowPlants()
+	void GrowPlants(int Days)
 	{
 		for (PlantCell& C : Cells)
 		{
@@ -439,16 +615,18 @@ private:
 			{
 				continue;
 			}
+			C.EatenPerDay = 0.0;
 			const double Season = GrowingSeason(C.Lat);
 			const double Target = C.Capacity * (0.15 + 0.85 * Season);
 			if (C.Plants < Target)
 			{
-				C.Plants += (Target - C.Plants) * Settings.PlantGrowthPerDay * (0.2 + 0.8 * Season);
+				const double Rate = Settings.PlantGrowthPerDay * (0.2 + 0.8 * Season);
+				C.Plants += (Target - C.Plants) * (Days == 1 ? Rate : 1.0 - std::pow(1.0 - Rate, Days));
 			}
 			else
 			{
 				// Out of season, plants die back towards the winter level.
-				C.Plants -= (C.Plants - Target) * 0.01;
+				C.Plants -= (C.Plants - Target) * (Days == 1 ? 0.01 : 1.0 - std::pow(0.99, Days));
 			}
 		}
 	}
@@ -537,16 +715,14 @@ private:
 		return HuntersOf[static_cast<size_t>(Cell) * SpeciesList.size() + PreyIndex];
 	}
 
-	void LiveOneDay(size_t Index)
+	void LiveOneDay(size_t Index, int Days)
 	{
 		AnimalGroup& G = AnimalGroups[Index];
 		const Species& S = SpeciesList[G.SpeciesIndex];
 
-		Move(G, S);
-
 		// Eat.
 		const int Cell = CellIndex(G.Lat, G.Lon);
-		const double Need = G.Count * S.FoodPerDayKg();
+		const double Need = G.Count * S.FoodPerDayKg() * Days;
 		double Eaten = 0.0;
 		if (S.Eats == Diet::Plants)
 		{
@@ -560,6 +736,7 @@ private:
 				{
 					Eaten += Take;
 					C.Plants = std::max(0.0, C.Plants - Take / Area);
+					C.EatenPerDay += Take / Area / Days;
 				}
 			};
 			Graze(Cell);
@@ -570,10 +747,11 @@ private:
 		}
 		else
 		{
-			Eaten = Hunt(G, S, Cell, Need);
+			Eaten = Hunt(G, S, Cell, Need, Days);
 		}
 		const double Fed = Need > 0.0 ? std::clamp(Eaten / Need, 0.0, 1.0) : 1.0;
-		G.WellFed = G.WellFed * 0.9 + Fed * 0.1;
+		const double Keep = Days == 1 ? 0.9 : std::pow(0.9, Days);
+		G.WellFed = G.WellFed * Keep + Fed * (1.0 - Keep);
 
 		// Births and deaths, as daily shares of yearly rates.
 		// Animals cope with lean spells; only real hunger kills, and only the well fed breed.
@@ -593,7 +771,7 @@ private:
 			Births *= std::clamp(Ratio / 3.0 - 1.0, 0.0, 1.0);
 		}
 		const double Deaths = 1.0 / S.LifespanYears + std::max(0.0, 0.5 - G.WellFed) * 4.0;
-		G.Count += G.Count * (Births - Deaths) / kDaysPerYear;
+		G.Count += G.Count * (Days == 1 ? (Births - Deaths) / kDaysPerYear : std::expm1((Births - Deaths) * Days / kDaysPerYear));
 		if (G.Count < 1.0)
 		{
 			G.Count = 0.0;
@@ -645,7 +823,7 @@ private:
 	}
 
 	// Hunts in the group's cell and the cells around it.
-	double Hunt(AnimalGroup& G, const Species& S, int Cell, double NeedKg)
+	double Hunt(AnimalGroup& G, const Species& S, int Cell, double NeedKg, int Days)
 	{
 		double Got = 0.0;
 		const int R = Cell / Cols;
@@ -674,7 +852,7 @@ private:
 					// Hunts often fail, and much more so when prey is scarce and spread out (a
 					// "type III" response), which stops hunters wiping out their own food supply.
 					const double Density = Prey.Count / SpeciesList[Prey.SpeciesIndex].GroupSize;
-					const double MaxKills = G.Count * 0.15 * Density * Density / (1.0 + Density * Density);
+					const double MaxKills = G.Count * 0.15 * Days * Density * Density / (1.0 + Density * Density);
 					const double Wanted = (NeedKg - Got) / (PreyMass * 0.6);
 					const double Kills = std::min({Wanted, MaxKills, Prey.Count - 1.0});
 					if (Kills <= 0.0)
@@ -689,21 +867,28 @@ private:
 		return Got;
 	}
 
-	// Look at nearby spots and move to the best one. When nothing nearby is better,
-	// keep wandering roughly the same way, so groups explore instead of jittering in place.
-	void Move(AnimalGroup& G, const Species& S)
+	// Look at nearby spots and move to the best one, weighing food, danger and the urge to
+	// keep going the same way as the group's brain says. When nothing nearby is better, keep
+	// wandering roughly the same way, so groups explore instead of jittering in place.
+	void Move(AnimalGroup& G, const Species& S, int Days, Rng& Dice) const
 	{
 		const double Pi = 3.14159265358979323846;
-		const double StepKm = S.SpeedKmPerDay * Random.Range(0.3, 1.0);
+		const double StepKm = S.SpeedKmPerDay * Dice.Range(0.3, 1.0) * std::min(Days, 6);
 		const double CosLat = std::max(0.1, std::cos(G.Lat * Pi / 180.0));
-		double BestLat = G.Lat;
-		double BestLon = G.Lon;
-		double BestAngle = G.Heading;
-		double BestScore = Score(G, S, G.Lat, G.Lon) + Random.Range(0.0, 0.02);
-		bool Moved = false;
+
+		struct Option
+		{
+			double Lat, Lon, Angle, Food, Danger;
+		};
+		std::array<Option, 9> Options;
+		int Count = 0;
+		double DangerHere = 0.0;
+		const double FoodHere = Food(G, S, G.Lat, G.Lon, DangerHere);
+		Options[Count++] = {G.Lat, G.Lon, G.Heading, FoodHere, DangerHere};
+		double BestFood = FoodHere;
 		for (int d = 0; d < 8; ++d)
 		{
-			const double Angle = (d + Random.Uniform()) * Pi / 4.0;
+			const double Angle = (d + Dice.Uniform()) * Pi / 4.0;
 			const double Lat = G.Lat + std::sin(Angle) * StepKm / 111.0;
 			double Lon = G.Lon + std::cos(Angle) * StepKm / (111.0 * CosLat);
 			if (Lat > 89.0 || Lat < -89.0)
@@ -716,31 +901,72 @@ private:
 			{
 				continue;
 			}
-			const double Wander = 0.03 * std::cos(Angle - G.Heading);
-			const double Sc = Score(G, S, Lat, Lon) + Wander + Random.Range(0.0, 0.02);
+			double Danger = 0.0;
+			const double F = Food(G, S, Lat, Lon, Danger);
+			BestFood = std::max(BestFood, F);
+			Options[Count++] = {Lat, Lon, Angle, F, Danger};
+		}
+
+		float* In = G.LastInputs.data();
+		In[0] = static_cast<float>(1.0 - G.WellFed);
+		In[1] = static_cast<float>(std::tanh(FoodHere));
+		In[2] = static_cast<float>(std::tanh(BestFood - FoodHere));
+		In[3] = static_cast<float>(DangerHere);
+		In[4] = static_cast<float>(GrowingSeason(G.Lat));
+		In[5] = static_cast<float>(std::clamp(G.Count / (S.GroupSize * 4.0), 0.0, 1.0));
+		G.Brain.Think(In, G.LastHidden.data(), G.LastOutputs.data());
+		const double FoodPull = G.LastOutputs[0];
+		const double Caution = G.LastOutputs[1];
+		const double Roam = 0.1 * G.LastOutputs[2];
+		const double Settle = 0.1 * G.LastOutputs[3];
+
+		int Best = 0;
+		double BestScore = FoodPull * FoodHere - Caution * DangerHere + Settle + Dice.Range(0.0, 0.02);
+		for (int k = 1; k < Count; ++k)
+		{
+			const Option& O = Options[k];
+			const double Sc = FoodPull * O.Food - Caution * O.Danger + Roam * std::cos(O.Angle - G.Heading) + Dice.Range(0.0, 0.02);
 			if (Sc > BestScore)
 			{
 				BestScore = Sc;
-				BestLat = Lat;
-				BestLon = Lon;
-				BestAngle = Angle;
-				Moved = true;
+				Best = k;
 			}
 		}
-		G.Lat = BestLat;
-		G.Lon = BestLon;
-		G.Heading = Moved ? BestAngle : G.Heading + Random.Range(-1.5, 1.5);
+		if (Best == 0)
+		{
+			G.Heading += Dice.Range(-1.5, 1.5);
+			G.LastMove = static_cast<int>(AnimalMove::Stayed);
+			return;
+		}
+		const Option& O = Options[Best];
+		if (DangerHere > 0.1 && O.Danger < DangerHere)
+		{
+			G.LastMove = static_cast<int>(AnimalMove::Fled);
+		}
+		else if (O.Food > FoodHere)
+		{
+			G.LastMove = static_cast<int>(AnimalMove::ToFood);
+		}
+		else
+		{
+			G.LastMove = static_cast<int>(AnimalMove::Roamed);
+		}
+		G.Lat = O.Lat;
+		G.Lon = O.Lon;
+		G.Heading = O.Angle;
 	}
 
-	double Score(const AnimalGroup& G, const Species& S, double Lat, double Lon) const
+	// How good the food is at a place (plants: share of the best possible; hunters: a log
+	// scale of prey around), and how dangerous it is.
+	double Food(const AnimalGroup& G, const Species& S, double Lat, double Lon, double& Danger) const
 	{
 		const int Cell = CellIndex(Lat, Lon);
 		if (S.Eats == Diet::Plants)
 		{
-			const double Food = Cells[Cell].Plants / Settings.PeakPlantsPerKm2;
-			const double Danger = std::min(1.0, HuntersInCell(G.SpeciesIndex, Cell) / std::max(1.0, G.Count));
-			return Food - 0.5 * Danger;
+			Danger = std::min(1.0, HuntersInCell(G.SpeciesIndex, Cell) / std::max(1.0, G.Count));
+			return Cells[Cell].Plants / Settings.PeakPlantsPerKm2;
 		}
+		Danger = 0.0;
 		// Hunters follow prey over a wide area (each group stands for animals spread across
 		// a region), weighting nearer cells more.
 		const double Need = std::max(1.0, G.Count * S.BodyMassKg * 20.0);
@@ -766,26 +992,32 @@ private:
 
 	void RemoveDeadAndSplit()
 	{
-		std::vector<AnimalGroup> Next;
-		Next.reserve(AnimalGroups.size() + 16);
-		for (size_t i = 0; i < AnimalGroups.size(); ++i)
+		// Compacts the list in place; new groups from splits go on the end.
+		const size_t Before = AnimalGroups.size();
+		const double Crowding = std::max(1.0, 2.0 * static_cast<double>(Before) / Settings.MaxGroups);
+		std::vector<AnimalGroup> Splits;
+		std::vector<double> Alive(SpeciesList.size(), 0.0);
+		size_t Kept = 0;
+		for (size_t i = 0; i < Before; ++i)
 		{
-			const AnimalGroup& G = AnimalGroups[i];
+			AnimalGroup& G = AnimalGroups[i];
 			if (G.Count < 1.0)
 			{
 				continue;
 			}
 			const Species& S = SpeciesList[G.SpeciesIndex];
-			// Groups still to copy, plus one extra if this one splits, must fit under the cap.
-			const size_t Remaining = AnimalGroups.size() - i;
-			// As the planet fills up, groups grow larger before splitting, so the cap is approached gently.
-			const double Crowding = std::max(1.0, 2.0 * static_cast<double>(AnimalGroups.size()) / Settings.MaxGroups);
-			if (G.Count > S.GroupSize * 2.0 * Crowding * Crowding && Next.size() + Remaining + 1 <= static_cast<size_t>(Settings.MaxGroups))
+			Alive[G.SpeciesIndex] += G.Count;
+			// Groups kept so far, the ones still to look at, plus one extra if this one splits,
+			// must fit under the cap. As the planet fills up, groups grow larger before
+			// splitting, so the cap is approached gently.
+			const size_t Remaining = Before - i;
+			if (G.Count > S.GroupSize * 2.0 * Crowding * Crowding && Kept + Splits.size() + Remaining + 1 <= static_cast<size_t>(Settings.MaxGroups))
 			{
-				AnimalGroup A = G;
+				G.Count *= 0.5;
 				AnimalGroup B = G;
-				A.Count = G.Count * 0.5;
-				B.Count = G.Count * 0.5;
+				B.Id = NextGroupId++;
+				B.Generation = G.Generation + 1;
+				B.Brain = MutateBrain(G.Brain);
 				B.Lat = std::clamp(G.Lat + Random.Range(-0.3, 0.3), -89.0, 89.0);
 				B.Lon = G.Lon + Random.Range(-0.3, 0.3);
 				if (!Habitable(S, B.Lat, B.Lon))
@@ -793,24 +1025,46 @@ private:
 					B.Lat = G.Lat;
 					B.Lon = G.Lon;
 				}
-				Next.push_back(A);
-				Next.push_back(B);
+				Splits.push_back(B);
 			}
-			else
+			if (Kept != i)
 			{
-				Next.push_back(G);
+				AnimalGroups[Kept] = G;
 			}
+			++Kept;
 		}
-		AnimalGroups.swap(Next);
+		AnimalGroups.resize(Kept);
+		AnimalGroups.insert(AnimalGroups.end(), Splits.begin(), Splits.end());
 
 		for (size_t s = 0; s < SpeciesList.size(); ++s)
 		{
-			if (SpeciesAlive[s] && CountOf(static_cast<int>(s)) <= 0.0)
+			if (SpeciesAlive[s] && Alive[s] <= 0.0)
 			{
 				SpeciesAlive[s] = false;
 				EventLog.push_back({Years(), SpeciesList[s].Name + " died out"});
 			}
 		}
+	}
+
+	// A copy of a brain with a few weights nudged at random.
+	AnimalBrain MutateBrain(const AnimalBrain& Parent)
+	{
+		AnimalBrain B = Parent;
+		auto Nudge = [&](float* W, size_t N)
+		{
+			for (size_t i = 0; i < N; ++i)
+			{
+				if (Random.Chance(0.1))
+				{
+					W[i] += static_cast<float>(Random.Gaussian() * 0.1);
+				}
+			}
+		};
+		Nudge(B.W1.data(), B.W1.size());
+		Nudge(B.B1.data(), B.B1.size());
+		Nudge(B.W2.data(), B.W2.size());
+		Nudge(B.B2.data(), B.B2.size());
+		return B;
 	}
 };
 

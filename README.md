@@ -41,14 +41,20 @@ Land is coloured by plant cover: deep green where plants are thick, brown where 
 
 | Key | What it does |
 | --- | --- |
-| `]` | Twice as fast (up to 100 years per second, if your PC keeps up) |
+| `]` | Twice as fast (up to 1,000 years per second, if your PC keeps up) |
 | `[` | Half as fast |
 | `P` | Pause or carry on |
+| `1` `2` `3` `4` | Jump ahead 10, 100, 1,000 or 10,000 years, then sum up what happened |
+| `C` | Stop a jump |
 | `F` | Follow an NPC with the camera; press again for the next one |
+| `H` | Follow a group of animals (the biggest of a species); press again for the next species |
 | `G` | Stop following |
-| `B` | Show or hide the followed NPC's brain |
+| `B` | Show or hide the brain of whatever you follow |
+| `V` | Show or hide the plants below you |
 | Mouse wheel | Zoom in or out while following |
 | `R` | Start a new world with the next seed |
+
+The world runs on its own CPU thread and moves the animals on all cores, so it is not held back by the frame rate. The top left shows the speed you asked for and the speed your PC actually reaches. Above about 60 days per second, plants and animals move several days at a time (up to 10), which is coarser but much faster; NPCs still live every day.
 
 Drag a `LifeSimulation` into the level to change its `Seed`, starting speed or marker size.
 
@@ -65,6 +71,16 @@ Thirty people start in a camp at Omo Kibish in southern Ethiopia, knowing nothin
 
 Press `F` to follow someone. The panel on the right shows their brain live: senses on the left, hidden neurons in the middle and the 8 actions on the right with the chance of each. Green lines push towards an action and red lines push away, brighter for stronger. Below are their needs, skills and how they have spent their days. The top left lists "firsts" as they happen: the first hunt, the first child, the first band split, the first person to set foot outside Africa.
 
+If everyone dies, a new band of 30 arrives at Omo Kibish, born with the instincts of the most successful NPCs so far, so the run goes on and keeps what evolved.
+
+## Animal brains and plants
+
+Each group of animals has a tiny brain too: 6 senses (hunger, food here, better food nearby, danger, season, crowding), 5 hidden neurons and 4 drives (the pull of food, caution, the urge to roam, the urge to stay). The drives decide where the group moves each day. When a group grows big enough it splits, and the new group inherits the brain with small random changes, so groups that move well grow, split more and pass their wiring on.
+
+Press `H` to follow a group and `B` to see its brain. Press `V` to see the patch of plants below you (or below what you follow): how much plant food is there, the most it can hold, the growing season, how much animals eat each day, and a graph over recent days. Plants have no brain.
+
+Under each brain panel, "brain waves" show the hidden neurons over the last few hundred days, one coloured line each.
+
 `earth315k_sim --brain brain.json` saves the brain of the oldest NPC at the end of a run, for charts and other tools.
 
 ## Running life without graphics
@@ -77,7 +93,7 @@ cmake --build Simulation/build --config Release
 Simulation/build/Release/earth315k_sim --years 1000 --csv populations.csv
 ```
 
-(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's animals and people, the people's firsts and any species that died out, and `--csv` saves the populations for charts. Run it with no data and it tells you to fetch the elevation first.
+(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's animals and people, the people's firsts and any species that died out, and `--csv` saves the populations for charts. Add `--fast 10` to move plants and animals 10 days at a time, about 5 to 10 times faster. Run it with no data and it tells you to fetch the elevation first.
 
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 

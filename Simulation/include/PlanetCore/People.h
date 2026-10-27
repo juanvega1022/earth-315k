@@ -150,6 +150,9 @@ struct PeopleSettings
 	int SplitSize = 40;
 	// Food people can gather from plants (fruit, nuts, roots) in a quarter-degree square at full plant cover.
 	double GatherableKg = 3000.0;
+	// If everyone dies, a new band arrives at the start, born with the instincts of the most
+	// successful NPCs so far (lightly mutated), so the run goes on and keeps what evolved.
+	bool NewBandWhenGone = true;
 };
 
 class People
@@ -158,32 +161,10 @@ public:
 	People(Ecosystem* InEco, uint64_t Seed, const PeopleSettings& InSettings = PeopleSettings())
 		: Eco(InEco), Dice(Seed ^ 0x5eed0fa11ull), Settings(InSettings)
 	{
-		Camp First;
-		First.Id = NextCampId++;
-		First.Lat = Settings.StartLat;
-		First.Lon = Settings.StartLon;
-		Camps.push_back(First);
-
-		const Genome Base = InstinctGenome();
-		for (int i = 0; i < Settings.StartCount; ++i)
-		{
-			Npc P;
-			P.Id = NextId++;
-			P.Female = i % 2 == 0;
-			P.AgeDays = Dice.Range(14.0, 35.0) * 365.0;
-			P.Genes = std::make_shared<const Genome>(Mutate(Base, 0.3f));
-			P.Camp = First.Id;
-			P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
-			P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
-			P.OffsetLon = static_cast<float>(Dice.Range(-0.04, 0.04));
-			P.Lat = First.Lat + P.OffsetLat;
-			P.Lon = First.Lon + P.OffsetLon;
-			Npcs.push_back(P);
-		}
 		Regions.assign(6, false);
 		Regions[0] = true; // Africa
+		StartBand();
 		AddEvent("A band of " + std::to_string(Settings.StartCount) + " people wakes up in East Africa, knowing nothing");
-		IndexCamps();
 	}
 
 	// ---- Queries ----------------------------------------------------------------------------
@@ -199,6 +180,8 @@ public:
 	// Deaths by cause: old age and illness, predators, hunger, thirst, injuries.
 	const std::array<long long, 5>& DeathCauses() const { return Causes; }
 	long long HuntsWon() const { return Kills; }
+	// How many bands have started from scratch (1 = the first band is still going).
+	int BandsStarted() const { return Arrivals; }
 
 	const Npc* Find(uint32_t Id) const
 	{
@@ -278,7 +261,13 @@ public:
 	{
 		if (Npcs.empty())
 		{
-			return;
+			if (!Settings.NewBandWhenGone)
+			{
+				return;
+			}
+			StartBand();
+			AddEvent("A new band of " + std::to_string(Settings.StartCount) + " arrives in East Africa, born with the instincts of the most successful of those before (band " +
+				std::to_string(Arrivals) + ")");
 		}
 		Eco->RefreshIndex();
 		RegrowGatherable();
@@ -375,6 +364,9 @@ private:
 	bool AnyHunt = false;
 	bool AnyShare = false;
 	std::array<bool, 5> AnyDeathBy{};
+	int Arrivals = 0;
+	// The most successful NPCs so far (most children, then longest lives), whose instincts a new band starts from.
+	std::vector<std::pair<double, std::shared_ptr<const Genome>>> HallOfFame;
 
 	// Gatherable plant food people have used up, per quarter-degree square.
 	std::unordered_map<int64_t, double> Gathered;
@@ -1218,8 +1210,59 @@ private:
 		}
 	}
 
+	void StartBand()
+	{
+		Camp First;
+		First.Id = NextCampId++;
+		First.Lat = Settings.StartLat;
+		First.Lon = Settings.StartLon;
+		Camps.assign(1, First);
+
+		const Genome Base = InstinctGenome();
+		for (int i = 0; i < Settings.StartCount; ++i)
+		{
+			Npc P;
+			P.Id = NextId++;
+			P.Female = i % 2 == 0;
+			P.AgeDays = Dice.Range(14.0, 35.0) * 365.0;
+			if (HallOfFame.empty())
+			{
+				P.Genes = std::make_shared<const Genome>(Mutate(Base, 0.3f));
+			}
+			else
+			{
+				P.Genes = std::make_shared<const Genome>(Mutate(*HallOfFame[static_cast<size_t>(i) % HallOfFame.size()].second, 0.15f));
+			}
+			P.Camp = First.Id;
+			P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
+			P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
+			P.OffsetLon = static_cast<float>(Dice.Range(-0.04, 0.04));
+			P.Lat = First.Lat + P.OffsetLat;
+			P.Lon = First.Lon + P.OffsetLon;
+			Npcs.push_back(P);
+		}
+		++Arrivals;
+		IndexCamps();
+	}
+
+	void RememberIfSuccessful(const Npc& P)
+	{
+		const double Score = P.Children * 100.0 + P.AgeYears();
+		if (HallOfFame.size() >= 10 && Score <= HallOfFame.back().first)
+		{
+			return;
+		}
+		HallOfFame.emplace_back(Score, P.Genes);
+		std::stable_sort(HallOfFame.begin(), HallOfFame.end(), [](const auto& A, const auto& B) { return A.first > B.first; });
+		if (HallOfFame.size() > 10)
+		{
+			HallOfFame.pop_back();
+		}
+	}
+
 	void Die(Npc& P, int Cause)
 	{
+		RememberIfSuccessful(P);
 		static const char* FirstDeath[5] = {nullptr, "First NPC killed by a predator", "First NPC starved",
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;

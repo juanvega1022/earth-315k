@@ -172,6 +172,67 @@ static void TestDefaultSpeciesSpeed()
 	EXPECT(Seconds < 20.0);
 }
 
+// Fast forward (several days per step) gives the same result whatever the number of threads,
+// and keeps herds alive and on land.
+static void TestFastForward()
+{
+	const earth::ElevationGrid G = MakePlanet();
+	earth::EcosystemSettings One;
+	One.Threads = 1;
+	earth::EcosystemSettings Many;
+	Many.Threads = 4;
+	earth::Ecosystem A(&G, {Grazer(), Predator()}, 21, One);
+	earth::Ecosystem B(&G, {Grazer(), Predator()}, 21, Many);
+	for (int i = 0; i < 73; ++i)
+	{
+		A.Step(10);
+		B.Step(10);
+	}
+	EXPECT(A.Day() == 730.0);
+	EXPECT(A.Groups().size() == B.Groups().size());
+	bool Same = A.Groups().size() == B.Groups().size();
+	for (size_t i = 0; Same && i < A.Groups().size(); ++i)
+	{
+		Same = A.Groups()[i].Lat == B.Groups()[i].Lat && A.Groups()[i].Count == B.Groups()[i].Count;
+	}
+	EXPECT(Same);
+	EXPECT(A.CountOf(0) > 0.0);
+	for (const earth::AnimalGroup& Grp : A.Groups())
+	{
+		EXPECT(A.IsLand(Grp.Lat, Grp.Lon));
+	}
+}
+
+// New groups from splits carry a mutated copy of their parent group's brain.
+static void TestBrainsInherited()
+{
+	const earth::ElevationGrid G = MakePlanet();
+	earth::Species S = Grazer();
+	S.GroupSize = 20; // Splits often.
+	earth::Ecosystem E(&G, {S}, 4);
+	E.StepDays(365 * 2);
+	const earth::AnimalBrain Instinct = earth::InstinctAnimalBrain();
+	int Later = 0;
+	int Changed = 0;
+	for (const earth::AnimalGroup& Grp : E.Groups())
+	{
+		if (Grp.Generation > 0)
+		{
+			++Later;
+			Changed += Grp.Brain.W1 != Instinct.W1 || Grp.Brain.W2 != Instinct.W2 || Grp.Brain.B2 != Instinct.B2;
+		}
+		EXPECT(E.FindGroup(Grp.Id) == &Grp);
+		for (float V : Grp.LastOutputs)
+		{
+			EXPECT(V >= 0.0f && std::isfinite(V));
+		}
+	}
+	EXPECT(Later > 0);
+	EXPECT(Changed > 0);
+	const earth::PlantPatch P = E.PlantsAt(0.0, 20.0);
+	EXPECT(P.Capacity > 0.0 && P.Plants >= 0.0 && P.Plants <= P.Capacity * 1.01);
+}
+
 int main()
 {
 	TestDeterministic();
@@ -181,6 +242,8 @@ int main()
 	TestPredatorsEatPrey();
 	TestGroupCap();
 	TestDefaultSpeciesSpeed();
+	TestFastForward();
+	TestBrainsInherited();
 	if (Failures == 0)
 	{
 		std::printf("All ecosystem tests passed\n");

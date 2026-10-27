@@ -7,8 +7,11 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+find_package(Threads REQUIRED)
+
 add_library(planet_core INTERFACE)
 target_include_directories(planet_core INTERFACE include)
+target_link_libraries(planet_core INTERFACE Threads::Threads)
 # Unreal treats shadowed names as errors, so the core is kept clean of them here too.
 if(MSVC)
   target_compile_options(planet_core INTERFACE /W3)

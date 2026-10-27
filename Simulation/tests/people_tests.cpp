@@ -165,6 +165,25 @@ static void TestBrainJson()
 	EXPECT(J.find("nan") == std::string::npos);
 }
 
+// When everyone dies, a new band arrives and the run goes on.
+static void TestNewBand()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
+	earth::PeopleSettings Settings;
+	Settings.StartLat = 0.0;
+	Settings.StartLon = -100.0; // Open ocean: nothing to eat or drink.
+	earth::People Folk(&Eco, 8, Settings);
+	for (int i = 0; i < 400 && Folk.BandsStarted() < 2; ++i)
+	{
+		Eco.StepDay();
+		Folk.StepDay();
+	}
+	EXPECT(Folk.BandsStarted() >= 2);
+	EXPECT(Folk.Alive() > 0);
+	EXPECT(HasFirst(Folk, "A new band of 30 arrives"));
+}
+
 int main()
 {
 	TestStart();
@@ -172,6 +191,7 @@ int main()
 	TestBandLives();
 	TestInheritance();
 	TestBrainJson();
+	TestNewBand();
 	if (Failures == 0)
 	{
 		std::printf("All people tests passed\n");

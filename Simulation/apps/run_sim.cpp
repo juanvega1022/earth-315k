@@ -21,6 +21,7 @@ int main(int Argc, char** Argv)
 	double SeaLevel = -30.0;
 	std::string BrainPath;
 	bool WithPeople = true;
+	int FastDays = 1;
 
 	for (int i = 1; i < Argc; ++i)
 	{
@@ -32,9 +33,11 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--sea-level") && HasValue) SeaLevel = std::atof(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--brain") && HasValue) BrainPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--no-people")) WithPeople = false;
+		else if (!std::strcmp(Argv[i], "--fast") && HasValue) FastDays = std::atoi(Argv[++i]);
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days]\n");
+			std::printf("  --fast N  move plants and animals N days at a time (1..10): coarser, much faster\n");
 			return 1;
 		}
 	}
@@ -67,13 +70,15 @@ int main(int Argc, char** Argv)
 	const int TotalYears = static_cast<int>(Years);
 	for (int Y = 0; Y <= TotalYears; ++Y)
 	{
-		for (int D = 0; Y > 0 && D < 365; ++D)
+		for (int D = 0; Y > 0 && D < 365;)
 		{
-			Eco.StepDay();
-			if (WithPeople)
+			const int Days = std::min(std::clamp(FastDays, 1, 10), 365 - D);
+			Eco.Step(Days);
+			for (int k = 0; WithPeople && k < Days; ++k)
 			{
 				Folk.StepDay();
 			}
+			D += Days;
 		}
 		if (Csv)
 		{
