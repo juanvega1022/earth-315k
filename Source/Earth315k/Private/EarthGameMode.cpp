@@ -1,5 +1,6 @@
 #include "EarthGameMode.h"
 
+#include "EarthHUD.h"
 #include "LifeSimulation.h"
 #include "PlanetGlobe.h"
 
@@ -11,6 +12,7 @@
 AEarthGameMode::AEarthGameMode()
 {
 	DefaultPawnClass = ADefaultPawn::StaticClass();
+	HUDClass = AEarthHUD::StaticClass();
 }
 
 APlanetGlobe* AEarthGameMode::EnsureWorldSetUp()

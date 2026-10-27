@@ -153,6 +153,86 @@ public:
 		return std::clamp(1.0 - Strength * (1.0 - Summer) * 0.6, 0.0, 1.0);
 	}
 
+	// How wet a place is (0 dry .. 1 wet), from how much it can grow at its best. Stands in for
+	// rivers, lakes and springs until real water data is added.
+	double WaterAt(double Lat, double Lon) const
+	{
+		return std::clamp(Cells[CellIndex(Lat, Lon)].Capacity / std::max(1.0, Settings.PeakPlantsPerKm2) * 1.5, 0.0, 1.0);
+	}
+
+	// ---- Sharing the land with people -------------------------------------------------------
+	// These read the animals' positions as of the last RefreshIndex().
+
+	// Rebuilds the per-cell lists after StepDay() has moved, split and removed groups.
+	void RefreshIndex() { BuildGroupIndex(); }
+
+	// Meat-eating animals in the cell around a point and the eight cells next to it.
+	double PredatorsNear(double Lat, double Lon) const
+	{
+		double Total = 0.0;
+		ForNeighbourhood(CellIndex(Lat, Lon), [&](int C)
+		{
+			for (int Idx : GroupsInCell[C])
+			{
+				if (SpeciesList[AnimalGroups[Idx].SpeciesIndex].Eats == Diet::Meat)
+				{
+					Total += AnimalGroups[Idx].Count;
+				}
+			}
+		});
+		return Total;
+	}
+
+	// Plant-eating animals no heavier than MaxMassKg around a point (same area as PredatorsNear).
+	double GameNear(double Lat, double Lon, double MaxMassKg) const
+	{
+		double Total = 0.0;
+		ForNeighbourhood(CellIndex(Lat, Lon), [&](int C)
+		{
+			for (int Idx : GroupsInCell[C])
+			{
+				const Species& S = SpeciesList[AnimalGroups[Idx].SpeciesIndex];
+				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg)
+				{
+					Total += AnimalGroups[Idx].Count;
+				}
+			}
+		});
+		return Total;
+	}
+
+	// Kills one plant-eating animal no heavier than MaxMassKg near a point, picked at random
+	// with bigger herds more likely. Returns the species index, or -1 if there was nothing to catch.
+	int KillOneAnimal(double Lat, double Lon, double MaxMassKg, Rng& Dice)
+	{
+		std::vector<int> Candidates;
+		double Total = 0.0;
+		ForNeighbourhood(CellIndex(Lat, Lon), [&](int C)
+		{
+			for (int Idx : GroupsInCell[C])
+			{
+				const AnimalGroup& G = AnimalGroups[Idx];
+				const Species& S = SpeciesList[G.SpeciesIndex];
+				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && G.Count >= 2.0)
+				{
+					Candidates.push_back(Idx);
+					Total += G.Count;
+				}
+			}
+		});
+		double Pick = Dice.Range(0.0, Total);
+		for (int Idx : Candidates)
+		{
+			Pick -= AnimalGroups[Idx].Count;
+			if (Pick <= 0.0)
+			{
+				AnimalGroups[Idx].Count -= 1.0;
+				return AnimalGroups[Idx].SpeciesIndex;
+			}
+		}
+		return -1;
+	}
+
 	// ---- Simulation -------------------------------------------------------------------------
 
 	void StepDay()
