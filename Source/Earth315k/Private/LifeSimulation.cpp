@@ -189,8 +189,8 @@ void ALifeSimulation::BeginPlay()
 	FollowMarker = MakeMarkers(kFollowColor);
 	StartWorld();
 
-	Runner = MakeUnique<FLifeRunner>(this);
-	RunnerThread = FRunnableThread::Create(Runner.Get(), TEXT("Earth315kLife"), 0, TPri_Normal);
+	Runner = new FLifeRunner(this);
+	RunnerThread = FRunnableThread::Create(Runner, TEXT("Earth315kLife"), 0, TPri_Normal);
 }
 
 void ALifeSimulation::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -207,7 +207,8 @@ void ALifeSimulation::StopRunner()
 		delete RunnerThread;
 		RunnerThread = nullptr;
 	}
-	Runner.Reset();
+	delete Runner;
+	Runner = nullptr;
 }
 
 void ALifeSimulation::StartWorld()

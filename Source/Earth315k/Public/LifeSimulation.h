@@ -168,7 +168,8 @@ private:
 	mutable FCriticalSection WorldLock;
 	// Readers waiting for the lock; the runner steps aside for them between steps.
 	mutable std::atomic<int32> ReadersWaiting{0};
-	TUniquePtr<FLifeRunner> Runner;
+	// Raw pointer: the runner class is only defined in the .cpp. Created in BeginPlay, deleted in StopRunner.
+	FLifeRunner* Runner = nullptr;
 	FRunnableThread* RunnerThread = nullptr;
 
 	// Game thread only.
