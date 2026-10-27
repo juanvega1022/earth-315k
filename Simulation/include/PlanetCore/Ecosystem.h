@@ -758,9 +758,12 @@ private:
 		double Births = G.WellFed > 0.5 ? S.BirthsPerYear * (G.WellFed - 0.5) / 0.5 : 0.0;
 		if (S.Eats == Diet::Plants && Births > 0.0)
 		{
-			// Fewer young where the land is already grazed down, so herds level off instead of overshooting.
+			// Fewer young where the land is grazed below what the season should hold, and none
+			// once it is down to 60%, so herds level off with plenty of plants left standing
+			// (for other species and for people) instead of eating the land bare.
 			const PlantCell& Home = Cells[Cell];
-			Births *= Home.Capacity > 0.0 ? std::clamp(1.5 * Home.Plants / Home.Capacity, 0.0, 1.0) : 0.0;
+			const double Expected = Home.Capacity * (0.15 + 0.85 * GrowingSeason(Home.Lat));
+			Births *= Expected > 0.0 ? std::clamp((Home.Plants / Expected - 0.6) / 0.3, 0.0, 1.0) : 0.0;
 		}
 		if (S.Eats == Diet::Meat && Births > 0.0)
 		{

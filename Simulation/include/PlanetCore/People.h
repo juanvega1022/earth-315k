@@ -711,7 +711,7 @@ private:
 		const double Age = P.AgeYears();
 		if (P.Female)
 		{
-			return Age >= 15.0 && Age < 45.0 && P.PregnantDays < 0.0 && Eco->Day() - P.LastBirthDay > 365.0 * 2.5;
+			return Age >= 15.0 && Age < 45.0 && P.PregnantDays < 0.0 && Eco->Day() - P.LastBirthDay > 365.0 * 3.0;
 		}
 		return Age >= 15.0 && Age < 65.0;
 	}
@@ -940,8 +940,9 @@ private:
 	void MaybeConceive(size_t Index, bool Socialized)
 	{
 		Npc& P = Npcs[Index];
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || static_cast<int>(Npcs.size()) >= Settings.MaxPeople ||
-			!Dice.Chance(Socialized ? 0.04 : 0.01))
+		// Fewer children as the world fills up towards MaxPeople, so numbers level off gently.
+		const double Room = 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance((Socialized ? 0.04 : 0.01) * Room))
 		{
 			return;
 		}
@@ -1014,12 +1015,30 @@ private:
 		Child.Water = std::max(Child.Water, Mum.Water);
 		Child.Fatigue = 0.1f; // Carried, and sleeps when tired.
 		Child.LastAction = Mum.LastAction;
-		// Feeding a child costs the carer food: first from what she carries, then from her own reserves.
-		const float Need = 1.0f - Child.Energy;
-		const float FromCarried = std::min({Mum.CarriedKg, 1.5f, Need * 5.0f});
-		Mum.CarriedKg -= FromCarried;
-		Child.Energy += FromCarried * 0.2f;
-		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.3f) * 0.5f);
+		// The whole camp feeds its children: the carer first, then anyone with food to spare, each
+		// keeping a day's meal for themselves. Only then does the carer give from her own reserves,
+		// and only while she is well fed, so mothers don't starve feeding their young.
+		float Wanted = std::min(1.5f, (1.0f - Child.Energy) * 5.0f);
+		auto Give = [&](Npc& Q)
+		{
+			const float Spare = std::min(Wanted, std::max(0.0f, Q.CarriedKg - 3.0f));
+			Q.CarriedKg -= Spare;
+			Child.Energy += Spare * 0.2f;
+			Wanted -= Spare;
+		};
+		Give(Mum);
+		for (int j : Camps[CampSlot(Child.Camp)].Members)
+		{
+			if (Wanted <= 0.0f)
+			{
+				break;
+			}
+			if (j != Carer && !Npcs[j].IsChild())
+			{
+				Give(Npcs[j]);
+			}
+		}
+		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
 		Child.Energy += FromMum;
 		Mum.Energy -= FromMum * 0.5f;
 		// Children pick up their carer's habits.
@@ -1181,7 +1200,9 @@ private:
 
 			// Old age, childhood illness and accidents; per year, spread over the days.
 			const double Age = P.AgeYears();
-			const double Yearly = 0.0004 * std::exp(0.08 * Age) + (Age < 5.0 ? 0.05 : 0.0) + 0.005;
+			// Infancy and childhood were dangerous: about four in ten children died before 15.
+			const double Young = Age < 1.0 ? 0.15 : (Age < 5.0 ? 0.06 : (Age < 15.0 ? 0.01 : 0.0));
+			const double Yearly = 0.0004 * std::exp(0.08 * Age) + Young + 0.005;
 			// Predators take the lone more than people in a big camp, and miss those who hide.
 			const double Alone = 1.0 / (1.0 + 0.3 * std::min(P.BandSize - 1, 20));
 			const double Hidden = P.LastAction == static_cast<int>(Action::Hide) ? 0.3 : 1.0;
