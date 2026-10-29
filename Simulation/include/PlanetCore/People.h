@@ -519,18 +519,31 @@ private:
 		return std::max(0.0, Full - (It == Gathered.end() ? 0.0 : It->second));
 	}
 
-	// How good a place looks for a camp: food to gather, water and game, minus danger.
-	double PlaceScore(double Lat, double Lon) const
+	// Other camps within Km of a point, not counting camp SelfId.
+	int CampsNear(double Lat, double Lon, double Km, int SelfId) const
+	{
+		int Count = 0;
+		for (const Camp& C : Camps)
+		{
+			Count += C.Id != SelfId && DistanceKm(Lat, Lon, C.Lat, C.Lon) < Km;
+		}
+		return Count;
+	}
+
+	// How good a place looks for camp SelfId: food to gather, water and game, minus danger and
+	// minus other camps already there (bands keep their own range, so they spread out).
+	double PlaceScore(double Lat, double Lon, int SelfId) const
 	{
 		if (!Livable(Lat, Lon))
 		{
 			return -1.0;
 		}
+		const double Crowd = 0.1 * std::min(4, CampsNear(Lat, Lon, 50.0, SelfId));
 		const double Food = GatherableAt(Lat, Lon) / Settings.GatherableKg;
 		const double Water = Eco->WaterAt(Lat, Lon);
 		const double Game = std::clamp(Eco->GameNear(Lat, Lon, 1000.0) / 2000.0, 0.0, 1.0);
 		const double Danger = std::clamp(Eco->PredatorsNear(Lat, Lon) / 40.0, 0.0, 1.0);
-		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger;
+		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger - Crowd;
 	}
 
 	// ---- Camps ------------------------------------------------------------------------------
@@ -568,9 +581,10 @@ private:
 		{
 			C.ScoutScore *= 0.995; // Old news gets less trustworthy.
 			C.DaysHere += 1;
-			const double Here = PlaceScore(C.Lat, C.Lon);
+			const double Here = PlaceScore(C.Lat, C.Lon, C.Id);
 			const double Food = GatherableAt(C.Lat, C.Lon) / std::max(1.0, Eco->PlantCover(C.Lat, C.Lon) * Settings.GatherableKg);
-			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || (C.DaysHere > 90 && Dice.Chance(0.02));
+			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id) > 0;
+			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(0.02));
 			if (!Stressed)
 			{
 				continue;
@@ -590,7 +604,7 @@ private:
 					double La = 0.0;
 					double Lo = 0.0;
 					Offset(C.Lat, C.Lon, (d + Dice.Uniform()) * kPi / 4.0, 25.0, La, Lo);
-					const double S = PlaceScore(La, Lo);
+					const double S = PlaceScore(La, Lo, C.Id);
 					if (S > Best)
 					{
 						Best = S;
@@ -901,7 +915,7 @@ private:
 			double La = 0.0;
 			double Lo = 0.0;
 			Offset(C.Lat, C.Lon, P.Heading, Dice.Range(30.0, 60.0), La, Lo);
-			const double Score = PlaceScore(La, Lo);
+			const double Score = PlaceScore(La, Lo, C.Id);
 			if (Score < 0.0)
 			{
 				P.Heading += static_cast<float>(kPi * Dice.Range(0.5, 1.5));

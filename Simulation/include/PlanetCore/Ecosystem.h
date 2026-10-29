@@ -115,6 +115,7 @@ struct AnimalGroup
 	double Count = 0.0;
 	double WellFed = 1.0; // 0 starving .. 1 full, smoothed over recent days.
 	double Heading = 0.0; // Radians; groups keep roughly the same direction when nothing pulls them elsewhere.
+	double Taken = 0.0;   // Animals of this group killed by hunters during the current step.
 	AnimalBrain Brain;
 	// The last decision, kept so it can be shown.
 	std::array<float, kAnimalInputs> LastInputs{};
@@ -407,6 +408,10 @@ public:
 			{
 				MoveOne(i);
 			}
+		}
+		for (AnimalGroup& G : AnimalGroups)
+		{
+			G.Taken = 0.0;
 		}
 		const size_t Existing = AnimalGroups.size();
 		for (size_t i = 0; i < Existing; ++i)
@@ -825,19 +830,20 @@ private:
 		}
 	}
 
-	// Hunts in the group's cell and the cells around it.
+	// Hunts in the group's cell and the two rings of cells around it (a group stands for
+	// hunters spread over a region).
 	double Hunt(AnimalGroup& G, const Species& S, int Cell, double NeedKg, int Days)
 	{
 		double Got = 0.0;
 		const int R = Cell / Cols;
 		const int C = Cell % Cols;
-		for (int dr = -1; dr <= 1 && Got < NeedKg; ++dr)
+		for (int dr = -2; dr <= 2 && Got < NeedKg; ++dr)
 		{
 			if (R + dr < 0 || R + dr >= Rows)
 			{
 				continue;
 			}
-			for (int dc = -1; dc <= 1 && Got < NeedKg; ++dc)
+			for (int dc = -2; dc <= 2 && Got < NeedKg; ++dc)
 			{
 				const int Nc = ((C + dc) % Cols + Cols) % Cols;
 				for (int Idx : GroupsInCell[(R + dr) * Cols + Nc])
@@ -857,12 +863,16 @@ private:
 					const double Density = Prey.Count / SpeciesList[Prey.SpeciesIndex].GroupSize;
 					const double MaxKills = G.Count * 0.15 * Days * Density * Density / (1.0 + Density * Density);
 					const double Wanted = (NeedKg - Got) / (PreyMass * 0.6);
-					const double Kills = std::min({Wanted, MaxKills, Prey.Count - 1.0});
+					// All hunters together take at most a fifth of a herd a year, about what it can
+					// replace, so hunters starve before their prey is wiped out.
+					const double Allowed = (Prey.Count + Prey.Taken) * 0.2 * Days / kDaysPerYear - Prey.Taken;
+					const double Kills = std::min({Wanted, MaxKills, Allowed, Prey.Count - 1.0});
 					if (Kills <= 0.0)
 					{
 						continue;
 					}
 					Prey.Count -= Kills;
+					Prey.Taken += Kills;
 					Got += Kills * PreyMass * 0.6;
 				}
 			}
