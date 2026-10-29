@@ -22,6 +22,7 @@ int main(int Argc, char** Argv)
 	std::string BrainPath;
 	bool WithPeople = true;
 	int FastDays = 1;
+	earth::PeopleSettings PeopleCfg;
 
 	for (int i = 1; i < Argc; ++i)
 	{
@@ -34,9 +35,10 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--brain") && HasValue) BrainPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--no-people")) WithPeople = false;
 		else if (!std::strcmp(Argv[i], "--fast") && HasValue) FastDays = std::atoi(Argv[++i]);
+		else if (!std::strcmp(Argv[i], "--max-people") && HasValue) PeopleCfg.MaxPeople = std::atoi(Argv[++i]);
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N]\n");
 			std::printf("  --fast N  move plants and animals N days at a time (1..10): coarser, much faster\n");
 			return 1;
 		}
@@ -53,7 +55,7 @@ int main(int Argc, char** Argv)
 	Settings.SeaLevelMeters = SeaLevel;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), Seed, Settings);
 	const auto& Species = Eco.GetSpecies();
-	earth::People Folk(&Eco, Seed);
+	earth::People Folk(&Eco, Seed, PeopleCfg);
 	size_t FirstsShown = 0;
 
 	std::ofstream Csv;
