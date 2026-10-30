@@ -147,6 +147,10 @@ struct EcoEvent
 struct EcosystemSettings
 {
 	double SeaLevelMeters = -30.0;
+	// Ice ages: sea level and the ice sheets follow Earth's own history, counted from this many
+	// years ago when the run starts.
+	bool IceAges = true;
+	double StartYearsAgo = 315000.0;
 	int MaxGroups = 6000;
 	double CellDegrees = 2.0;
 	// Best plant food per km^2 (kg) in a lush, warm cell.
@@ -172,6 +176,8 @@ public:
 		}
 		Cols = static_cast<int>(std::lround(360.0 / Settings.CellDegrees));
 		Rows = static_cast<int>(std::lround(180.0 / Settings.CellDegrees));
+		SeaChange = Settings.IceAges ? SeaLevelThen(Settings.StartYearsAgo) : 0.0;
+		ClimateStep = 0;
 		BuildAltitude();
 		BuildPlantCells();
 		SpawnAnimals();
@@ -220,6 +226,39 @@ public:
 		P.Lon = -180.0 + (Index % Cols + 0.5) * Settings.CellDegrees;
 		P.SizeDegrees = Settings.CellDegrees;
 		return P;
+	}
+
+	// ---- Climate ----------------------------------------------------------------------------
+
+	double YearsAgo() const { return Settings.StartYearsAgo - Years(); }
+	// Sea level compared with today, in metres (about -125 at the depth of an ice age).
+	double SeaLevelChange() const { return SeaChange; }
+	// How deep in an ice age the world is: 0 as warm as today .. 1 the coldest glacial maximum.
+	double IceCover() const { return std::clamp(-SeaChange / 125.0, 0.0, 1.0); }
+	// Goes up each time the coastline and plant cover are redrawn.
+	int ClimateVersion() const { return ClimateCount; }
+
+	// Global sea level compared with today, a simplified reading of the reconstructed record:
+	// warm interglacials near 0 m, glacial maxima down to about -125 m.
+	static double SeaLevelThen(double YearsAgoNow)
+	{
+		static const double Table[][2] = {
+			{0, 0}, {6000, 0}, {8000, -15}, {11000, -55}, {15000, -100}, {20000, -125}, {25000, -115},
+			{35000, -80}, {45000, -65}, {55000, -70}, {65000, -85}, {75000, -50}, {85000, -25},
+			{100000, -30}, {105000, -50}, {115000, -30}, {125000, 5}, {130000, -10}, {140000, -120},
+			{160000, -90}, {190000, -60}, {200000, -50}, {215000, -15}, {230000, -60}, {243000, -10},
+			{260000, -110}, {285000, -90}, {300000, -60}, {315000, -30}, {330000, 0}};
+		const int N = static_cast<int>(sizeof(Table) / sizeof(Table[0]));
+		if (YearsAgoNow <= 0.0) return 0.0;
+		for (int i = 1; i < N; ++i)
+		{
+			if (YearsAgoNow <= Table[i][0])
+			{
+				const double T = (YearsAgoNow - Table[i - 1][0]) / (Table[i][0] - Table[i - 1][0]);
+				return Table[i - 1][1] + T * (Table[i][1] - Table[i - 1][1]);
+			}
+		}
+		return Table[N - 1][1];
 	}
 
 	bool IsLand(double Lat, double Lon) const { return AltitudeAt(Lat, Lon) > 0.0; }
@@ -299,7 +338,7 @@ public:
 	{
 		const double Phase = 2.0 * 3.14159265358979323846 * (DayOfYear() - 172) / kDaysPerYear;
 		const double Summer = (Lat >= 0.0 ? 1.0 : -1.0) * std::cos(Phase); // 1 midsummer, -1 midwinter
-		const double Strength = std::clamp(std::abs(Lat) / 55.0, 0.0, 1.0);
+		const double Strength = std::clamp(std::abs(Lat) / (55.0 - 10.0 * IceCover()), 0.0, 1.0);
 		return std::clamp(1.0 - Strength * (1.0 - Summer) * 0.6, 0.0, 1.0);
 	}
 
@@ -455,6 +494,7 @@ public:
 	void Step(int Days)
 	{
 		Days = std::clamp(Days, 1, 30);
+		UpdateClimate();
 		GrowPlants(Days);
 		BuildGroupIndex();
 		// Every group decides where to go from the same picture of the world, in parallel,
@@ -520,7 +560,11 @@ private:
 	static constexpr int kAltitudeRows = 180 * kAltitudeCellsPerDegree;
 
 	const ElevationGrid* Elevation;
-	std::vector<float> Altitude;
+	std::vector<float> Ground; // Today's height above sea level, quarter-degree.
+	std::vector<float> Altitude; // Height above the sea level of the time.
+	double SeaChange = 0.0;
+	int ClimateStep = 0;
+	int ClimateCount = 0;
 	std::vector<int> TouchedCells;
 	bool IndexStale = true;
 	std::vector<Species> SpeciesList;
@@ -559,16 +603,51 @@ private:
 		{
 			return;
 		}
-		Altitude.resize(static_cast<size_t>(kAltitudeRows) * kAltitudeCols);
+		Ground.resize(static_cast<size_t>(kAltitudeRows) * kAltitudeCols);
 		for (int R = 0; R < kAltitudeRows; ++R)
 		{
 			const double Lat = 90.0 - (R + 0.5) / kAltitudeCellsPerDegree;
 			for (int C = 0; C < kAltitudeCols; ++C)
 			{
 				const double Lon = -180.0 + (C + 0.5) / kAltitudeCellsPerDegree;
-				Altitude[static_cast<size_t>(R) * kAltitudeCols + C] = static_cast<float>(Elevation->Sample(Lat, Lon) - Settings.SeaLevelMeters);
+				Ground[static_cast<size_t>(R) * kAltitudeCols + C] = static_cast<float>(Elevation->Sample(Lat, Lon));
 			}
 		}
+		ApplySeaLevel();
+	}
+
+	void ApplySeaLevel()
+	{
+		Altitude.resize(Ground.size());
+		const float Sea = static_cast<float>(Settings.SeaLevelMeters + SeaChange);
+		for (size_t i = 0; i < Ground.size(); ++i) Altitude[i] = Ground[i] - Sea;
+	}
+
+	// Every century, moves the coastline and the ice to where they were at that time, and regrows
+	// plant capacity to match. Land the sea gives back starts half grown.
+	void UpdateClimate()
+	{
+		const int Step = static_cast<int>(Years() / 100.0);
+		if (!Settings.IceAges || Step == ClimateStep || Ground.empty())
+		{
+			return;
+		}
+		ClimateStep = Step;
+		const double Sea = SeaLevelThen(YearsAgo());
+		if (std::abs(Sea - SeaChange) < 1.0)
+		{
+			return;
+		}
+		SeaChange = Sea;
+		ApplySeaLevel();
+		std::vector<double> Old(Cells.size());
+		for (size_t i = 0; i < Cells.size(); ++i) Old[i] = Cells[i].Capacity;
+		BuildPlantCells();
+		for (size_t i = 0; i < Cells.size(); ++i)
+		{
+			Cells[i].Plants = Old[i] > 0.0 ? std::min(Cells[i].Plants, Cells[i].Capacity) : Cells[i].Capacity * 0.5;
+		}
+		++ClimateCount;
 	}
 
 	// How much plant food a place can grow, from latitude and altitude. A placeholder
@@ -585,8 +664,15 @@ private:
 		{
 			return 0.0;
 		}
+		// Ice sheets: over North America down to about 42 degrees north and northern Europe to
+		// about 54 at the coldest, while Siberia and Beringia stay open, cold steppe.
+		const double Ice = IceCover();
+		if ((Lon > -140.0 && Lon < -50.0 && Lat > 75.0 - 33.0 * Ice) || (Lon > -10.0 && Lon < 60.0 && Lat > 75.0 - 21.0 * Ice))
+		{
+			return 0.0;
+		}
 		const double Desert = std::clamp(1.0 - std::abs(AbsLat - 24.0) / 8.0, 0.0, 1.0) * 0.85;
-		const double Cold = std::clamp((AbsLat - 50.0) / 25.0, 0.0, 1.0) * 0.8;
+		const double Cold = std::clamp((AbsLat - (50.0 - 12.0 * Ice)) / 25.0, 0.0, 1.0) * 0.8;
 		const double High = std::clamp((Height - 2500.0) / 2000.0, 0.0, 1.0);
 		return Settings.PeakPlantsPerKm2 * (1.0 - Desert) * (1.0 - Cold) * (1.0 - High);
 	}

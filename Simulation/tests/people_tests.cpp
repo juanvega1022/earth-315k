@@ -234,8 +234,74 @@ static void TestLandLimit()
 	EXPECT(Folk.TotalBirths() == 0);
 }
 
+// Every skill's needs come earlier in the list, and deeper skills sit in higher tiers.
+static void TestSkillTree()
+{
+	const std::vector<earth::Skill>& L = earth::AllSkills();
+	EXPECT(L.size() <= 64);
+	for (size_t i = 0; i < L.size(); ++i)
+	{
+		for (int N : L[i].Needs)
+		{
+			EXPECT(N < static_cast<int>(i));
+			EXPECT(L[N].Tier < L[i].Tier);
+		}
+	}
+	EXPECT(earth::CanDiscover(0, 0));
+	EXPECT(!earth::CanDiscover(0, 26)); // Farming needs planting first.
+}
+
+// Growing and shrinking a brain keeps its layers the same size.
+static void TestBrainResize()
+{
+	earth::Genome G;
+	earth::Rng Dice(7);
+	G.AddNeuron(Dice);
+	EXPECT(G.Hidden() == earth::kBrainHidden + 1);
+	EXPECT(G.W1.size() == static_cast<size_t>(G.Hidden() * earth::kBrainInputs));
+	EXPECT(G.W2.size() == static_cast<size_t>(G.Hidden() * earth::kBrainActions));
+	G.RemoveNeuron(0);
+	G.RemoveNeuron(0);
+	EXPECT(G.Hidden() == earth::kBrainHidden - 1);
+	EXPECT(G.W1.size() == static_cast<size_t>(G.Hidden() * earth::kBrainInputs));
+}
+
+// With discovery made easy, a band finds skills and passes them on.
+static void TestSkillsSpread()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 5);
+	earth::PeopleSettings Settings;
+	Settings.DiscoveryPerYear = 0.05;
+	earth::People Folk(&Eco, 5, Settings);
+	for (int i = 0; i < 365 * 5; ++i)
+	{
+		Eco.StepDay();
+		Folk.StepDay();
+	}
+	EXPECT(Folk.SkillsKnown() > 0);
+	EXPECT(HasFirst(Folk, "First discovery of"));
+	EXPECT(Folk.AverageBrain() > 4.0);
+}
+
+// Bands understand each other while they share at least half their words.
+static void TestUnderstand()
+{
+	earth::Camp A;
+	earth::Camp B;
+	EXPECT(earth::People::Understand(A, B));
+	for (int w = 0; w < earth::kWords / 2; ++w) B.Words[w] = 7;
+	EXPECT(earth::People::Understand(A, B));
+	B.Words[earth::kWords / 2] = 7;
+	EXPECT(!earth::People::Understand(A, B));
+}
+
 int main()
 {
+	TestUnderstand();
+	TestSkillTree();
+	TestBrainResize();
+	TestSkillsSpread();
 	TestStart();
 	TestDeterministic();
 	TestBandLives();

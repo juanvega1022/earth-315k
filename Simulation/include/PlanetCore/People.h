@@ -15,9 +15,11 @@
 #include "Ecosystem.h"
 #include "Parallel.h"
 #include "Random.h"
+#include "Skills.h"
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -31,7 +33,7 @@ namespace earth
 {
 
 constexpr int kBrainInputs = 16;
-constexpr int kBrainHidden = 12;
+constexpr int kBrainHidden = 12; // Hidden neurons the first people are born with; brains can grow or shrink from there.
 constexpr int kBrainActions = 8;
 
 enum class Action : int
@@ -59,16 +61,34 @@ inline const char* InputName(int I)
 	return (I >= 0 && I < kBrainInputs) ? Names[I] : "?";
 }
 
-// What an NPC is born with: both layers of the brain plus three learning traits.
+// What an NPC is born with: both layers of the brain plus three learning traits. The number of
+// hidden neurons can change from parent to child, with no upper limit.
 struct Genome
 {
-	std::array<float, kBrainInputs * kBrainHidden> W1{}; // [input * hidden]
-	std::array<float, kBrainHidden> B1{};
-	std::array<float, kBrainHidden * kBrainActions> W2{}; // [hidden * action]
+	std::vector<float> W1 = std::vector<float>(kBrainHidden * kBrainInputs, 0.0f); // [hidden * input]
+	std::vector<float> B1 = std::vector<float>(kBrainHidden, 0.0f);
+	std::vector<float> W2 = std::vector<float>(kBrainHidden * kBrainActions, 0.0f); // [hidden * action]
 	std::array<float, kBrainActions> B2{};
 	float LearningRate = 0.05f; // How strongly a good or bad day changes later choices.
 	float Curiosity = 0.6f;     // How often it tries something other than its favourite choice.
 	float Imitation = 0.1f;     // How often it copies a successful camp mate.
+
+	int Hidden() const { return static_cast<int>(B1.size()); }
+
+	// Adds a hidden neuron that starts out with weak, random connections.
+	void AddNeuron(Rng& Dice)
+	{
+		for (int i = 0; i < kBrainInputs; ++i) W1.push_back(static_cast<float>(Dice.Gaussian()) * 0.5f);
+		B1.push_back(static_cast<float>(Dice.Gaussian()) * 0.5f);
+		for (int a = 0; a < kBrainActions; ++a) W2.push_back(static_cast<float>(Dice.Gaussian()) * 0.2f);
+	}
+
+	void RemoveNeuron(int H)
+	{
+		W1.erase(W1.begin() + H * kBrainInputs, W1.begin() + (H + 1) * kBrainInputs);
+		B1.erase(B1.begin() + H);
+		W2.erase(W2.begin() + H * kBrainActions, W2.begin() + (H + 1) * kBrainActions);
+	}
 };
 
 struct Npc
@@ -107,15 +127,24 @@ struct Npc
 
 	// Brain: inborn wiring plus what this NPC has learned in its own life (added to the output layer).
 	std::shared_ptr<const Genome> Genes;
-	std::array<float, kBrainHidden * kBrainActions> LearnedW2{};
+	std::vector<float> LearnedW2 = std::vector<float>(kBrainHidden * kBrainActions, 0.0f);
 	std::array<float, kBrainActions> LearnedB2{};
 
 	// The last decision, kept so it can be shown.
 	std::array<float, kBrainInputs> LastInputs{};
-	std::array<float, kBrainHidden> LastHidden{};
+	std::vector<float> LastHidden = std::vector<float>(kBrainHidden, 0.0f);
 	std::array<float, kBrainActions> LastChoice{}; // Probability of each action.
 	int LastAction = static_cast<int>(Action::Rest);
 	std::array<int, kBrainActions> ActionCounts{};
+
+	SkillSet Skills = 0; // What this NPC knows how to do.
+	SkillEffects Own;    // What those skills do for this NPC's own gathering, hunting and carrying.
+
+	void LearnSkill(int Skill)
+	{
+		Skills |= SkillSet(1) << Skill;
+		Own = EffectsOf(Skills);
+	}
 
 	float Pleasure = 0.0f; // One-off good feelings today, such as company or a kill.
 	float RewardBaseline = 0.0f;
@@ -124,8 +153,18 @@ struct Npc
 	bool Alive = true;
 
 	double AgeYears() const { return AgeDays / 365.0; }
+	int BrainSize() const { return Genes ? Genes->Hidden() : kBrainHidden; }
+
+	// Sizes what the NPC learns in its life to the brain it was born with.
+	void FitBrain()
+	{
+		LearnedW2.assign(static_cast<size_t>(BrainSize()) * kBrainActions, 0.0f);
+		LastHidden.assign(static_cast<size_t>(BrainSize()), 0.0f);
+	}
 	bool IsChild() const { return AgeYears() < 12.0; }
 };
+
+inline constexpr int kWords = 16;
 
 struct Camp
 {
@@ -146,6 +185,16 @@ struct Camp
 	float SeenSeason = 0.0f;
 	// Share of what the land around the camp can feed that is still free (0 = full).
 	float Room = 1.0f;
+	// What anyone in camp knows, and what that does for everyone there.
+	SkillSet Known = 0;
+	SkillEffects Effects;
+	// What camps within a few days' walk know: people pick that up too, more slowly, but only
+	// from camps whose speech they can follow.
+	SkillSet Nearby = 0;
+	// The band's calls and words: each slot drifts to a new random word now and then, and bands that
+	// meet borrow words from each other. Bands sharing fewer than half can't understand each other.
+	std::array<uint16_t, kWords> Words{};
+	int Neighbour = 0; // Id of a camp within reach this step, 0 if none.
 	// For Step(): the wettest place within reach, and the squares the band gathers in and how
 	// much food they hold on average.
 	float BestWater = 0.0f;
@@ -171,6 +220,9 @@ struct PeopleSettings
 	// If everyone dies, a new band arrives at the start, born with the instincts of the most
 	// successful NPCs so far (lightly mutated), so the run goes on and keeps what evolved.
 	bool NewBandWhenGone = true;
+	// Chance a year that one person of average wits hits on a simple skill on their own; deeper
+	// skills are 4 times rarer per step down the tree.
+	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
 	// CPU threads for Step(); 0 uses all cores. Results are the same for any number.
 	int Threads = 0;
 };
@@ -200,6 +252,58 @@ public:
 	// Deaths by cause: old age and illness, predators, hunger, thirst, injuries.
 	const std::array<long long, 5>& DeathCauses() const { return Causes; }
 	long long HuntsWon() const { return Kills; }
+	// Skills someone alive knows, and how many people know each.
+	int SkillsKnown() const { return static_cast<int>(std::bitset<64>(KnownNow).count()); }
+	// Groups of camps that can understand each other, counted greedily.
+	int Languages() const
+	{
+		std::vector<const Camp*> Firsts;
+		for (const Camp& C : Camps)
+		{
+			if (C.Members.empty()) continue;
+			bool Found = false;
+			for (const Camp* F : Firsts)
+			{
+				if (Understand(C, *F))
+				{
+					Found = true;
+					break;
+				}
+			}
+			if (!Found) Firsts.push_back(&C);
+		}
+		return static_cast<int>(Firsts.size());
+	}
+	static bool Understand(const Camp& A, const Camp& B)
+	{
+		int Shared = 0;
+		for (int w = 0; w < kWords; ++w) Shared += A.Words[w] == B.Words[w];
+		return Shared * 2 >= kWords;
+	}
+	std::vector<int> SkillHolders() const
+	{
+		std::vector<int> Holders(AllSkills().size(), 0);
+		for (const Npc& P : Npcs)
+		{
+			for (size_t k = 0; k < Holders.size(); ++k) Holders[k] += Knows(P.Skills, static_cast<int>(k));
+		}
+		return Holders;
+	}
+
+	// Hidden neurons: the biggest brain alive and the average.
+	int BiggestBrain() const
+	{
+		int Most = 0;
+		for (const Npc& P : Npcs) Most = std::max(Most, P.BrainSize());
+		return Most;
+	}
+	double AverageBrain() const
+	{
+		double Sum = 0.0;
+		for (const Npc& P : Npcs) Sum += P.BrainSize();
+		return Npcs.empty() ? 0.0 : Sum / static_cast<double>(Npcs.size());
+	}
+
 	// About how many people the whole world's land can feed.
 	double LandCapacity()
 	{
@@ -269,16 +373,33 @@ public:
 		for (int i = 0; i < kBrainInputs; ++i) J += std::string(i ? "," : "") + "\"" + InputName(i) + "\"";
 		J += "],\"actions\":[";
 		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + "\"" + ActionName(a) + "\"";
-		J += "],\"w1\":" + Matrix(P.Genes->W1.data(), kBrainInputs, kBrainHidden);
-		J += ",\"b1\":" + Matrix(P.Genes->B1.data(), 1, kBrainHidden);
-		J += ",\"w2_inborn\":" + Matrix(P.Genes->W2.data(), kBrainHidden, kBrainActions);
-		J += ",\"w2_learned\":" + Matrix(P.LearnedW2.data(), kBrainHidden, kBrainActions);
+		// w1 is written [input][hidden], as before brains could grow.
+		const int H = P.BrainSize();
+		std::vector<float> W1(static_cast<size_t>(kBrainInputs) * H);
+		for (int i = 0; i < kBrainInputs; ++i)
+			for (int h = 0; h < H; ++h) W1[static_cast<size_t>(i) * H + h] = P.Genes->W1[static_cast<size_t>(h) * kBrainInputs + i];
+		J += "],\"hidden_neurons\":" + std::to_string(H);
+		J += ",\"w1\":" + Matrix(W1.data(), kBrainInputs, H);
+		J += ",\"b1\":" + Matrix(P.Genes->B1.data(), 1, H);
+		J += ",\"w2_inborn\":" + Matrix(P.Genes->W2.data(), H, kBrainActions);
+		J += ",\"w2_learned\":" + Matrix(P.LearnedW2.data(), H, kBrainActions);
 		J += ",\"b2_inborn\":" + Matrix(P.Genes->B2.data(), 1, kBrainActions);
 		J += ",\"b2_learned\":" + Matrix(P.LearnedB2.data(), 1, kBrainActions);
 		J += ",\"last_inputs\":" + Matrix(P.LastInputs.data(), 1, kBrainInputs);
-		J += ",\"last_hidden\":" + Matrix(P.LastHidden.data(), 1, kBrainHidden);
+		J += ",\"last_hidden\":" + Matrix(P.LastHidden.data(), 1, H);
 		J += ",\"last_choice\":" + Matrix(P.LastChoice.data(), 1, kBrainActions);
 		J += ",\"last_action\":\"" + std::string(ActionName(P.LastAction)) + "\"";
+		J += ",\"skills\":[";
+		bool AnySkill = false;
+		for (size_t k = 0; k < AllSkills().size(); ++k)
+		{
+			if (Knows(P.Skills, static_cast<int>(k)))
+			{
+				J += std::string(AnySkill ? "," : "") + "\"" + AllSkills()[k].Name + "\"";
+				AnySkill = true;
+			}
+		}
+		J += "]";
 		J += ",\"action_counts\":[";
 		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + std::to_string(P.ActionCounts[a]);
 		J += "]}";
@@ -345,7 +466,7 @@ public:
 			{
 				// Successful hunters bring the meat back to camp and everyone gets a share.
 				const double Share = std::min(4.0, Meat[Slot] / static_cast<double>(std::max<size_t>(1, Camps[Slot].Members.size())));
-				P.CarriedKg = static_cast<float>(std::min(10.0, P.CarriedKg + Share));
+				P.CarriedKg = static_cast<float>(std::min(10.0 * P.Own.Carry, P.CarriedKg + Share));
 			}
 			MaybeConceive(i, Chosen[i] == static_cast<int>(Action::Socialize));
 			LiveThroughDay(P, Chosen[i]);
@@ -359,6 +480,8 @@ public:
 			Imitate(i);
 		}
 
+		LearnSkills(1);
+		DriftLanguages(1);
 		BirthsAndDeaths();
 		IndexCamps();
 		MoveCamps();
@@ -512,7 +635,7 @@ public:
 			Npc& P = Npcs[i];
 			if (Carer[i] < 0)
 			{
-				P.CarriedKg = std::min(10.0f, Spare[i] * 0.85f);
+				P.CarriedKg = std::min(10.0f * P.Own.Carry, Spare[i] * 0.85f);
 			}
 			UpdateLoneliness(P);
 			if (Chosen[i] >= 0)
@@ -528,6 +651,8 @@ public:
 			Imitate(i, Days);
 		}
 
+		LearnSkills(Days);
+		DriftLanguages(Days);
 		BirthsAndDeaths(Days);
 		IndexCamps();
 		MoveCamps(Days);
@@ -565,10 +690,16 @@ private:
 	// The most successful NPCs so far (most children, then longest lives), whose instincts a new band starts from.
 	std::vector<std::pair<double, std::shared_ptr<const Genome>>> HallOfFame;
 
+	int NextLanguageMark = 2;
+	int LanguageYear = 0;
+	SkillSet KnownNow = 0;  // Skills someone alive knows.
+	SkillSet EverKnown = 0; // Skills anyone has ever known.
+
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
 	// People each one-degree square can feed, from its plant cover at the best time of year.
 	std::vector<float> SquareCapacity;
+	int LandClimate = -1;
 
 	// Gatherable plant food people have used up, per quarter-degree square.
 	std::unordered_map<int64_t, double> Gathered;
@@ -681,7 +812,7 @@ private:
 		// Each of the 12 hidden neurons starts out mostly watching one input.
 		for (int h = 0; h < kBrainHidden; ++h)
 		{
-			G.W1[h * kBrainHidden + h] = 3.0f;
+			G.W1[h * kBrainInputs + h] = 3.0f;
 			G.B1[h] = -1.5f;
 		}
 		auto Link = [&G](int Hidden, Action A, float W) { G.W2[Hidden * kBrainActions + static_cast<int>(A)] = W; };
@@ -712,23 +843,36 @@ private:
 		for (float& W : G.B1) Nudge(W);
 		for (float& W : G.W2) Nudge(W);
 		for (float& W : G.B2) Nudge(W);
+		// Now and then a child is born with a neuron more, or one fewer.
+		if (Dice.Chance(0.02))
+		{
+			G.AddNeuron(Dice);
+		}
+		else if (G.Hidden() > 4 && Dice.Chance(0.01))
+		{
+			G.RemoveNeuron(static_cast<int>(Dice.Next() % static_cast<uint64_t>(G.Hidden())));
+		}
 		G.LearningRate = std::clamp(G.LearningRate * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.001f, 0.5f);
 		G.Curiosity = std::clamp(G.Curiosity * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.1f, 2.0f);
 		G.Imitation = std::clamp(G.Imitation * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.0f, 0.5f);
 		return G;
 	}
 
-	// Each weight comes from one parent or the other, then a few mutate.
+	// The child's brain is as big as one parent's; each weight comes from one parent or the
+	// other where both have that neuron, then a few mutate.
 	Genome Cross(const Genome& Mum, const Genome& Dad)
 	{
-		Genome G = Mum;
-		for (size_t k = 0; k < G.W1.size(); ++k) if (Dice.Chance(0.5)) G.W1[k] = Dad.W1[k];
-		for (size_t k = 0; k < G.B1.size(); ++k) if (Dice.Chance(0.5)) G.B1[k] = Dad.B1[k];
-		for (size_t k = 0; k < G.W2.size(); ++k) if (Dice.Chance(0.5)) G.W2[k] = Dad.W2[k];
-		for (size_t k = 0; k < G.B2.size(); ++k) if (Dice.Chance(0.5)) G.B2[k] = Dad.B2[k];
-		if (Dice.Chance(0.5)) G.LearningRate = Dad.LearningRate;
-		if (Dice.Chance(0.5)) G.Curiosity = Dad.Curiosity;
-		if (Dice.Chance(0.5)) G.Imitation = Dad.Imitation;
+		const bool LikeMum = Dice.Chance(0.5);
+		Genome G = LikeMum ? Mum : Dad;
+		const Genome& Rest = LikeMum ? Dad : Mum;
+		const size_t Shared = static_cast<size_t>(std::min(G.Hidden(), Rest.Hidden()));
+		for (size_t k = 0; k < Shared * kBrainInputs; ++k) if (Dice.Chance(0.5)) G.W1[k] = Rest.W1[k];
+		for (size_t k = 0; k < Shared; ++k) if (Dice.Chance(0.5)) G.B1[k] = Rest.B1[k];
+		for (size_t k = 0; k < Shared * kBrainActions; ++k) if (Dice.Chance(0.5)) G.W2[k] = Rest.W2[k];
+		for (size_t k = 0; k < G.B2.size(); ++k) if (Dice.Chance(0.5)) G.B2[k] = Rest.B2[k];
+		if (Dice.Chance(0.5)) G.LearningRate = Rest.LearningRate;
+		if (Dice.Chance(0.5)) G.Curiosity = Rest.Curiosity;
+		if (Dice.Chance(0.5)) G.Imitation = Rest.Imitation;
 		return Mutate(G, 0.15f);
 	}
 
@@ -816,8 +960,10 @@ private:
 	// How much of what the land around a camp can feed is still free: its own square and two rings around it.
 	void MeasureRoom()
 	{
-		if (SquareCapacity.empty())
+		// Ice ages change how much land there is and how much it grows.
+		if (SquareCapacity.empty() || LandClimate != Eco->ClimateVersion())
 		{
+			LandClimate = Eco->ClimateVersion();
 			MeasureLand();
 		}
 		for (Camp& C : Camps)
@@ -842,13 +988,43 @@ private:
 					}
 				}
 			}
+			Capacity *= C.Effects.Land;
 			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
 		}
 	}
 
-	// Reads what each camp can see today.
+	// Reads what each camp can see and knows today.
 	void SenseCamps()
 	{
+		for (Camp& C : Camps)
+		{
+			C.Known = 0;
+			for (int i : C.Members)
+			{
+				C.Known |= Npcs[i].Skills;
+			}
+			C.Effects = EffectsOf(C.Known);
+		}
+		for (Camp& C : Camps)
+		{
+			C.Nearby = 0;
+			C.Neighbour = 0;
+			for (int r = GridRow(C.Lat) - 1; r <= GridRow(C.Lat) + 1; ++r)
+			{
+				for (int c = GridCol(C.Lon) - 1; c <= GridCol(C.Lon) + 1; ++c)
+				{
+					auto It = CampGrid.find(GridKey(r, c));
+					if (It == CampGrid.end()) continue;
+					for (int Slot : It->second)
+					{
+						const Camp& O = Camps[Slot];
+						if (O.Id == C.Id || DistanceKm(C.Lat, C.Lon, O.Lat, O.Lon) >= 100.0) continue;
+						C.Neighbour = O.Id;
+						if (Understand(C, O)) C.Nearby |= O.Known;
+					}
+				}
+			}
+		}
 		MeasureRoom();
 		for (Camp& C : Camps)
 		{
@@ -994,6 +1170,7 @@ private:
 			// About half leave, families together: children go where their mothers go.
 			Camp New;
 			New.Id = NextCampId++;
+			New.Words = Camps[c].Words;
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
 			if (Camps[c].ScoutScore > 0.0)
 			{
@@ -1002,7 +1179,8 @@ private:
 			bool Placed = false;
 			for (int Try = 0; Try < 8 && !Placed; ++Try)
 			{
-				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Full ? Dice.Range(100.0, 250.0) : Dice.Range(30.0, 60.0), New.Lat, New.Lon);
+				const double Far = Full ? Dice.Range(100.0, 250.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
+				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
 				Placed = Livable(New.Lat, New.Lon);
 			}
 			if (!Placed)
@@ -1124,12 +1302,14 @@ private:
 	static int Decide(Npc& P, Rng& Dice)
 	{
 		const Genome& G = *P.Genes;
-		for (int h = 0; h < kBrainHidden; ++h)
+		const int Hidden = G.Hidden();
+		for (int h = 0; h < Hidden; ++h)
 		{
 			float Sum = G.B1[h];
+			const float* W = &G.W1[static_cast<size_t>(h) * kBrainInputs];
 			for (int i = 0; i < kBrainInputs; ++i)
 			{
-				Sum += P.LastInputs[i] * G.W1[i * kBrainHidden + h];
+				Sum += P.LastInputs[i] * W[i];
 			}
 			P.LastHidden[h] = std::tanh(Sum);
 		}
@@ -1138,7 +1318,7 @@ private:
 		for (int a = 0; a < kBrainActions; ++a)
 		{
 			float Sum = OutputBias(P, a);
-			for (int h = 0; h < kBrainHidden; ++h)
+			for (int h = 0; h < Hidden; ++h)
 			{
 				Sum += P.LastHidden[h] * OutputWeight(P, h, a);
 			}
@@ -1192,9 +1372,9 @@ private:
 					BestLon = Lo;
 				}
 			}
-			const double Found = 6.0 * P.ForageSkill * std::min(1.0, Best / 500.0);
+			const double Found = 6.0 * P.ForageSkill * std::min(1.0, Best / 500.0) * P.Own.Forage;
 			Gathered[KeyOf(BestLat, BestLon)] += Found;
-			P.CarriedKg = static_cast<float>(std::min(10.0, P.CarriedKg + Found));
+			P.CarriedKg = static_cast<float>(std::min(10.0 * P.Own.Carry, P.CarriedKg + Found));
 			P.ForageSkill = std::min(1.0f, P.ForageSkill + 0.002f);
 			P.Fatigue += 0.08f;
 			break;
@@ -1205,7 +1385,7 @@ private:
 			const int Party = std::max(1, Hunters);
 			const double MaxMass = 250.0 * std::pow(static_cast<double>(Party), 1.5);
 			const double Game = std::clamp(Eco->GameNear(C.Lat, C.Lon, MaxMass) / 300.0, 0.0, 1.0);
-			const double Success = std::min(0.6, (0.05 + 0.05 * std::min(Party, 8)) * Game * (0.4 + P.HuntSkill));
+			const double Success = std::min(0.6, (0.05 + 0.05 * std::min(Party, 8)) * Game * (0.4 + P.HuntSkill) * P.Own.Hunt);
 			P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.003f);
 			P.Fatigue += 0.15f;
 			// Once the camp has all the meat it can eat today, nobody kills more; it would only rot.
@@ -1276,7 +1456,8 @@ private:
 			P.Heading += static_cast<float>(Dice.Range(-0.6, 0.6));
 			double La = 0.0;
 			double Lo = 0.0;
-			Offset(C.Lat, C.Lon, P.Heading, Dice.Range(30.0, 60.0), La, Lo);
+			// Rafts and boats let scouts reach land across the water.
+			Offset(C.Lat, C.Lon, P.Heading, Dice.Range(30.0, 60.0) * C.Effects.Travel, La, Lo);
 			const double Score = PlaceScore(La, Lo, C.Id);
 			if (Score < 0.0)
 			{
@@ -1335,7 +1516,7 @@ private:
 			const float Hunting = Shares[i][static_cast<int>(Action::Hunt)];
 			if (Hunting > 0.01f && Chance[Slot] > 0.0)
 			{
-				Share[i] = std::min(0.6, Chance[Slot] * (0.4 + Npcs[i].HuntSkill)) * Hunting * Days;
+				Share[i] = std::min(0.6, Chance[Slot] * (0.4 + Npcs[i].HuntSkill) * Npcs[i].Own.Hunt) * Hunting * Days;
 				Expected[Slot] += Share[i];
 			}
 		}
@@ -1538,6 +1719,7 @@ private:
 			const bool Busy = Chosen == static_cast<int>(Action::Hunt) || Chosen == static_cast<int>(Action::Explore);
 			P.Energy -= Busy ? 0.32f : (Chosen == static_cast<int>(Action::Rest) ? 0.22f : 0.27f);
 		}
+		P.Energy -= ExtraBurn(P);
 		P.Water -= 0.3f;
 		if (Eco->WaterAt(P.Lat, P.Lon) > 0.4)
 		{
@@ -1588,7 +1770,7 @@ private:
 	}
 
 	// Plant food an NPC gathers in a full day at its camp's best spot.
-	static double ForageYield(const Npc& P, const Camp& C) { return 6.0 * P.ForageSkill * std::min(1.0, C.ForageKg / 500.0); }
+	static double ForageYield(const Npc& P, const Camp& C) { return 6.0 * P.ForageSkill * std::min(1.0, C.ForageKg / 500.0) * P.Own.Forage; }
 
 	// The wettest place within a short walk of camp.
 	double BestWaterNear(double Lat, double Lon)
@@ -1630,6 +1812,7 @@ private:
 			Resting = (*Shares)[static_cast<int>(Action::Rest)];
 			Drinking = (*Shares)[static_cast<int>(Action::Drink)];
 		}
+		Burn = std::max(0.05f, Burn + ExtraBurn(P));
 		if (P.PregnantDays >= 0.0)
 		{
 			Burn += 0.03f;
@@ -1726,6 +1909,136 @@ private:
 		Blend(Child, Mum, static_cast<float>(OverDays(0.02, Days)));
 	}
 
+	// How quick-witted an NPC is: bigger brains find and learn new skills faster.
+	static double Smarts(const Npc& P) { return static_cast<double>(P.BrainSize()) / kBrainHidden; }
+
+	// Over Days days, each person may hit on a skill they have what it takes for, and picks up
+	// skills others in camp know. Young children are too small to learn them.
+	void LearnSkills(int Days)
+	{
+		const std::vector<Skill>& List = AllSkills();
+		const int Count = static_cast<int>(List.size());
+		for (Npc& P : Npcs)
+		{
+			if (P.AgeYears() < 5.0)
+			{
+				continue;
+			}
+			const double Wits = Smarts(P);
+			const Camp& C = Camps[CampSlot(P.Camp)];
+			// Something new: rarer the deeper it is, likelier for the curious and the clever.
+			double Total = 0.0;
+			std::array<double, 64> Odds{};
+			for (int k = 0; k < Count; ++k)
+			{
+				if (CanDiscover(P.Skills, k))
+				{
+					Odds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1) * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
+					Total += Odds[k];
+				}
+			}
+			double Pick = Dice.Uniform();
+			if (Pick < Total)
+			{
+				for (int k = 0; k < Count; ++k)
+				{
+					if ((Pick -= Odds[k]) < 0.0)
+					{
+						Discover(P, k);
+						break;
+					}
+				}
+			}
+			// Something others in camp, or in camps nearby, already know, once what it builds on is known.
+			const SkillSet Missing = (C.Known | C.Nearby) & ~P.Skills;
+			if (Missing)
+			{
+				const double InCamp = OverDays(std::min(0.5, 0.002 * C.Effects.Teaching * Wits), Days);
+				const double Neighbours = OverDays(std::min(0.5, 0.0002 * C.Effects.Teaching * Wits), Days);
+				for (int k = 0; k < Count; ++k)
+				{
+					if (Knows(Missing, k) && CanDiscover(P.Skills, k) && Dice.Chance(Knows(C.Known, k) ? InCamp : Neighbours))
+					{
+						P.LearnSkill(k);
+					}
+				}
+			}
+		}
+		NoteSkills();
+	}
+
+	void Discover(Npc& P, int Skill)
+	{
+		P.LearnSkill(Skill);
+		if (!Knows(KnownNow, Skill))
+		{
+			const std::string Name = AllSkills()[Skill].Name;
+			AddEvent(Knows(EverKnown, Skill) ? "Someone rediscovers " + Name : "First discovery of " + Name);
+			KnownNow |= SkillSet(1) << Skill;
+			EverKnown |= SkillSet(1) << Skill;
+		}
+	}
+
+	// Each word changes about once in 5,000 years, and bands within reach borrow a word about every
+	// 500 years, so neighbours keep understanding each other while cut-off bands drift apart.
+	void DriftLanguages(int Days)
+	{
+		const double Change = OverDays(1.0 / (5000.0 * 365.0), Days);
+		const double Borrow = OverDays(1.0 / (500.0 * 365.0), Days);
+		for (Camp& C : Camps)
+		{
+			for (uint16_t& W : C.Words)
+			{
+				if (Dice.Chance(Change)) W = static_cast<uint16_t>(Dice.Next());
+			}
+			if (C.Neighbour != 0 && Dice.Chance(Borrow))
+			{
+				const int w = static_cast<int>(Dice.Next() % kWords);
+				C.Words[w] = Camps[CampSlot(C.Neighbour)].Words[w];
+			}
+		}
+		const int Year = static_cast<int>(Eco->Years());
+		if (Year != LanguageYear)
+		{
+			LanguageYear = Year;
+			const int N = Languages();
+			if (N >= NextLanguageMark)
+			{
+				AddEvent("The people now speak " + std::to_string(N) + " languages that can't understand each other");
+				while (NextLanguageMark <= N) NextLanguageMark *= 2;
+			}
+		}
+	}
+
+	// Notes skills nobody alive knows any more.
+	void NoteSkills()
+	{
+		SkillSet Now = 0;
+		for (const Npc& P : Npcs)
+		{
+			Now |= P.Skills;
+		}
+		const SkillSet Lost = KnownNow & ~Now;
+		for (int k = 0; k < static_cast<int>(AllSkills().size()); ++k)
+		{
+			if (Knows(Lost, k))
+			{
+				AddEvent(std::string(AllSkills()[k].Name) + " is forgotten: nobody alive knows it");
+			}
+		}
+		KnownNow = Now;
+	}
+
+	// Energy a day beyond the basics: a bigger brain costs more (a smaller one saves a little), and
+	// the cold costs more far from the tropics in winter, unless fire, clothing and shelter keep it out.
+	float ExtraBurn(const Npc& P) const
+	{
+		const double Far = std::clamp((std::abs(P.Lat) - 30.0) / 30.0, 0.0, 1.0);
+		const double Cold = Far * (0.5 + 0.5 * (1.0 - Eco->GrowingSeason(P.Lat)));
+		const float Warmth = Camps[CampSlot(P.Camp)].Effects.Warmth;
+		return 0.0015f * static_cast<float>(P.BrainSize() - kBrainHidden) + static_cast<float>(0.12 * Cold) * (1.0f - Warmth);
+	}
+
 	// How good an NPC feels right now; learning tries to make this go up.
 	static float WellbeingOf(const Npc& P)
 	{
@@ -1745,7 +2058,7 @@ private:
 		for (int a = 0; a < kBrainActions; ++a)
 		{
 			const float Push = Rate * ((a == Chosen ? 1.0f : 0.0f) - P.LastChoice[a]);
-			for (int h = 0; h < kBrainHidden; ++h)
+			for (int h = 0; h < P.BrainSize(); ++h)
 			{
 				// Lessons fade unless they keep being confirmed.
 				float& W = P.LearnedW2[h * kBrainActions + a];
@@ -1757,7 +2070,8 @@ private:
 
 	static void Blend(Npc& Learner, const Npc& Teacher, float Amount)
 	{
-		for (size_t k = 0; k < Learner.LearnedW2.size(); ++k)
+		// Only neurons both have can be copied.
+		for (size_t k = 0; k < std::min(Learner.LearnedW2.size(), Teacher.LearnedW2.size()); ++k)
 		{
 			Learner.LearnedW2[k] += (Teacher.LearnedW2[k] - Learner.LearnedW2[k]) * Amount;
 		}
@@ -1814,6 +2128,7 @@ private:
 				Baby.OffsetLon = P.OffsetLon + static_cast<float>(Dice.Range(-0.005, 0.005));
 				const Genome& Dad = P.BabyFatherGenes ? *P.BabyFatherGenes : *P.Genes;
 				Baby.Genes = std::make_shared<const Genome>(Cross(*P.Genes, Dad));
+				Baby.FitBrain();
 				Baby.Energy = 0.8f;
 				Baby.Water = 0.8f;
 				Baby.HuntSkill = 0.1f;
@@ -1840,12 +2155,13 @@ private:
 			// Old age, childhood illness and accidents; per year, spread over the days.
 			const double Age = P.AgeYears();
 			// Infancy and childhood were dangerous: about four in ten children died before 15.
-			const double Young = Age < 1.0 ? 0.15 : (Age < 5.0 ? 0.06 : (Age < 15.0 ? 0.01 : 0.0));
+			const SkillEffects& Known = Camps[CampSlot(P.Camp)].Effects;
+			const double Young = (Age < 1.0 ? 0.15 : (Age < 5.0 ? 0.06 : (Age < 15.0 ? 0.01 : 0.0))) * Known.ChildDeaths;
 			const double Yearly = 0.0004 * std::exp(0.08 * Age) + Young + 0.005;
 			// Predators take the lone more than people in a big camp, and miss those who hide.
 			const double Alone = 1.0 / (1.0 + 0.3 * std::min(P.BandSize - 1, 20));
 			const double Hidden = P.LastAction == static_cast<int>(Action::Hide) ? 0.3 : 1.0;
-			if (Dice.Chance(OverDays(P.Fear * 0.0003 * Alone * Hidden, Days)))
+			if (Dice.Chance(OverDays(P.Fear * 0.0003 * Alone * Hidden * Known.PredatorDeaths, Days)))
 			{
 				Die(P, 1);
 			}
@@ -1893,6 +2209,7 @@ private:
 			{
 				P.Genes = std::make_shared<const Genome>(Mutate(*HallOfFame[static_cast<size_t>(i) % HallOfFame.size()].second, 0.15f));
 			}
+			P.FitBrain();
 			P.Camp = First.Id;
 			P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
 			P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
