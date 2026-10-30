@@ -147,27 +147,29 @@ void AEarthHUD::DrawNpcPanel(const earth::Npc& P, const ALifeSimulation& Sim)
 	auto RowY = [&](int Index, int Count) { return NetTop + (Index + 0.5f) * NetHeight / Count; };
 
 	const earth::Genome& G = *P.Genes;
+	// Brains can grow or shrink from one generation to the next.
+	const int Hidden = P.BrainSize();
 	// Senses to hidden neurons (inborn wiring only; this layer doesn't learn within a life).
 	for (int i = 0; i < earth::kBrainInputs; ++i)
 	{
-		for (int h = 0; h < earth::kBrainHidden; ++h)
+		for (int h = 0; h < Hidden; ++h)
 		{
-			const float W = G.W1[i * earth::kBrainHidden + h];
+			const float W = G.W1[h * earth::kBrainInputs + i];
 			if (FMath::Abs(W) > 0.25f)
 			{
-				DrawLine(InX + Box, RowY(i, earth::kBrainInputs), HiddenX, RowY(h, earth::kBrainHidden), WeightColor(W), 1.f + FMath::Min(FMath::Abs(W), 3.f) * 0.5f);
+				DrawLine(InX + Box, RowY(i, earth::kBrainInputs), HiddenX, RowY(h, Hidden), WeightColor(W), 1.f + FMath::Min(FMath::Abs(W), 3.f) * 0.5f);
 			}
 		}
 	}
 	// Hidden neurons to actions: inborn plus learned.
-	for (int h = 0; h < earth::kBrainHidden; ++h)
+	for (int h = 0; h < Hidden; ++h)
 	{
 		for (int a = 0; a < earth::kBrainActions; ++a)
 		{
 			const float W = earth::People::OutputWeight(P, h, a);
 			if (FMath::Abs(W) > 0.25f)
 			{
-				DrawLine(HiddenX + Box, RowY(h, earth::kBrainHidden), OutX, RowY(a, earth::kBrainActions), WeightColor(W), 1.f + FMath::Min(FMath::Abs(W), 3.f) * 0.5f);
+				DrawLine(HiddenX + Box, RowY(h, Hidden), OutX, RowY(a, earth::kBrainActions), WeightColor(W), 1.f + FMath::Min(FMath::Abs(W), 3.f) * 0.5f);
 			}
 		}
 	}
@@ -179,13 +181,14 @@ void AEarthHUD::DrawNpcPanel(const earth::Npc& P, const ALifeSimulation& Sim)
 		DrawText(UTF8_TO_TCHAR(earth::InputName(i)), kGrey, Left + 10.f * Scale, Y - 7.f * Scale, Font, Scale * 0.9f);
 	}
 	const TArray<TArray<float>>& Waves = Sim.GetBrainWaves();
-	for (int h = 0; h < earth::kBrainHidden; ++h)
+	for (int h = 0; h < Hidden; ++h)
 	{
-		const float Y = RowY(h, earth::kBrainHidden);
+		const float Y = RowY(h, Hidden);
 		DrawRect(ActivityColor(P.LastHidden[h]), HiddenX, Y - Box * 0.5f, Box, Box);
 		// A dot in the neuron's brain-wave colour, to match the lines below.
-		DrawRect(WaveColor(h, earth::kBrainHidden), HiddenX - 6.f * Scale, Y - 2.f * Scale, 4.f * Scale, 4.f * Scale);
+		DrawRect(WaveColor(h, Hidden), HiddenX - 6.f * Scale, Y - 2.f * Scale, 4.f * Scale, 4.f * Scale);
 	}
+	DrawText(FString::Printf(TEXT("%d neurons"), Hidden), kGrey, HiddenX - 20.f * Scale, NetTop - 14.f * Scale, Font, Scale * 0.85f);
 	for (int a = 0; a < earth::kBrainActions; ++a)
 	{
 		const float Y = RowY(a, earth::kBrainActions);
@@ -225,6 +228,15 @@ void AEarthHUD::DrawNpcPanel(const earth::Npc& P, const ALifeSimulation& Sim)
 	}
 	DrawText(FString::Printf(TEXT("Born with: learning rate %.3f, curiosity %.2f, copies others on %.0f%% of days"), G.LearningRate, G.Curiosity, G.Imitation * 100.f),
 		kGrey, Left + 10.f * Scale, Y + 4.f * Scale, Font, Scale * 0.85f);
+	FString Skills;
+	for (size_t k = 0; k < earth::AllSkills().size(); ++k)
+	{
+		if (earth::Knows(P.Skills, static_cast<int>(k)))
+		{
+			Skills += (Skills.IsEmpty() ? TEXT("") : TEXT(", ")) + FString(UTF8_TO_TCHAR(earth::AllSkills()[k].Name));
+		}
+	}
+	DrawText(TEXT("Knows: ") + (Skills.IsEmpty() ? FString(TEXT("nothing yet")) : Skills), kGrey, Left + 10.f * Scale, Y + 20.f * Scale, Font, Scale * 0.85f);
 
 	DrawWaves(Waves, Left + 10.f * Scale, Top + Height - 130.f * Scale, Width - 20.f * Scale, 120.f * Scale);
 }

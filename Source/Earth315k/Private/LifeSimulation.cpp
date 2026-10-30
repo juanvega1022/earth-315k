@@ -611,7 +611,7 @@ void ALifeSimulation::SampleHistory()
 	TArray<float> Wave;
 	if (const earth::Npc* P = GetFollowed())
 	{
-		Wave.Append(P->LastHidden.data(), earth::kBrainHidden);
+		Wave.Append(P->LastHidden.data(), static_cast<int32>(P->LastHidden.size()));
 	}
 	else if (const earth::AnimalGroup* G = GetFollowedGroup())
 	{

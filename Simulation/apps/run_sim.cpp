@@ -82,7 +82,7 @@ int main(int Argc, char** Argv)
 	if (!CsvPath.empty())
 	{
 		Csv.open(CsvPath);
-		Csv << "year,plant_cover,people,bands";
+		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << '\n';
 	}
@@ -104,7 +104,8 @@ int main(int Argc, char** Argv)
 		}
 		if (Csv)
 		{
-			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount();
+			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount() << ',' << Folk.SkillsKnown() << ','
+				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
 			Csv << '\n';
 			Csv.flush();
@@ -116,6 +117,11 @@ int main(int Argc, char** Argv)
 			std::printf("Year %6d (%d years ago): %8.0f animals in %5zu groups, %2d species, plants %3.0f%%, %d people in %d bands\n", Y,
 				315000 - Y, Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
 				Folk.Alive(), Folk.BandCount());
+			if (WithPeople)
+			{
+				std::printf("            %d skills known, brains of %.1f hidden neurons on average (biggest %d)\n", Folk.SkillsKnown(), Folk.AverageBrain(),
+					Folk.BiggestBrain());
+			}
 			if (!BrainPath.empty() && Folk.Alive() > 0)
 			{
 				SaveBrain(Folk, BrainPath);
