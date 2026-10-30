@@ -36,6 +36,7 @@ int main(int Argc, char** Argv)
 	bool WithPeople = true;
 	int FastDays = 1;
 	earth::PeopleSettings PeopleCfg;
+	earth::EcosystemSettings Settings;
 
 	for (int i = 1; i < Argc; ++i)
 	{
@@ -50,12 +51,15 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--fast") && HasValue) FastDays = std::atoi(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--max-people") && HasValue) PeopleCfg.MaxPeople = std::atoi(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--density") && HasValue) PeopleCfg.PeoplePerKm2 = std::atof(Argv[++i]);
+		else if (!std::strcmp(Argv[i], "--start") && HasValue) Settings.StartYearsAgo = std::atof(Argv[++i]);
+		else if (!std::strcmp(Argv[i], "--no-ice-ages")) Settings.IceAges = false;
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
+			std::printf("  --start N       begin N years ago (default 315000); sea level and ice follow Earth's history\n");
 			return 1;
 		}
 	}
@@ -67,7 +71,6 @@ int main(int Argc, char** Argv)
 		return 1;
 	}
 
-	earth::EcosystemSettings Settings;
 	Settings.SeaLevelMeters = SeaLevel;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), Seed, Settings);
 	const auto& Species = Eco.GetSpecies();
@@ -82,7 +85,7 @@ int main(int Argc, char** Argv)
 	if (!CsvPath.empty())
 	{
 		Csv.open(CsvPath);
-		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain";
+		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << '\n';
 	}
@@ -105,7 +108,7 @@ int main(int Argc, char** Argv)
 		if (Csv)
 		{
 			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount() << ',' << Folk.SkillsKnown() << ','
-				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain();
+				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain() << ',' << Eco.SeaLevelChange();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
 			Csv << '\n';
 			Csv.flush();
@@ -115,8 +118,9 @@ int main(int Argc, char** Argv)
 		if (Y % Every == 0 || Y == TotalYears)
 		{
 			std::printf("Year %6d (%d years ago): %8.0f animals in %5zu groups, %2d species, plants %3.0f%%, %d people in %d bands\n", Y,
-				315000 - Y, Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
+				static_cast<int>(Eco.YearsAgo()), Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
 				Folk.Alive(), Folk.BandCount());
+			std::printf("            Sea level %+.0f m from today, ice age strength %.0f%%\n", Eco.SeaLevelChange(), Eco.IceCover() * 100.0);
 			if (WithPeople)
 			{
 				std::printf("            %d skills known, brains of %.1f hidden neurons on average (biggest %d)\n", Folk.SkillsKnown(), Folk.AverageBrain(),

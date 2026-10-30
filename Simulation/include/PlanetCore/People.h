@@ -662,6 +662,7 @@ private:
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
 	// People each one-degree square can feed, from its plant cover at the best time of year.
 	std::vector<float> SquareCapacity;
+	int LandClimate = -1;
 
 	// Gatherable plant food people have used up, per quarter-degree square.
 	std::unordered_map<int64_t, double> Gathered;
@@ -922,8 +923,10 @@ private:
 	// How much of what the land around a camp can feed is still free: its own square and two rings around it.
 	void MeasureRoom()
 	{
-		if (SquareCapacity.empty())
+		// Ice ages change how much land there is and how much it grows.
+		if (SquareCapacity.empty() || LandClimate != Eco->ClimateVersion())
 		{
+			LandClimate = Eco->ClimateVersion();
 			MeasureLand();
 		}
 		for (Camp& C : Camps)
