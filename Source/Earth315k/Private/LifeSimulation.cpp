@@ -74,9 +74,12 @@ public:
 				if (Owner->Life && Owner->Folk)
 				{
 					const double Today = Owner->Life->Day();
+					// Jumps of 1,000 years or more move everyone a month at a time, people included.
+					bool bMonths = false;
 					if (Owner->JumpTargetDay > Today)
 					{
-						Days = FMath::Clamp(static_cast<int32>(std::ceil(Owner->JumpTargetDay - Today)), 1, 10);
+						bMonths = Owner->JumpTargetDay - Owner->Jump.Day >= 1000.0 * earth::Ecosystem::kDaysPerYear;
+						Days = FMath::Clamp(static_cast<int32>(std::ceil(Owner->JumpTargetDay - Today)), 1, bMonths ? 30 : 10);
 					}
 					else if (Owner->PendingDays >= 1.0)
 					{
@@ -86,9 +89,16 @@ public:
 					if (Days > 0)
 					{
 						Owner->Life->Step(Days);
-						for (int32 k = 0; k < Days; ++k)
+						if (bMonths)
 						{
-							Owner->Folk->StepDay();
+							Owner->Folk->Step(Days);
+						}
+						else
+						{
+							for (int32 k = 0; k < Days; ++k)
+							{
+								Owner->Folk->StepDay();
+							}
 						}
 						Owner->DaysDone += Days;
 					}

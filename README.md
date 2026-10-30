@@ -44,7 +44,7 @@ Land is coloured by plant cover: deep green where plants are thick, brown where 
 | `]` | Twice as fast (up to 1,000 years per second, if your PC keeps up) |
 | `[` | Half as fast |
 | `P` | Pause or carry on |
-| `1` `2` `3` `4` | Jump ahead 10, 100, 1,000 or 10,000 years, then sum up what happened |
+| `1` `2` `3` `4` | Jump ahead 10, 100, 1,000 or 10,000 years, then sum up what happened (jumps of 1,000 years or more move everyone a month at a time, see below) |
 | `C` | Stop a jump |
 | `F` | Follow an NPC with the camera; press again for the next one |
 | `H` | Follow a group of animals (the biggest of a species); press again for the next species |
@@ -68,6 +68,7 @@ Thirty people start in a camp at Omo Kibish in southern Ethiopia, knowing nothin
 - **Culture.** Children copy their mothers, and adults sometimes copy an older camp mate who is doing better.
 - **Children.** A baby's inborn wiring is a mix of both parents' with a few random changes, so useful instincts spread over generations.
 - **Bands.** People live in camps that move on when food or water runs low, towards the best place their scouts have found. Camps split when they grow past about 40, and small camps that meet join up.
+- **How many.** Fewer children are born where the land around a camp is already full, so numbers level off where food runs short instead of at a fixed limit. Each square km of the greenest land feeds 0.0003 people, about 1 in 200 of the real figure for hunter-gatherers, so the whole world holds about 30,000 NPCs and stays affordable to simulate.
 
 Press `F` to follow someone. The panel on the right shows their brain live: senses on the left, hidden neurons in the middle and the 8 actions on the right with the chance of each. Green lines push towards an action and red lines push away, brighter for stronger. Below are their needs, skills and how they have spent their days. The top left lists "firsts" as they happen: the first hunt, the first child, the first band split, the first person to set foot outside Africa.
 
@@ -93,7 +94,17 @@ cmake --build Simulation/build --config Release
 Simulation/build/Release/earth315k_sim --years 1000 --csv populations.csv
 ```
 
-(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints each decade's animals and people, the people's firsts and any species that died out, and `--csv` saves the populations for charts. Add `--fast 10` to move plants and animals 10 days at a time, about 5 to 10 times faster. Run it with no data and it tells you to fetch the elevation first.
+(On Linux or macOS the program is at `Simulation/build/earth315k_sim`.) It prints the animals and people at least every 1,000 years, the people's firsts and any species that died out as they happen, and `--csv` saves the populations each year for charts. Both are written as the run goes, so you can watch a long run. `--brain brain.json` saves the oldest NPC's brain each time it prints and at the end. Run it with no data and it tells you to fetch the elevation first.
+
+### Long runs
+
+Add `--fast 30` to move everything a month at a time, people included. Each NPC's brain then decides once a month: half the month goes to what it picks, the rest is spread the way it would choose on a typical day, and it fetches water, rests and gathers extra food as needed along the way. It still learns from how the month went, has children and passes its wiring on. This is coarser than living every day, but the brains run on all cores and it is many times faster, which is what makes 315,000 years possible:
+
+```
+Simulation/build/Release/earth315k_sim --years 315000 --fast 30 --csv populations.csv --brain brain.json > run.txt
+```
+
+`--density D` changes how many people a square km of the greenest land can feed (default 0.0003); more people means a slower run. `--max-people N` adds a hard limit if you want one.
 
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 

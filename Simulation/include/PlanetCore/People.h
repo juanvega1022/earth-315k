@@ -13,6 +13,7 @@
 #pragma once
 
 #include "Ecosystem.h"
+#include "Parallel.h"
 #include "Random.h"
 
 #include <algorithm>
@@ -137,6 +138,19 @@ struct Camp
 	double ScoutLon = 0.0;
 	double ScoutScore = -1.0;
 	int DaysHere = 0;
+	// What anyone at camp can see today, read once per camp instead of once per person.
+	float SeenDanger = 0.0f;
+	float SeenFood = 0.0f;
+	float SeenGame = 0.0f;
+	float SeenWater = 0.0f;
+	float SeenSeason = 0.0f;
+	// Share of what the land around the camp can feed that is still free (0 = full).
+	float Room = 1.0f;
+	// For Step(): the wettest place within reach, and the squares the band gathers in and how
+	// much food they hold on average.
+	float BestWater = 0.0f;
+	std::array<int64_t, 5> ForageSquares{};
+	float ForageKg = 0.0f;
 };
 
 struct PeopleSettings
@@ -145,7 +159,11 @@ struct PeopleSettings
 	double StartLat = 5.4;
 	double StartLon = 35.9;
 	int StartCount = 30;
-	int MaxPeople = 20000;
+	// Optional hard limit on the number of people; 0 means none. Normally the land sets the limit.
+	int MaxPeople = 0;
+	// How many people a square km of the greenest land can feed. The real figure for hunter-gatherers
+	// is about 0.05-0.1; this is much lower so the whole world's people stay affordable to simulate.
+	double PeoplePerKm2 = 0.0003;
 	// A camp this big starts to think about splitting.
 	int SplitSize = 40;
 	// Food people can gather from plants (fruit, nuts, roots) in a quarter-degree square at full plant cover.
@@ -153,13 +171,15 @@ struct PeopleSettings
 	// If everyone dies, a new band arrives at the start, born with the instincts of the most
 	// successful NPCs so far (lightly mutated), so the run goes on and keeps what evolved.
 	bool NewBandWhenGone = true;
+	// CPU threads for Step(); 0 uses all cores. Results are the same for any number.
+	int Threads = 0;
 };
 
 class People
 {
 public:
 	People(Ecosystem* InEco, uint64_t Seed, const PeopleSettings& InSettings = PeopleSettings())
-		: Eco(InEco), Dice(Seed ^ 0x5eed0fa11ull), Settings(InSettings)
+		: Eco(InEco), Dice(Seed ^ 0x5eed0fa11ull), BaseSeed(Seed), Settings(InSettings)
 	{
 		Regions.assign(6, false);
 		Regions[0] = true; // Africa
@@ -180,6 +200,17 @@ public:
 	// Deaths by cause: old age and illness, predators, hunger, thirst, injuries.
 	const std::array<long long, 5>& DeathCauses() const { return Causes; }
 	long long HuntsWon() const { return Kills; }
+	// About how many people the whole world's land can feed.
+	double LandCapacity()
+	{
+		if (SquareCapacity.empty())
+		{
+			MeasureLand();
+		}
+		double Total = 0.0;
+		for (float V : SquareCapacity) Total += V;
+		return Total;
+	}
 	// How many bands have started from scratch (1 = the first band is still going).
 	int BandsStarted() const { return Arrivals; }
 
@@ -259,19 +290,14 @@ public:
 	// Call once per day, after Ecosystem::StepDay().
 	void StepDay()
 	{
-		if (Npcs.empty())
+		if (!RestartIfGone())
 		{
-			if (!Settings.NewBandWhenGone)
-			{
-				return;
-			}
-			StartBand();
-			AddEvent("A new band of " + std::to_string(Settings.StartCount) + " arrives in East Africa, born with the instincts of the most successful of those before (band " +
-				std::to_string(Arrivals) + ")");
+			return;
 		}
 		Eco->RefreshIndex();
 		RegrowGatherable();
 		IndexCamps();
+		SenseCamps();
 
 		// Decide first, so everyone acts on the same picture of the day, then act.
 		std::vector<int> Chosen(Npcs.size(), -1);
@@ -286,7 +312,7 @@ public:
 			{
 				continue;
 			}
-			Chosen[i] = Decide(P);
+			Chosen[i] = Decide(P, Dice);
 			if (Chosen[i] == static_cast<int>(Action::Hunt))
 			{
 				HuntersIn[CampSlot(P.Camp)] += 1;
@@ -340,9 +366,180 @@ public:
 		CheckFirsts();
 	}
 
+	// Moves people Days days in one go (up to 30), for long runs. Each NPC's brain decides once
+	// for the whole span: half the days go to the action it picks, the rest are spread the way it
+	// would choose on a typical day. Drinking and sleeping happen as needed along the way, and the
+	// brain learns from how the span went. Coarser than StepDay() but much faster, and the brains
+	// run on all CPU cores. Call after Ecosystem::Step(Days).
+	void Step(int Days)
+	{
+		Days = std::clamp(Days, 1, 30);
+		if (Days == 1)
+		{
+			StepDay();
+			return;
+		}
+		if (!RestartIfGone())
+		{
+			return;
+		}
+		if (!Pool)
+		{
+			Pool = std::make_unique<WorkerPool>(Settings.Threads > 0 ? Settings.Threads - 1 : 0);
+		}
+		Eco->RefreshIndex();
+		RegrowGatherable(Days);
+		IndexCamps();
+		SenseCamps();
+		for (Camp& C : Camps)
+		{
+			C.BestWater = static_cast<float>(BestWaterNear(C.Lat, C.Lon));
+			FindForage(C);
+		}
+
+		const size_t Count = Npcs.size();
+		std::vector<int> Carer(Count, -1);
+		std::vector<int> Dependents(Count, 0);
+		for (size_t i = 0; i < Count; ++i)
+		{
+			if (Npcs[i].IsChild())
+			{
+				Carer[i] = FindCarer(i);
+				if (Carer[i] >= 0)
+				{
+					Dependents[static_cast<size_t>(Carer[i])] += 1;
+				}
+			}
+		}
+		std::vector<int> Chosen(Count, -1);
+		std::vector<float> WellbeingBefore(Count, 0.0f);
+		const uint64_t Today = static_cast<uint64_t>(Eco->Day());
+		Pool->For(Count, [&](size_t i)
+		{
+			Npc& P = Npcs[i];
+			Sense(P);
+			WellbeingBefore[i] = WellbeingOf(P);
+			if (Carer[i] < 0)
+			{
+				Rng Mine(BaseSeed ^ (Today * 0x9E3779B97F4A7C15ull) ^ (static_cast<uint64_t>(P.Id) * 0xBF58476D1CE4E5B9ull));
+				Chosen[i] = Decide(P, Mine);
+			}
+		});
+
+		// Share of the days each NPC spends on each action.
+		std::vector<std::array<float, kBrainActions>> Shares(Count);
+		std::vector<float> HuntersIn(Camps.size(), 0.0f);
+		for (size_t i = 0; i < Count; ++i)
+		{
+			if (Chosen[i] >= 0)
+			{
+				for (int a = 0; a < kBrainActions; ++a)
+				{
+					Shares[i][a] = 0.5f * Npcs[i].LastChoice[a] + (a == Chosen[i] ? 0.5f : 0.0f);
+				}
+				HuntersIn[CampSlot(Npcs[i].Camp)] += Shares[i][static_cast<int>(Action::Hunt)];
+			}
+		}
+		std::vector<double> Meat(Camps.size(), 0.0);
+		HuntOverDays(Shares, HuntersIn, Meat, Days);
+		std::vector<float> DailyFood(Count, 0.0f);
+		std::vector<uint8_t> Occasional(Count, 0);
+		Pool->For(Count, [&](size_t i)
+		{
+			Npc& P = Npcs[i];
+			const Camp& C = Camps[CampSlot(P.Camp)];
+			P.Lat = C.Lat + P.OffsetLat;
+			P.Lon = C.Lon + P.OffsetLon;
+			if (Chosen[i] >= 0)
+			{
+				Rng Mine(BaseSeed ^ (Today * 0xD1B54A32D192ED03ull) ^ (static_cast<uint64_t>(P.Id) * 0x9E3779B97F4A7C15ull));
+				Occasional[i] = WorkOverDays(P, C, Shares[i], HuntersIn[CampSlot(P.Camp)], Days, DailyFood[i], Mine);
+			}
+		});
+		std::vector<double> CampGathered(Camps.size(), 0.0);
+		for (size_t i = 0; i < Count; ++i)
+		{
+			const int Slot = CampSlot(Npcs[i].Camp);
+			CampGathered[Slot] += static_cast<double>(DailyFood[i]) * Days;
+			// Things done now and then, which touch others: sharing, scouting and company.
+			for (int a = 0; a < kBrainActions; ++a)
+			{
+				if (Occasional[i] & (1 << a))
+				{
+					double Unused = 0.0;
+					Act(i, Camps[Slot], a, 0, Unused);
+				}
+			}
+		}
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			GatherFrom(Camps[c], CampGathered[c]);
+		}
+
+		// Everyone who fends for themselves lives through the span; what they don't eat is left over.
+		std::vector<float> Spare(Count, 0.0f);
+		std::vector<float> ExtraFound(Count, 0.0f);
+		Pool->For(Count, [&](size_t i)
+		{
+			Npc& P = Npcs[i];
+			const int Slot = CampSlot(P.Camp);
+			const Camp& C = Camps[Slot];
+			// Successful hunters bring the meat back to camp and everyone gets a share.
+			const float MeatPerDay = static_cast<float>(std::min(4.0, Meat[Slot] / Days / static_cast<double>(std::max<size_t>(1, C.Members.size()))));
+			if (Carer[i] < 0)
+			{
+				const float ForagePerDay = static_cast<float>(ForageYield(P, C));
+				Spare[i] = LiveThroughDays(P, &Shares[i], DailyFood[i], MeatPerDay, C.BestWater, Days, ForagePerDay, Dependents[i], &ExtraFound[i]);
+			}
+		});
+		for (size_t i = 0; i < Count; ++i)
+		{
+			if (ExtraFound[i] > 0.0f)
+			{
+				GatherFrom(Camps[CampSlot(Npcs[i].Camp)], ExtraFound[i]);
+			}
+		}
+		// Young children are fed from what their carer and the camp have left over.
+		for (size_t i = 0; i < Count; ++i)
+		{
+			if (Carer[i] >= 0)
+			{
+				BeCaredForDays(i, static_cast<size_t>(Carer[i]), Spare, Days);
+			}
+		}
+		Pool->For(Count, [&](size_t i)
+		{
+			Npc& P = Npcs[i];
+			if (Carer[i] < 0)
+			{
+				P.CarriedKg = std::min(10.0f, Spare[i] * 0.85f);
+			}
+			UpdateLoneliness(P);
+			if (Chosen[i] >= 0)
+			{
+				Learn(P, Chosen[i], WellbeingOf(P) - WellbeingBefore[i] + P.Pleasure);
+			}
+			P.Pleasure = 0.0f;
+			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
+		});
+		for (size_t i = 0; i < Count; ++i)
+		{
+			MaybeConceive(i, Chosen[i] >= 0 && Dice.Chance(OverDays(Shares[i][static_cast<int>(Action::Socialize)], Days)), Days);
+			Imitate(i, Days);
+		}
+
+		BirthsAndDeaths(Days);
+		IndexCamps();
+		MoveCamps(Days);
+		SplitAndMergeCamps(Days);
+		CheckFirsts();
+	}
+
 private:
 	Ecosystem* Eco;
 	Rng Dice;
+	uint64_t BaseSeed = 0;
+	std::unique_ptr<WorkerPool> Pool;
 	PeopleSettings Settings;
 	std::vector<Npc> Npcs;
 	std::vector<Camp> Camps;
@@ -367,6 +564,11 @@ private:
 	int Arrivals = 0;
 	// The most successful NPCs so far (most children, then longest lives), whose instincts a new band starts from.
 	std::vector<std::pair<double, std::shared_ptr<const Genome>>> HallOfFame;
+
+	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
+	std::unordered_map<int64_t, std::vector<int>> CampGrid;
+	// People each one-degree square can feed, from its plant cover at the best time of year.
+	std::vector<float> SquareCapacity;
 
 	// Gatherable plant food people have used up, per quarter-degree square.
 	std::unordered_map<int64_t, double> Gathered;
@@ -399,6 +601,35 @@ private:
 	}
 
 	void AddEvent(const std::string& Text) { Events.push_back({Eco->Years(), Text}); }
+
+	// Chance of something with daily chance P happening at least once in Days days.
+	static double OverDays(double P, int Days)
+	{
+		if (Days == 1)
+		{
+			return P;
+		}
+		const double X = P * Days;
+		// For rare things the first terms are exact enough, and much cheaper than pow().
+		return X < 0.05 ? X - 0.5 * X * X * (1.0 - 1.0 / Days) : 1.0 - std::pow(1.0 - P, Days);
+	}
+
+	// False if everyone is gone and no new band comes.
+	bool RestartIfGone()
+	{
+		if (!Npcs.empty())
+		{
+			return true;
+		}
+		if (!Settings.NewBandWhenGone)
+		{
+			return false;
+		}
+		StartBand();
+		AddEvent("A new band of " + std::to_string(Settings.StartCount) + " arrives in East Africa, born with the instincts of the most successful of those before (band " +
+			std::to_string(Arrivals) + ")");
+		return true;
+	}
 
 	static int64_t KeyOf(double Lat, double Lon)
 	{
@@ -503,11 +734,12 @@ private:
 
 	// ---- Places -----------------------------------------------------------------------------
 
-	void RegrowGatherable()
+	void RegrowGatherable(int Days = 1)
 	{
+		const double Left = Days == 1 ? 0.97 : std::pow(0.97, Days);
 		for (auto It = Gathered.begin(); It != Gathered.end();)
 		{
-			It->second *= 0.97;
+			It->second *= Left;
 			It = It->second < 1.0 ? Gathered.erase(It) : std::next(It);
 		}
 	}
@@ -519,15 +751,113 @@ private:
 		return std::max(0.0, Full - (It == Gathered.end() ? 0.0 : It->second));
 	}
 
+	static int64_t GridKey(int Row, int Col) { return static_cast<int64_t>(Row) * 360 + ((Col % 360) + 360) % 360; }
+	static int GridRow(double Lat) { return static_cast<int>(std::floor(Lat + 90.0)); }
+	static int GridCol(double Lon) { return static_cast<int>(std::floor(Lon + 180.0)); }
+
+	void GridAdd(int Slot)
+	{
+		CampGrid[GridKey(GridRow(Camps[Slot].Lat), GridCol(Camps[Slot].Lon))].push_back(Slot);
+	}
+
+	void GridRemove(int Slot)
+	{
+		std::vector<int>& List = CampGrid[GridKey(GridRow(Camps[Slot].Lat), GridCol(Camps[Slot].Lon))];
+		List.erase(std::remove(List.begin(), List.end(), Slot), List.end());
+	}
+
 	// Other camps within Km of a point, not counting camp SelfId.
 	int CampsNear(double Lat, double Lon, double Km, int SelfId) const
 	{
+		const int Rows = static_cast<int>(std::ceil(Km / kKmPerDegree));
+		const int Cols = std::min(180, static_cast<int>(std::ceil(Km / (kKmPerDegree * std::max(0.05, std::cos(Lat * kPi / 180.0))))));
+		const int R0 = GridRow(Lat);
+		const int C0 = GridCol(Lon);
 		int Count = 0;
-		for (const Camp& C : Camps)
+		for (int r = R0 - Rows; r <= R0 + Rows; ++r)
 		{
-			Count += C.Id != SelfId && DistanceKm(Lat, Lon, C.Lat, C.Lon) < Km;
+			for (int c = C0 - Cols; c <= C0 + Cols; ++c)
+			{
+				auto It = CampGrid.find(GridKey(r, c));
+				if (It == CampGrid.end())
+				{
+					continue;
+				}
+				for (int Slot : It->second)
+				{
+					const Camp& C = Camps[Slot];
+					Count += C.Id != SelfId && DistanceKm(Lat, Lon, C.Lat, C.Lon) < Km;
+				}
+			}
 		}
 		return Count;
+	}
+
+	void MeasureLand()
+	{
+		SquareCapacity.assign(180 * 360, 0.0f);
+		for (int r = 0; r < 180; ++r)
+		{
+			for (int c = 0; c < 360; ++c)
+			{
+				double Cover = 0.0;
+				for (int k = 0; k < 16; ++k)
+				{
+					const double Lat = r - 90.0 + (k / 4 + 0.5) / 4.0;
+					const double Lon = c - 180.0 + (k % 4 + 0.5) / 4.0;
+					Cover += Livable(Lat, Lon) ? Eco->BestCover(Lat, Lon) / 16.0 : 0.0;
+				}
+				const double AreaKm2 = kKmPerDegree * kKmPerDegree * std::cos((r - 89.5) * kPi / 180.0);
+				SquareCapacity[static_cast<size_t>(r) * 360 + c] = static_cast<float>(Cover * AreaKm2 * Settings.PeoplePerKm2);
+			}
+		}
+	}
+
+	// How much of what the land around a camp can feed is still free: its own square and two rings around it.
+	void MeasureRoom()
+	{
+		if (SquareCapacity.empty())
+		{
+			MeasureLand();
+		}
+		for (Camp& C : Camps)
+		{
+			const int R0 = GridRow(C.Lat);
+			const int C0 = GridCol(C.Lon);
+			double Capacity = 0.0;
+			double Living = 0.0;
+			for (int r = std::max(0, R0 - 2); r <= std::min(179, R0 + 2); ++r)
+			{
+				for (int c = C0 - 2; c <= C0 + 2; ++c)
+				{
+					const int Col = ((c % 360) + 360) % 360;
+					Capacity += SquareCapacity[static_cast<size_t>(r) * 360 + Col];
+					auto It = CampGrid.find(GridKey(r, Col));
+					if (It != CampGrid.end())
+					{
+						for (int Slot : It->second)
+						{
+							Living += static_cast<double>(Camps[Slot].Members.size());
+						}
+					}
+				}
+			}
+			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
+		}
+	}
+
+	// Reads what each camp can see today.
+	void SenseCamps()
+	{
+		MeasureRoom();
+		for (Camp& C : Camps)
+		{
+			C.SeenDanger = static_cast<float>(std::clamp(Eco->PredatorsNear(C.Lat, C.Lon) / 40.0, 0.0, 1.0));
+			C.SeenFood = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon) / Settings.GatherableKg, 0.0, 1.0));
+			C.SeenGame = static_cast<float>(std::clamp(Eco->GameNear(C.Lat, C.Lon, 1000.0) / 2000.0, 0.0, 1.0));
+			C.SeenWater = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
+			C.SeenSeason = static_cast<float>(Eco->GrowingSeason(C.Lat));
+		}
 	}
 
 	// How good a place looks for camp SelfId: food to gather, water and game, minus danger and
@@ -563,9 +893,11 @@ private:
 		}
 		Camps.erase(std::remove_if(Camps.begin(), Camps.end(), [](const Camp& C) { return C.Members.empty(); }), Camps.end());
 		CampSlots.clear();
+		CampGrid.clear();
 		for (size_t c = 0; c < Camps.size(); ++c)
 		{
 			CampSlots[Camps[c].Id] = static_cast<int>(c);
+			GridAdd(static_cast<int>(c));
 			for (int i : Camps[c].Members)
 			{
 				Npcs[i].BandSize = static_cast<int>(Camps[c].Members.size());
@@ -575,16 +907,17 @@ private:
 
 	// A camp stays while food and water hold out, then heads for the best place its scouts
 	// have found, or failing that the best-looking place within a day's walk.
-	void MoveCamps()
+	void MoveCamps(int Days = 1)
 	{
-		for (Camp& C : Camps)
+		for (size_t Slot = 0; Slot < Camps.size(); ++Slot)
 		{
-			C.ScoutScore *= 0.995; // Old news gets less trustworthy.
-			C.DaysHere += 1;
+			Camp& C = Camps[Slot];
+			C.ScoutScore *= Days == 1 ? 0.995 : std::pow(0.995, Days); // Old news gets less trustworthy.
+			C.DaysHere += Days;
 			const double Here = PlaceScore(C.Lat, C.Lon, C.Id);
 			const double Food = GatherableAt(C.Lat, C.Lon) / std::max(1.0, Eco->PlantCover(C.Lat, C.Lon) * Settings.GatherableKg);
 			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id) > 0;
-			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(0.02));
+			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
 				continue;
@@ -618,7 +951,7 @@ private:
 			{
 				continue;
 			}
-			const double Step = std::min(1.0, 25.0 / Km);
+			const double Step = std::min(1.0, 25.0 * Days / Km); // A day's walk per day.
 			double DLon = TargetLon - C.Lon;
 			if (DLon > 180.0) DLon -= 360.0;
 			if (DLon < -180.0) DLon += 360.0;
@@ -628,8 +961,10 @@ private:
 			if (NewLon < -180.0) NewLon += 360.0;
 			if (Livable(NewLat, NewLon))
 			{
+				GridRemove(static_cast<int>(Slot));
 				C.Lat = NewLat;
 				C.Lon = NewLon;
+				GridAdd(static_cast<int>(Slot));
 				C.DaysHere = 0;
 				if (Step >= 1.0)
 				{
@@ -643,12 +978,16 @@ private:
 		}
 	}
 
-	void SplitAndMergeCamps()
+	void SplitAndMergeCamps(int Days = 1)
 	{
 		const size_t Existing = Camps.size();
 		for (size_t c = 0; c < Existing; ++c)
 		{
-			if (static_cast<int>(Camps[c].Members.size()) < Settings.SplitSize || !Dice.Chance(0.01))
+			// Big camps split, and so do smaller ones once the land around can't feed more; then the
+			// ones who leave go far, looking for land of their own.
+			const int Size = static_cast<int>(Camps[c].Members.size());
+			const bool Full = Size >= 20 && Camps[c].Room < 0.2f;
+			if ((Size < Settings.SplitSize && !Full) || !Dice.Chance(OverDays(0.01, Days)))
 			{
 				continue;
 			}
@@ -663,7 +1002,7 @@ private:
 			bool Placed = false;
 			for (int Try = 0; Try < 8 && !Placed; ++Try)
 			{
-				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Dice.Range(30.0, 60.0), New.Lat, New.Lon);
+				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Full ? Dice.Range(100.0, 250.0) : Dice.Range(30.0, 60.0), New.Lat, New.Lon);
 				Placed = Livable(New.Lat, New.Lon);
 			}
 			if (!Placed)
@@ -693,10 +1032,32 @@ private:
 
 		// Small camps that run into each other join up.
 		bool Merged = false;
+		std::vector<int> Near;
 		for (size_t a = 0; a < Camps.size(); ++a)
 		{
-			for (size_t b = a + 1; b < Camps.size(); ++b)
+			// Only camps in the same or a neighbouring one-degree square can be within 15 km.
+			Near.clear();
+			for (int r = GridRow(Camps[a].Lat) - 1; r <= GridRow(Camps[a].Lat) + 1; ++r)
 			{
+				for (int c = GridCol(Camps[a].Lon) - 1; c <= GridCol(Camps[a].Lon) + 1; ++c)
+				{
+					auto It = CampGrid.find(GridKey(r, c));
+					if (It != CampGrid.end())
+					{
+						for (int Slot : It->second)
+						{
+							if (Slot > static_cast<int>(a))
+							{
+								Near.push_back(Slot);
+							}
+						}
+					}
+				}
+			}
+			std::sort(Near.begin(), Near.end());
+			for (int Slot : Near)
+			{
+				const size_t b = static_cast<size_t>(Slot);
 				const size_t Together = Camps[a].Members.size() + Camps[b].Members.size();
 				if (Camps[a].Members.empty() || Camps[b].Members.empty() || Together > static_cast<size_t>(Settings.SplitSize) * 3 / 4 ||
 					DistanceKm(Camps[a].Lat, Camps[a].Lon, Camps[b].Lat, Camps[b].Lon) > 15.0)
@@ -738,7 +1099,7 @@ private:
 	void Sense(Npc& P)
 	{
 		const Camp& C = Camps[CampSlot(P.Camp)];
-		P.Fear = static_cast<float>(std::clamp(Eco->PredatorsNear(C.Lat, C.Lon) / 40.0, 0.0, 1.0));
+		P.Fear = C.SeenDanger;
 		UpdateLoneliness(P);
 
 		std::array<float, kBrainInputs>& In = P.LastInputs;
@@ -748,10 +1109,10 @@ private:
 		In[3] = P.Fear;
 		In[4] = P.Loneliness;
 		In[5] = Fertile(P) ? 1.0f : 0.0f;
-		In[6] = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon) / Settings.GatherableKg, 0.0, 1.0));
-		In[7] = static_cast<float>(std::clamp(Eco->GameNear(C.Lat, C.Lon, 1000.0) / 2000.0, 0.0, 1.0));
-		In[8] = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
-		In[9] = static_cast<float>(Eco->GrowingSeason(C.Lat));
+		In[6] = C.SeenFood;
+		In[7] = C.SeenGame;
+		In[8] = C.SeenWater;
+		In[9] = C.SeenSeason;
 		In[10] = static_cast<float>(std::clamp(P.AgeYears() / 70.0, 0.0, 1.0));
 		In[11] = P.Health;
 		In[12] = std::clamp(static_cast<float>(P.BandSize) / 30.0f, 0.0f, 1.0f);
@@ -760,7 +1121,7 @@ private:
 		In[15] = 1.0f;
 	}
 
-	int Decide(Npc& P)
+	static int Decide(Npc& P, Rng& Dice)
 	{
 		const Genome& G = *P.Genes;
 		for (int h = 0; h < kBrainHidden; ++h)
@@ -847,7 +1208,8 @@ private:
 			const double Success = std::min(0.6, (0.05 + 0.05 * std::min(Party, 8)) * Game * (0.4 + P.HuntSkill));
 			P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.003f);
 			P.Fatigue += 0.15f;
-			if (Dice.Chance(Success))
+			// Once the camp has all the meat it can eat today, nobody kills more; it would only rot.
+			if (MeatForCamp < 4.0 * static_cast<double>(C.Members.size()) && Dice.Chance(Success))
 			{
 				const int Kind = Eco->KillOneAnimal(C.Lat, C.Lon, MaxMass, Dice);
 				if (Kind >= 0)
@@ -950,13 +1312,113 @@ private:
 		}
 	}
 
+	// Each camp's hunters over Days days: a party as big as the camp's hunters on an average day,
+	// each hunter succeeding as often as in StepDay(). Meat goes to the camp.
+	void HuntOverDays(const std::vector<std::array<float, kBrainActions>>& Shares, const std::vector<float>& HuntersIn, std::vector<double>& Meat, int Days)
+	{
+		std::vector<double> Chance(Camps.size(), 0.0);
+		std::vector<double> Expected(Camps.size(), 0.0);
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			if (HuntersIn[c] > 0.01f)
+			{
+				const int Party = std::max(1, static_cast<int>(std::lround(HuntersIn[c])));
+				const double MaxMass = 250.0 * std::pow(static_cast<double>(Party), 1.5);
+				const double Game = std::clamp(Eco->GameNear(Camps[c].Lat, Camps[c].Lon, MaxMass) / 300.0, 0.0, 1.0);
+				Chance[c] = (0.05 + 0.05 * std::min(Party, 8)) * Game;
+			}
+		}
+		std::vector<double> Share(Npcs.size(), 0.0);
+		for (size_t i = 0; i < Npcs.size(); ++i)
+		{
+			const int Slot = CampSlot(Npcs[i].Camp);
+			const float Hunting = Shares[i][static_cast<int>(Action::Hunt)];
+			if (Hunting > 0.01f && Chance[Slot] > 0.0)
+			{
+				Share[i] = std::min(0.6, Chance[Slot] * (0.4 + Npcs[i].HuntSkill)) * Hunting * Days;
+				Expected[Slot] += Share[i];
+			}
+		}
+		std::vector<double> Landed(Camps.size(), 0.0);
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			if (Expected[c] <= 0.0)
+			{
+				continue;
+			}
+			const int Party = std::max(1, static_cast<int>(std::lround(HuntersIn[c])));
+			const int Wanted = static_cast<int>(Expected[c] + Dice.Uniform());
+			// Hunters stop once the camp has all the meat it can eat; the rest would only rot.
+			const double Enough = 2.0 * 4.0 * Days * static_cast<double>(Camps[c].Members.size());
+			const std::vector<int> Killed = Eco->KillAnimals(Camps[c].Lat, Camps[c].Lon, 250.0 * std::pow(static_cast<double>(Party), 1.5), Wanted, Enough, Dice);
+			for (size_t k = 0; k < Killed.size(); ++k)
+			{
+				if (Killed[k] > 0)
+				{
+					Meat[c] += Eco->GetSpecies()[k].BodyMassKg * 0.5 * Killed[k];
+					Landed[c] += Killed[k];
+					Kills += Killed[k];
+					NoteHunt(static_cast<int>(k), Party);
+				}
+			}
+		}
+		// Each hunter gets the skill and the thrill of their part of the kills.
+		for (size_t i = 0; i < Npcs.size(); ++i)
+		{
+			const int Slot = CampSlot(Npcs[i].Camp);
+			if (Share[i] > 0.0)
+			{
+				const float Mine = static_cast<float>(Share[i] / Expected[Slot] * Landed[Slot]);
+				Npcs[i].HuntSkill = std::min(1.0f, Npcs[i].HuntSkill + 0.02f * Mine);
+				Npcs[i].Pleasure += 0.3f * Mine / Days;
+			}
+		}
+	}
+
+	// Days days of one NPC's own work, with Shares of the days on each action. Plant food gathered
+	// per day goes to DailyFood; hunting is done by HuntOverDays(). Returns, as bits, the actions
+	// done now and then that involve others (sharing, scouting, company), for Act() to carry out.
+	static uint8_t WorkOverDays(Npc& P, const Camp& C, const std::array<float, kBrainActions>& Shares, float Hunters, int Days, float& DailyFood, Rng& Dice)
+	{
+		const float Foraging = Shares[static_cast<int>(Action::Forage)];
+		if (Foraging > 0.01f)
+		{
+			DailyFood += static_cast<float>(ForageYield(P, C) * Foraging);
+			P.ForageSkill = std::min(1.0f, P.ForageSkill + 0.002f * Days * Foraging);
+		}
+		const float Hunting = Shares[static_cast<int>(Action::Hunt)];
+		if (Hunting > 0.01f)
+		{
+			// The camp's hunters go out together; see HuntOverDays().
+			const double MaxMass = 250.0 * std::pow(static_cast<double>(std::max(1, static_cast<int>(std::lround(Hunters)))), 1.5);
+			P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.003f * Days * Hunting);
+			if (Dice.Chance(OverDays(0.0001 * std::min(MaxMass, 2000.0) / 250.0 * Hunting, Days)))
+			{
+				P.Health -= 0.6f; // Gored, kicked or trampled.
+			}
+		}
+		uint8_t Occasional = 0;
+		for (Action A : {Action::ShareFood, Action::Explore, Action::Socialize})
+		{
+			if (Dice.Chance(OverDays(Shares[static_cast<int>(A)], Days)))
+			{
+				Occasional |= static_cast<uint8_t>(1 << static_cast<int>(A));
+			}
+		}
+		return Occasional;
+	}
+
 	// A fertile woman with a fertile man in camp may conceive; more likely if she spent the day with others.
-	void MaybeConceive(size_t Index, bool Socialized)
+	void MaybeConceive(size_t Index, bool Socialized, int Days = 1)
 	{
 		Npc& P = Npcs[Index];
-		// Fewer children as the world fills up towards MaxPeople, so numbers level off gently.
-		const double Room = 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance((Socialized ? 0.04 : 0.01) * Room))
+		// Fewer children as the land around fills up, so numbers level off gently where food runs short.
+		double Room = Camps[CampSlot(P.Camp)].Room;
+		if (Settings.MaxPeople > 0)
+		{
+			Room *= 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
+		}
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room, Days)))
 		{
 			return;
 		}
@@ -1101,6 +1563,169 @@ private:
 		}
 	}
 
+	// Over weeks a band ranges over its camp's square and the four around it, so it gathers from all five.
+	void FindForage(Camp& C)
+	{
+		C.ForageSquares[0] = KeyOf(C.Lat, C.Lon);
+		double Total = GatherableAt(C.Lat, C.Lon);
+		for (int d = 0; d < 4; ++d)
+		{
+			double La = 0.0;
+			double Lo = 0.0;
+			Offset(C.Lat, C.Lon, d * kPi / 2.0, 28.0, La, Lo);
+			C.ForageSquares[d + 1] = KeyOf(La, Lo);
+			Total += Eco->IsLand(La, Lo) ? GatherableAt(La, Lo) * 0.8 : 0.0; // Farther is more work.
+		}
+		C.ForageKg = static_cast<float>(Total / 5.0);
+	}
+
+	void GatherFrom(const Camp& C, double Kg)
+	{
+		for (int64_t Key : C.ForageSquares)
+		{
+			Gathered[Key] += Kg / 5.0;
+		}
+	}
+
+	// Plant food an NPC gathers in a full day at its camp's best spot.
+	static double ForageYield(const Npc& P, const Camp& C) { return 6.0 * P.ForageSkill * std::min(1.0, C.ForageKg / 500.0); }
+
+	// The wettest place within a short walk of camp.
+	double BestWaterNear(double Lat, double Lon)
+	{
+		double Best = Eco->WaterAt(Lat, Lon);
+		for (int d = 0; d < 6 && Best < 0.5; ++d)
+		{
+			double La = 0.0;
+			double Lo = 0.0;
+			Offset(Lat, Lon, Dice.Range(0.0, 2.0 * kPi), 15.0, La, Lo);
+			Best = std::max(Best, Eco->IsLand(La, Lo) ? Eco->WaterAt(La, Lo) : 0.0);
+		}
+		return Best;
+	}
+
+	// Days days of needs for an NPC spending Shares of its days on each action (null for a child
+	// being looked after), gathering DailyFood a day and getting Meat a day from the camp. Extra
+	// days needed for fetching water and resting earn nothing. If that isn't enough to feed itself
+	// and the Dependents it looks after, it spends spare days gathering (ForagePerDay full time),
+	// adding what it gathers that way to ExtraFound. Returns the food left over at the end.
+	float LiveThroughDays(Npc& P, const std::array<float, kBrainActions>* Shares, float DailyFood, float Meat, float BestWater, int Days,
+		float ForagePerDay = 0.0f, int Dependents = 0, float* ExtraFound = nullptr) const
+	{
+		// Food burned a day, and the effort that builds tiredness, for each action.
+		static const float Burns[kBrainActions] = {0.27f, 0.32f, 0.27f, 0.22f, 0.27f, 0.32f, 0.27f, 0.27f};
+		static const float Effort[kBrainActions] = {0.08f, 0.15f, 0.05f, 0.0f, 0.0f, 0.25f, 0.05f, 0.0f};
+		float Burn = 0.15f; // Small bodies need less.
+		float Work = 0.02f;
+		float Resting = 0.0f;
+		float Drinking = 0.0f;
+		if (Shares)
+		{
+			Burn = 0.0f;
+			for (int a = 0; a < kBrainActions; ++a)
+			{
+				Burn += (*Shares)[a] * Burns[a];
+				Work += (*Shares)[a] * Effort[a];
+			}
+			Resting = (*Shares)[static_cast<int>(Action::Rest)];
+			Drinking = (*Shares)[static_cast<int>(Action::Drink)];
+		}
+		if (P.PregnantDays >= 0.0)
+		{
+			Burn += 0.03f;
+		}
+
+		// Water: streams along the way cover some of it; the rest means walking to water.
+		const float Loss = Eco->WaterAt(P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
+		const float DrinkShare = std::min(1.0f, Loss / std::max(0.01f, 1.5f * BestWater));
+		float ThirstyDays = 0.0f;
+		if (DrinkShare < 0.6f)
+		{
+			P.Water = std::max(P.Water, 0.75f);
+		}
+		else
+		{
+			const float Short = Loss * Days * (1.0f - 0.6f / DrinkShare);
+			ThirstyDays = std::max(0.0f, (Short - P.Water) / Loss);
+			P.Water = std::max(0.0f, P.Water - Short);
+		}
+
+		// Effort builds tiredness, which a day's rest takes away. Rest and water trips beyond what the
+		// brain already planned for come out of working days.
+		const float RestNeeded = Work / (Work + 0.5f);
+		P.Fatigue = std::clamp(0.2f + Work - Resting, 0.0f, 1.0f);
+		const float Lost = std::max(0.0f, RestNeeded - Resting) + std::max(0.0f, std::min(DrinkShare, 0.6f) - Drinking);
+
+		// Food: eat what is carried and found, up to a day's worth a day.
+		float Food = P.CarriedKg + (DailyFood * std::max(0.0f, 1.0f - Lost) + Meat) * Days;
+		const float Needed = (Burn / 0.2f + 0.75f * Dependents) * Days + (1.0f - P.Energy) * 5.0f;
+		if (Shares && Food < Needed && ForagePerDay > 0.0f)
+		{
+			// Hunger wins: days not needed for gathering, rest or water go to gathering, even hunting
+			// days, since a hunter who comes back empty-handed for weeks goes looking for roots instead.
+			const float Busy = (*Shares)[static_cast<int>(Action::Forage)] + std::max(RestNeeded, Resting) + std::max(std::min(DrinkShare, 0.6f), Drinking);
+			const float Extra = std::min(std::max(0.0f, 1.0f - Busy), (Needed - Food) / (ForagePerDay * Days));
+			Food += Extra * ForagePerDay * Days;
+			*ExtraFound += Extra * ForagePerDay * Days;
+		}
+		const float Eat = std::min({Food, 3.0f * Days, Burn * Days / 0.2f + (1.0f - P.Energy) * 5.0f});
+		const float EnergyLeft = P.Energy + Eat * 0.2f - Burn * Days;
+		const float HungryDays = EnergyLeft < 0.0f ? -EnergyLeft / Burn : 0.0f;
+		P.Energy = std::clamp(EnergyLeft, 0.0f, 1.0f);
+
+		P.Health -= 0.04f * HungryDays + 0.15f * ThirstyDays;
+		const float GoodDays = std::max(0.0f, Days - HungryDays - ThirstyDays);
+		if (P.Energy > 0.3f && P.Water > 0.3f)
+		{
+			P.Health += 0.02f * GoodDays;
+		}
+		P.Health = std::clamp(P.Health, 0.0f, 1.0f);
+		P.SocialNeed = std::min(1.0f, P.SocialNeed + 0.03f * Days);
+		P.AgeDays += Days;
+		if (P.PregnantDays >= 0.0)
+		{
+			P.PregnantDays += Days;
+		}
+		return Food - Eat;
+	}
+
+	// A young child over Days days: fed from its carer's leftovers, then the camp's, then its carer's own reserves.
+	void BeCaredForDays(size_t Index, size_t CarerIndex, std::vector<float>& Spare, int Days)
+	{
+		Npc& Child = Npcs[Index];
+		Npc& Mum = Npcs[CarerIndex];
+		Child.Water = std::max(Child.Water, Mum.Water);
+		Child.LastAction = Mum.LastAction;
+		float Wanted = 0.75f * Days + (1.0f - Child.Energy) * 5.0f;
+		float Given = 0.0f;
+		auto Give = [&](size_t j)
+		{
+			const float Take = std::min(Wanted, std::max(0.0f, Spare[j]));
+			Spare[j] -= Take;
+			Given += Take;
+			Wanted -= Take;
+		};
+		Give(CarerIndex);
+		for (int j : Camps[CampSlot(Child.Camp)].Members)
+		{
+			if (Wanted <= 0.0f)
+			{
+				break;
+			}
+			if (j != static_cast<int>(CarerIndex) && !Npcs[j].IsChild())
+			{
+				Give(static_cast<size_t>(j));
+			}
+		}
+		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
+		Child.Energy += FromMum;
+		Mum.Energy -= FromMum * 0.5f;
+		Child.CarriedKg = 0.0f;
+		LiveThroughDays(Child, nullptr, Given / Days, 0.0f, 1.0f, Days);
+		Child.Fatigue = 0.1f;
+		Blend(Child, Mum, static_cast<float>(OverDays(0.02, Days)));
+	}
+
 	// How good an NPC feels right now; learning tries to make this go up.
 	static float WellbeingOf(const Npc& P)
 	{
@@ -1145,10 +1770,10 @@ private:
 	}
 
 	// Sometimes copies the habits of an older camp mate who is doing better.
-	void Imitate(size_t Index)
+	void Imitate(size_t Index, int Days = 1)
 	{
 		Npc& P = Npcs[Index];
-		if (P.IsChild() || !Dice.Chance(P.Genes->Imitation))
+		if (P.IsChild() || !Dice.Chance(OverDays(P.Genes->Imitation, Days)))
 		{
 			return;
 		}
@@ -1170,7 +1795,7 @@ private:
 		}
 	}
 
-	void BirthsAndDeaths()
+	void BirthsAndDeaths(int Days = 1)
 	{
 		std::vector<Npc> Born;
 		for (Npc& P : Npcs)
@@ -1220,11 +1845,11 @@ private:
 			// Predators take the lone more than people in a big camp, and miss those who hide.
 			const double Alone = 1.0 / (1.0 + 0.3 * std::min(P.BandSize - 1, 20));
 			const double Hidden = P.LastAction == static_cast<int>(Action::Hide) ? 0.3 : 1.0;
-			if (Dice.Chance(P.Fear * 0.0003 * Alone * Hidden))
+			if (Dice.Chance(OverDays(P.Fear * 0.0003 * Alone * Hidden, Days)))
 			{
 				Die(P, 1);
 			}
-			else if (Dice.Chance(Yearly / 365.0))
+			else if (Dice.Chance(OverDays(Yearly / 365.0, Days)))
 			{
 				Die(P, 0);
 			}

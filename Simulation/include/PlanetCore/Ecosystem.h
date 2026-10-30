@@ -116,6 +116,7 @@ struct AnimalGroup
 	double WellFed = 1.0; // 0 starving .. 1 full, smoothed over recent days.
 	double Heading = 0.0; // Radians; groups keep roughly the same direction when nothing pulls them elsewhere.
 	double Taken = 0.0;   // Animals of this group killed by hunters during the current step.
+	double Hunted = 0.0;  // Animals of this group killed by hunters over about the last year.
 	AnimalBrain Brain;
 	// The last decision, kept so it can be shown.
 	std::array<float, kAnimalInputs> LastInputs{};
@@ -243,6 +244,12 @@ public:
 		return Cells[CellIndex(Lat, Lon)].Plants / std::max(1.0, Settings.PeakPlantsPerKm2);
 	}
 
+	// Plant food in the cell at the best time of year, as a fraction of the planet's best possible (0..1).
+	double BestCover(double Lat, double Lon) const
+	{
+		return Cells[CellIndex(Lat, Lon)].Capacity / std::max(1.0, Settings.PeakPlantsPerKm2);
+	}
+
 	// Average plant cover over all land cells, relative to each cell's own maximum.
 	double AverageLandCover() const
 	{
@@ -307,7 +314,14 @@ public:
 	// These read the animals' positions as of the last RefreshIndex().
 
 	// Rebuilds the per-cell lists after StepDay() has moved, split and removed groups.
-	void RefreshIndex() { BuildGroupIndex(); }
+	// Cheap to call often: it only rebuilds when groups have moved since the last time.
+	void RefreshIndex()
+	{
+		if (IndexStale)
+		{
+			BuildGroupIndex();
+		}
+	}
 
 	// Meat-eating animals in the cell around a point and the eight cells next to it.
 	double PredatorsNear(double Lat, double Lon) const
@@ -356,7 +370,7 @@ public:
 			{
 				const AnimalGroup& G = AnimalGroups[Idx];
 				const Species& S = SpeciesList[G.SpeciesIndex];
-				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && G.Count >= 2.0)
+				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
 				{
 					Candidates.push_back(Idx);
 					Total += G.Count;
@@ -370,10 +384,66 @@ public:
 			if (Pick <= 0.0)
 			{
 				AnimalGroups[Idx].Count -= 1.0;
+				AnimalGroups[Idx].Hunted += 1.0;
 				return AnimalGroups[Idx].SpeciesIndex;
 			}
 		}
 		return -1;
+	}
+
+	// Kills up to N plant-eating animals no heavier than MaxMassKg near a point, each picked like
+	// KillOneAnimal(), stopping once StopAtKg of animal has been killed. Returns how many of each
+	// species were killed.
+	std::vector<int> KillAnimals(double Lat, double Lon, double MaxMassKg, int N, double StopAtKg, Rng& Dice)
+	{
+		std::vector<int> Killed(SpeciesList.size(), 0);
+		std::vector<int> Candidates;
+		double Total = 0.0;
+		ForNeighbourhood(CellIndex(Lat, Lon), [&](int C)
+		{
+			for (int Idx : GroupsInCell[C])
+			{
+				const AnimalGroup& G = AnimalGroups[Idx];
+				const Species& S = SpeciesList[G.SpeciesIndex];
+				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
+				{
+					Candidates.push_back(Idx);
+					Total += G.Count;
+				}
+			}
+		});
+		double KilledKg = 0.0;
+		for (int k = 0; k < N && Total > 0.0 && KilledKg < StopAtKg; ++k)
+		{
+			double Pick = Dice.Range(0.0, Total);
+			for (int Idx : Candidates)
+			{
+				AnimalGroup& G = AnimalGroups[Idx];
+				if (!CanTakeOne(G))
+				{
+					continue;
+				}
+				Pick -= G.Count;
+				if (Pick <= 0.0)
+				{
+					G.Count -= 1.0;
+					G.Hunted += 1.0;
+					Total -= CanTakeOne(G) ? 1.0 : G.Count + 1.0;
+					Killed[G.SpeciesIndex] += 1;
+					KilledKg += SpeciesList[G.SpeciesIndex].BodyMassKg;
+					break;
+				}
+			}
+		}
+		return Killed;
+	}
+
+	// People can't take more of a herd a year than half the young it has in a year, counting what
+	// predators took too: the rest stay out of reach. Slow breeders like hippos can take little.
+	bool CanTakeOne(const AnimalGroup& G) const
+	{
+		const double Share = std::min(0.2, 0.5 * SpeciesList[G.SpeciesIndex].BirthsPerYear);
+		return G.Count >= 2.0 && G.Hunted + 1.0 <= (G.Count + G.Hunted) * Share;
 	}
 
 	// ---- Simulation -------------------------------------------------------------------------
@@ -381,10 +451,10 @@ public:
 	void StepDay() { Step(1); }
 
 	// Advances Days days in one go. Steps longer than a day are coarser (groups move and eat
-	// once for the whole span) but much faster, for fast forward. Up to 10 days at a time.
+	// once for the whole span) but much faster, for fast forward. Up to 30 days at a time.
 	void Step(int Days)
 	{
-		Days = std::clamp(Days, 1, 10);
+		Days = std::clamp(Days, 1, 30);
 		GrowPlants(Days);
 		BuildGroupIndex();
 		// Every group decides where to go from the same picture of the world, in parallel,
@@ -409,9 +479,11 @@ public:
 				MoveOne(i);
 			}
 		}
+		const double Remembered = std::exp(-Days / kDaysPerYear);
 		for (AnimalGroup& G : AnimalGroups)
 		{
 			G.Taken = 0.0;
+			G.Hunted *= Remembered;
 		}
 		const size_t Existing = AnimalGroups.size();
 		for (size_t i = 0; i < Existing; ++i)
@@ -422,6 +494,7 @@ public:
 			}
 		}
 		RemoveDeadAndSplit();
+		IndexStale = true;
 		DayNumber += Days;
 	}
 
@@ -449,6 +522,7 @@ private:
 	const ElevationGrid* Elevation;
 	std::vector<float> Altitude;
 	std::vector<int> TouchedCells;
+	bool IndexStale = true;
 	std::vector<Species> SpeciesList;
 	Rng Random;
 	uint64_t BaseSeed = 0;
@@ -663,6 +737,7 @@ private:
 			std::fill_n(HuntersOf.begin() + static_cast<std::ptrdiff_t>(Cell * NS), NS, 0.0);
 		}
 		TouchedCells.clear();
+		IndexStale = false;
 		for (size_t i = 0; i < AnimalGroups.size(); ++i)
 		{
 			const AnimalGroup& G = AnimalGroups[i];
@@ -863,9 +938,9 @@ private:
 					const double Density = Prey.Count / SpeciesList[Prey.SpeciesIndex].GroupSize;
 					const double MaxKills = G.Count * 0.15 * Days * Density * Density / (1.0 + Density * Density);
 					const double Wanted = (NeedKg - Got) / (PreyMass * 0.6);
-					// All hunters together take at most a fifth of a herd a year, about what it can
-					// replace, so hunters starve before their prey is wiped out.
-					const double Allowed = (Prey.Count + Prey.Taken) * 0.2 * Days / kDaysPerYear - Prey.Taken;
+					// All hunters together take at most half the young a herd has in a year (and never
+					// more than a fifth of it), so hunters starve before their prey is wiped out.
+					const double Allowed = (Prey.Count + Prey.Taken) * std::min(0.2, 0.5 * SpeciesList[Prey.SpeciesIndex].BirthsPerYear) * Days / kDaysPerYear - Prey.Taken;
 					const double Kills = std::min({Wanted, MaxKills, Allowed, Prey.Count - 1.0});
 					if (Kills <= 0.0)
 					{
@@ -873,6 +948,7 @@ private:
 					}
 					Prey.Count -= Kills;
 					Prey.Taken += Kills;
+					Prey.Hunted += Kills;
 					Got += Kills * PreyMass * 0.6;
 				}
 			}
@@ -1027,6 +1103,7 @@ private:
 			if (G.Count > S.GroupSize * 2.0 * Crowding * Crowding && Kept + Splits.size() + Remaining + 1 <= static_cast<size_t>(Settings.MaxGroups))
 			{
 				G.Count *= 0.5;
+				G.Hunted *= 0.5;
 				AnimalGroup B = G;
 				B.Id = NextGroupId++;
 				B.Generation = G.Generation + 1;

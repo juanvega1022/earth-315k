@@ -110,7 +110,8 @@ inline std::vector<Species> DefaultSpecies()
 	All.push_back(Make("Straight-tusked elephant", Diet::Plants, {Europe}, 9000, 30, 15, 12, 0.05, 60, true, 0.65f, 0.55f, 0.45f));
 	All.push_back(Make("Woolly rhinoceros", Diet::Plants, {{40, 70, 20, 150}}, 2000, 20, 20, 10, 0.08, 40, true, 0.55f, 0.45f, 0.35f));
 	All.push_back(Make("Steppe bison", Diet::Plants, {{35, 70, -10, 180}}, 700, 200, 30, 20, 0.20, 20, true, 0.35f, 0.25f, 0.15f));
-	All.push_back(Make("Wild horse", Diet::Plants, {{30, 70, -10, 140}, NorthAmerica}, 400, 150, 35, 30, 0.20, 25, false, 0.70f, 0.55f, 0.40f));
+	// Horses also lived across both Americas (Equus, Hippidion) until the end of the Ice Age.
+	All.push_back(Make("Wild horse", Diet::Plants, {{30, 70, -10, 140}, NorthAmerica, SouthAmerica}, 400, 150, 35, 30, 0.20, 25, false, 0.70f, 0.55f, 0.40f));
 	All.push_back(Make("Giant deer", Diet::Plants, {{40, 60, -10, 90}}, 600, 60, 15, 20, 0.20, 20, true, 0.75f, 0.50f, 0.25f));
 	All.push_back(Make("Gigantopithecus", Diet::Plants, {{18, 28, 100, 112}}, 250, 20, 6, 5, 0.10, 40, true, 0.30f, 0.20f, 0.10f));
 	All.push_back(Hunter(Make("Cave lion", Diet::Meat, {NorthernEurasia}, 250, 6, 12, 20, 0.30, 15, true, 0.90f, 0.75f, 0.45f), 150, 1200));
@@ -120,7 +121,7 @@ inline std::vector<Species> DefaultSpecies()
 	All.push_back(Make("Columbian mammoth", Diet::Plants, {{15, 50, -125, -75}}, 9000, 30, 25, 12, 0.05, 60, true, 0.50f, 0.35f, 0.25f));
 	All.push_back(Make("Giant ground sloth", Diet::Plants, {SouthAmerica}, 4000, 15, 20, 5, 0.10, 40, true, 0.45f, 0.40f, 0.20f));
 	All.push_back(Make("Glyptodon", Diet::Plants, {{-42, -5, -75, -38}}, 2000, 20, 20, 5, 0.10, 40, true, 0.35f, 0.40f, 0.25f));
-	All.push_back(Hunter(Make("Smilodon", Diet::Meat, {Americas}, 280, 6, 12, 20, 0.30, 15, true, 0.95f, 0.55f, 0.15f), 200, 3000));
+	All.push_back(Hunter(Make("Smilodon", Diet::Meat, {Americas}, 280, 6, 12, 20, 0.30, 15, true, 0.95f, 0.55f, 0.15f), 200, 4000)); // Up to young ground sloths.
 	// Australia and islands.
 	All.push_back(Make("Diprotodon", Diet::Plants, {Australia}, 2700, 20, 20, 8, 0.10, 40, true, 0.40f, 0.35f, 0.30f));
 	All.push_back(Make("Giant kangaroo", Diet::Plants, {Australia}, 230, 80, 25, 30, 0.30, 15, true, 0.80f, 0.45f, 0.30f));

@@ -2,6 +2,8 @@
 #include "PlanetCore/People.h"
 
 #include <cstdio>
+#include <memory>
+#include <utility>
 #include <string>
 
 static int Failures = 0;
@@ -184,6 +186,54 @@ static void TestNewBand()
 	EXPECT(HasFirst(Folk, "A new band of 30 arrives"));
 }
 
+// Long runs move people a month at a time on several threads; the band still lives, and the
+// result doesn't depend on the number of threads.
+static void TestMonthSteps()
+{
+	auto Run = [](int Threads)
+	{
+		earth::ElevationGrid Grid = MakePlanet();
+		earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 2);
+		earth::PeopleSettings Settings;
+		Settings.Threads = Threads;
+		auto Folk = std::make_unique<earth::People>(&Eco, 2, Settings);
+		for (int i = 0; i < 12 * 40; ++i)
+		{
+			Eco.Step(30);
+			Folk->Step(30);
+		}
+		EXPECT(Folk->Alive() > 30);
+		EXPECT(Folk->MaxGeneration() >= 2);
+		EXPECT(Folk->BandsStarted() == 1);
+		for (const earth::Npc& P : Folk->All())
+		{
+			EXPECT(P.Energy >= 0.0f && P.Energy <= 1.0f && P.Health >= 0.0f && P.Health <= 1.0f);
+		}
+		return std::make_pair(Folk->Alive(), Folk->TotalBirths());
+	};
+	const auto One = Run(1);
+	const auto Four = Run(4);
+	EXPECT(One == Four);
+	std::printf("  Month steps after 40 years: %d people, %lld born\n", One.first, One.second);
+}
+
+// No children are born where the land can't feed any more people.
+static void TestLandLimit()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 4);
+	earth::PeopleSettings Settings;
+	Settings.PeoplePerKm2 = 1e-7;
+	earth::People Folk(&Eco, 4, Settings);
+	EXPECT(Folk.LandCapacity() < 10.0);
+	for (int i = 0; i < 365 * 3; ++i)
+	{
+		Eco.StepDay();
+		Folk.StepDay();
+	}
+	EXPECT(Folk.TotalBirths() == 0);
+}
+
 int main()
 {
 	TestStart();
@@ -192,6 +242,8 @@ int main()
 	TestInheritance();
 	TestBrainJson();
 	TestNewBand();
+	TestMonthSteps();
+	TestLandLimit();
 	if (Failures == 0)
 	{
 		std::printf("All people tests passed\n");
