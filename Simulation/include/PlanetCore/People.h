@@ -164,6 +164,8 @@ struct Npc
 	bool IsChild() const { return AgeYears() < 12.0; }
 };
 
+inline constexpr int kWords = 16;
+
 struct Camp
 {
 	int Id = 0;
@@ -186,8 +188,13 @@ struct Camp
 	// What anyone in camp knows, and what that does for everyone there.
 	SkillSet Known = 0;
 	SkillEffects Effects;
-	// What camps within a few days' walk know: people pick that up too, more slowly.
+	// What camps within a few days' walk know: people pick that up too, more slowly, but only
+	// from camps whose speech they can follow.
 	SkillSet Nearby = 0;
+	// The band's calls and words: each slot drifts to a new random word now and then, and bands that
+	// meet borrow words from each other. Bands sharing fewer than half can't understand each other.
+	std::array<uint16_t, kWords> Words{};
+	int Neighbour = 0; // Id of a camp within reach this step, 0 if none.
 	// For Step(): the wettest place within reach, and the squares the band gathers in and how
 	// much food they hold on average.
 	float BestWater = 0.0f;
@@ -247,6 +254,32 @@ public:
 	long long HuntsWon() const { return Kills; }
 	// Skills someone alive knows, and how many people know each.
 	int SkillsKnown() const { return static_cast<int>(std::bitset<64>(KnownNow).count()); }
+	// Groups of camps that can understand each other, counted greedily.
+	int Languages() const
+	{
+		std::vector<const Camp*> Firsts;
+		for (const Camp& C : Camps)
+		{
+			if (C.Members.empty()) continue;
+			bool Found = false;
+			for (const Camp* F : Firsts)
+			{
+				if (Understand(C, *F))
+				{
+					Found = true;
+					break;
+				}
+			}
+			if (!Found) Firsts.push_back(&C);
+		}
+		return static_cast<int>(Firsts.size());
+	}
+	static bool Understand(const Camp& A, const Camp& B)
+	{
+		int Shared = 0;
+		for (int w = 0; w < kWords; ++w) Shared += A.Words[w] == B.Words[w];
+		return Shared * 2 >= kWords;
+	}
 	std::vector<int> SkillHolders() const
 	{
 		std::vector<int> Holders(AllSkills().size(), 0);
@@ -448,6 +481,7 @@ public:
 		}
 
 		LearnSkills(1);
+		DriftLanguages(1);
 		BirthsAndDeaths();
 		IndexCamps();
 		MoveCamps();
@@ -618,6 +652,7 @@ public:
 		}
 
 		LearnSkills(Days);
+		DriftLanguages(Days);
 		BirthsAndDeaths(Days);
 		IndexCamps();
 		MoveCamps(Days);
@@ -655,6 +690,8 @@ private:
 	// The most successful NPCs so far (most children, then longest lives), whose instincts a new band starts from.
 	std::vector<std::pair<double, std::shared_ptr<const Genome>>> HallOfFame;
 
+	int NextLanguageMark = 2;
+	int LanguageYear = 0;
 	SkillSet KnownNow = 0;  // Skills someone alive knows.
 	SkillSet EverKnown = 0; // Skills anyone has ever known.
 
@@ -971,6 +1008,7 @@ private:
 		for (Camp& C : Camps)
 		{
 			C.Nearby = 0;
+			C.Neighbour = 0;
 			for (int r = GridRow(C.Lat) - 1; r <= GridRow(C.Lat) + 1; ++r)
 			{
 				for (int c = GridCol(C.Lon) - 1; c <= GridCol(C.Lon) + 1; ++c)
@@ -979,7 +1017,10 @@ private:
 					if (It == CampGrid.end()) continue;
 					for (int Slot : It->second)
 					{
-						if (DistanceKm(C.Lat, C.Lon, Camps[Slot].Lat, Camps[Slot].Lon) < 100.0) C.Nearby |= Camps[Slot].Known;
+						const Camp& O = Camps[Slot];
+						if (O.Id == C.Id || DistanceKm(C.Lat, C.Lon, O.Lat, O.Lon) >= 100.0) continue;
+						C.Neighbour = O.Id;
+						if (Understand(C, O)) C.Nearby |= O.Known;
 					}
 				}
 			}
@@ -1129,6 +1170,7 @@ private:
 			// About half leave, families together: children go where their mothers go.
 			Camp New;
 			New.Id = NextCampId++;
+			New.Words = Camps[c].Words;
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
 			if (Camps[c].ScoutScore > 0.0)
 			{
@@ -1891,7 +1933,7 @@ private:
 			{
 				if (CanDiscover(P.Skills, k))
 				{
-					Odds[k] = Settings.DiscoveryPerYear / std::pow(4.0, List[k].Tier - 1) * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
+					Odds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1) * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
 					Total += Odds[k];
 				}
 			}
@@ -1934,6 +1976,37 @@ private:
 			AddEvent(Knows(EverKnown, Skill) ? "Someone rediscovers " + Name : "First discovery of " + Name);
 			KnownNow |= SkillSet(1) << Skill;
 			EverKnown |= SkillSet(1) << Skill;
+		}
+	}
+
+	// Each word changes about once in 5,000 years, and bands within reach borrow a word about every
+	// 500 years, so neighbours keep understanding each other while cut-off bands drift apart.
+	void DriftLanguages(int Days)
+	{
+		const double Change = OverDays(1.0 / (5000.0 * 365.0), Days);
+		const double Borrow = OverDays(1.0 / (500.0 * 365.0), Days);
+		for (Camp& C : Camps)
+		{
+			for (uint16_t& W : C.Words)
+			{
+				if (Dice.Chance(Change)) W = static_cast<uint16_t>(Dice.Next());
+			}
+			if (C.Neighbour != 0 && Dice.Chance(Borrow))
+			{
+				const int w = static_cast<int>(Dice.Next() % kWords);
+				C.Words[w] = Camps[CampSlot(C.Neighbour)].Words[w];
+			}
+		}
+		const int Year = static_cast<int>(Eco->Years());
+		if (Year != LanguageYear)
+		{
+			LanguageYear = Year;
+			const int N = Languages();
+			if (N >= NextLanguageMark)
+			{
+				AddEvent("The people now speak " + std::to_string(N) + " languages that can't understand each other");
+				while (NextLanguageMark <= N) NextLanguageMark *= 2;
+			}
 		}
 	}
 

@@ -730,6 +730,8 @@ void ALifeSimulation::ShowStatus()
 
 	Text += FString::Printf(TEXT("\nPeople: %d in %d bands, generation %d, %lld born, %lld died, %lld animals hunted   (F follow a person, H follow animals, G stop, B brain, V plants)"),
 		Folk->Alive(), Folk->BandCount(), Folk->MaxGeneration(), Folk->TotalBirths(), Folk->TotalDeaths(), Folk->HuntsWon());
+	Text += FString::Printf(TEXT("\nSea level %+.0f m from today, ice age %.0f%%.   %d skills known, %d languages, brains of %.1f neurons on average (biggest %d)"),
+		Life->SeaLevelChange(), Life->IceCover() * 100.0, Folk->SkillsKnown(), Folk->Languages(), Folk->AverageBrain(), Folk->BiggestBrain());
 
 	if (!JumpSummary.IsEmpty() && FPlatformTime::Seconds() < JumpSummaryUntil)
 	{

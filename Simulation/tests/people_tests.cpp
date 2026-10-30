@@ -284,8 +284,21 @@ static void TestSkillsSpread()
 	EXPECT(Folk.AverageBrain() > 4.0);
 }
 
+// Bands understand each other while they share at least half their words.
+static void TestUnderstand()
+{
+	earth::Camp A;
+	earth::Camp B;
+	EXPECT(earth::People::Understand(A, B));
+	for (int w = 0; w < earth::kWords / 2; ++w) B.Words[w] = 7;
+	EXPECT(earth::People::Understand(A, B));
+	B.Words[earth::kWords / 2] = 7;
+	EXPECT(!earth::People::Understand(A, B));
+}
+
 int main()
 {
+	TestUnderstand();
 	TestSkillTree();
 	TestBrainResize();
 	TestSkillsSpread();
