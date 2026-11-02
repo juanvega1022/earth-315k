@@ -296,9 +296,19 @@ static void TestUnderstand()
 	EXPECT(!earth::People::Understand(A, B));
 }
 
+// Every word number can be said, and different numbers usually sound different.
+static void TestSayWord()
+{
+	EXPECT(!earth::SayWord(0).empty());
+	EXPECT(earth::SayWord(12345) == earth::SayWord(12345));
+	EXPECT(earth::SayWord(12345) != earth::SayWord(54321));
+	EXPECT(std::string(earth::WordMeaning(0)) == "water");
+}
+
 int main()
 {
 	TestUnderstand();
+	TestSayWord();
 	TestSkillTree();
 	TestBrainResize();
 	TestSkillsSpread();

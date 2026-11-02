@@ -166,6 +166,32 @@ struct Npc
 
 inline constexpr int kWords = 16;
 
+// What each word slot stands for. The sounds are the people's own; the meanings are fixed.
+inline const char* WordMeaning(int Slot)
+{
+	static const char* Meanings[kWords] = {"water", "food", "danger", "lion", "fire", "mother", "child", "come",
+		"go", "hunt", "meat", "plant", "sun", "night", "friend", "no"};
+	return (Slot >= 0 && Slot < kWords) ? Meanings[Slot] : "?";
+}
+
+// Turns a word's number into something sayable: one to three syllables.
+inline std::string SayWord(uint16_t Word)
+{
+	static const char* Starts[] = {"", "b", "d", "g", "h", "k", "l", "m", "n", "p", "r", "s", "t", "w", "y", "z"};
+	static const char* Vowels[] = {"a", "e", "i", "o", "u", "aa", "ee", "oo"};
+	std::string Out;
+	const int Syllables = 1 + Word % 3;
+	uint32_t Bits = Word / 3u;
+	for (int i = 0; i < Syllables; ++i)
+	{
+		Out += Starts[Bits % 16u];
+		Bits /= 16u;
+		Out += Vowels[(Bits + static_cast<uint32_t>(i) * 3u) % 8u];
+		Bits /= 4u;
+	}
+	return Out;
+}
+
 struct Camp
 {
 	int Id = 0;
@@ -255,7 +281,48 @@ public:
 	// Skills someone alive knows, and how many people know each.
 	int SkillsKnown() const { return static_cast<int>(std::bitset<64>(KnownNow).count()); }
 	// Groups of camps that can understand each other, counted greedily.
-	int Languages() const
+	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
+
+	// One camp for each group of camps that understand each other, with how many people speak it.
+	std::vector<std::pair<const Camp*, int>> LanguageSpeakers() const
+	{
+		std::vector<std::pair<const Camp*, int>> Out;
+		for (const Camp* F : LanguageCamps()) Out.push_back({F, 0});
+		for (const Camp& C : Camps)
+		{
+			for (auto& L : Out)
+			{
+				if (Understand(C, *L.first))
+				{
+					L.second += static_cast<int>(C.Members.size());
+					break;
+				}
+			}
+		}
+		std::sort(Out.begin(), Out.end(), [](const auto& A, const auto& B) { return A.second > B.second; });
+		return Out;
+	}
+
+	// Each language's words, its biggest first, with their English meanings.
+	std::string LanguagesText(int Most = 20) const
+	{
+		std::string Out;
+		int n = 0;
+		for (const auto& [C, Speakers] : LanguageSpeakers())
+		{
+			if (n++ >= Most) break;
+			char Head[96];
+			std::snprintf(Head, sizeof(Head), "Language %d: %d speakers, around %.0f, %.0f\n", n, Speakers, C->Lat, C->Lon);
+			Out += Head;
+			for (int w = 0; w < kWords; ++w)
+			{
+				Out += "  " + SayWord(C->Words[w]) + " = " + WordMeaning(w) + "\n";
+			}
+		}
+		return Out;
+	}
+
+	std::vector<const Camp*> LanguageCamps() const
 	{
 		std::vector<const Camp*> Firsts;
 		for (const Camp& C : Camps)
@@ -272,7 +339,7 @@ public:
 			}
 			if (!Found) Firsts.push_back(&C);
 		}
-		return static_cast<int>(Firsts.size());
+		return Firsts;
 	}
 	static bool Understand(const Camp& A, const Camp& B)
 	{
@@ -2192,6 +2259,7 @@ private:
 		First.Id = NextCampId++;
 		First.Lat = Settings.StartLat;
 		First.Lon = Settings.StartLon;
+		for (uint16_t& W : First.Words) W = static_cast<uint16_t>(Dice.Next());
 		Camps.assign(1, First);
 
 		const Genome Base = InstinctGenome();
