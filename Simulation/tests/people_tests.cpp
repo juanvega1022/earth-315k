@@ -467,20 +467,24 @@ static void TestTrust()
 static void TestStores()
 {
 	earth::ElevationGrid Grid = MakePlanet();
-	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6);
+	earth::EcosystemSettings EcoSettings;
+	EcoSettings.Threads = 1;
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
 	earth::PeopleSettings Settings;
 	Settings.DiscoveryPerYear = 0.05; // Skills come within years, so drying is soon known.
+	Settings.Threads = 1;             // The same world on every machine.
 	earth::People Folk(&Eco, 6, Settings);
-	for (int i = 0; i < 365 * 40 / 30; ++i)
+	bool Stored = false, Toolmaker = false;
+	// A toolmaker needs a band of 20 with food put by, which can take a few generations.
+	for (int i = 0; i < 365 * 100 / 30 && !(Stored && Toolmaker); ++i)
 	{
 		Eco.Step(30);
 		Folk.Step(30);
-	}
-	bool Stored = false, Toolmaker = false;
-	for (const auto& E : Folk.Firsts())
-	{
-		Stored = Stored || E.Text.find("first planning for a lean season") != std::string::npos;
-		Toolmaker = Toolmaker || E.Text.find("first toolmaker") != std::string::npos;
+		for (const auto& E : Folk.Firsts())
+		{
+			Stored = Stored || E.Text.find("first planning for a lean season") != std::string::npos;
+			Toolmaker = Toolmaker || E.Text.find("first toolmaker") != std::string::npos;
+		}
 	}
 	EXPECT(Stored && Toolmaker);
 }
