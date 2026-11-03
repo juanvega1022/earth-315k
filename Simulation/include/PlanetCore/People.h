@@ -298,6 +298,7 @@ struct Camp
 	// The band's calls and words: each slot drifts to a new random word now and then, and bands that
 	// meet borrow words from each other. Bands sharing fewer than half can't understand each other.
 	std::array<uint16_t, kWords> Words{};
+	float Store = 0.0f; // Kg of dried and smoked food put by for lean times.
 	int Neighbour = 0; // Id of a camp within reach this step, 0 if none.
 	// For Step(): the wettest place within reach, and the squares the band gathers in and how
 	// much food they hold on average.
@@ -323,6 +324,7 @@ struct Camp
 		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
 		if (Ar.Version >= 2) Ar.Io(Met), Ar.Io(Inventions), Ar.Io(Lexicon);
 		if (Ar.Version >= 3) Ar.Io(Faith), Ar.Io(DeathsLately);
+		if (Ar.Version >= 7) Ar.Io(Store);
 		if (Ar.Version >= 4) Ar.Io(Leader);
 	}
 };
@@ -502,6 +504,7 @@ public:
 		if (Ar.Version >= 4) Ar.Io(KnownNames), Ar.Io(FirstLeader);
 		if (Ar.Version >= 5) Ar.Io(AnyRefuge);
 		if (Ar.Version >= 6) Ar.Io(AnyGrief);
+		if (Ar.Version >= 7) Ar.Io(AnyStore), Ar.Io(AnyToolmaker);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1077,6 +1080,7 @@ public:
 			P.Pleasure = 0.0f;
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 		});
+		StoreFood(Carer, Spare, Days);
 		for (size_t i = 0; i < Count; ++i)
 		{
 			MaybeConceive(i, Chosen[i] >= 0 && Dice.Chance(OverDays(Shares[i][static_cast<int>(Action::Socialize)], Days)), Days);
@@ -1142,6 +1146,8 @@ private:
 	uint32_t FirstLeader = 0;
 	bool AnyRefuge = false;
 	bool AnyGrief = false;
+	bool AnyStore = false;
+	bool AnyToolmaker = false;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -2433,6 +2439,35 @@ private:
 		return Food - Eat;
 	}
 
+	// Planning ahead: bands that know how to dry and smoke food put by what they can't carry, and
+	// draw on it when people go hungry, so a good season tides them over a lean one.
+	// shortcut: only in multi-day steps (long runs); the daily viewer step keeps no store.
+	void StoreFood(const std::vector<int>& Carer, const std::vector<float>& Spare, int Days)
+	{
+		constexpr int kDrying = 15;
+		const float Keep = static_cast<float>(std::pow(0.995, Days)); // Dried food lasts months, not years.
+		for (Camp& C : Camps) C.Store *= Keep;
+		for (size_t i = 0; i < Npcs.size() && i < Carer.size(); ++i)
+		{
+			Npc& P = Npcs[i];
+			Camp& C = Camps[CampSlot(P.Camp)];
+			if (!Knows(C.Known, kDrying)) continue;
+			if (Carer[i] < 0) C.Store += std::max(0.0f, Spare[i] * 0.85f - P.CarriedKg) * 0.5f; // Half survives drying.
+			C.Store = std::min(C.Store, 200.0f * static_cast<float>(C.Members.size()));
+			if (P.Energy < 0.4f && C.Store > 0.0f)
+			{
+				const float Take = std::min(C.Store, std::max(0.0f, 10.0f * P.Own.Carry - P.CarriedKg));
+				C.Store -= Take;
+				P.CarriedKg += Take;
+				if (Take > 0.0f && !AnyStore)
+				{
+					AnyStore = true;
+					AddEvent(PersonName(P.Name) + " eats from food their band dried and stored in better days: the first planning for a lean season");
+				}
+			}
+		}
+	}
+
 	// A young child over Days days: fed from its carer's leftovers, then the camp's, then its carer's own reserves.
 	void BeCaredForDays(size_t Index, size_t CarerIndex, std::vector<float>& Spare, int Days)
 	{
@@ -2694,6 +2729,23 @@ private:
 				Knack[k] = Wits * Wits * P.Genes->Curiosity / 0.6;
 				Sum += Knack[k];
 			}
+			// The first specialists: a big band with food put by can feed its most inventive member to
+			// spend their days making tools instead of foraging.
+			const double Feed = Days * 1.0; // A kg of stored food a day.
+			if (C.Members.size() >= 20 && C.Store > Feed + 2.0f * C.Members.size() && Sum > 0.0)
+			{
+				const size_t Best = static_cast<size_t>(std::max_element(Knack.begin(), Knack.end()) - Knack.begin());
+				Sum += Knack[Best] * 3.0;
+				Knack[Best] *= 4.0;
+				C.Store -= static_cast<float>(Feed);
+				const Npc& Maker = Npcs[static_cast<size_t>(C.Members[Best])];
+				if (!AnyToolmaker)
+				{
+					AnyToolmaker = true;
+					AddEvent(PersonName(Maker.Name) + " becomes the first toolmaker: their band feeds them from its stores while they work");
+					Remember(Maker, "became the first toolmaker, fed by their band from its stored food so they could spend their days making things");
+				}
+			}
 			const double Tries = Sum * Settings.InventionTriesPerYear * Days / 365.0;
 			int N = static_cast<int>(Tries);
 			if (Dice.Chance(Tries - N)) ++N;
@@ -2794,7 +2846,7 @@ private:
 				const Npc& P = Npcs[static_cast<size_t>(i)];
 				if (Hungriest < 0 || P.Energy < Npcs[static_cast<size_t>(Hungriest)].Energy) Hungriest = i;
 				if (Richest < 0 || P.CarriedKg > Npcs[static_cast<size_t>(Richest)].CarriedKg) Richest = i;
-				if (!P.IsChild() && (Leader < 0 || P.Reputation > Npcs[static_cast<size_t>(Leader)].Reputation)) Leader = i;
+				if (P.AgeYears() >= 18.0 && (Leader < 0 || P.Reputation > Npcs[static_cast<size_t>(Leader)].Reputation)) Leader = i;
 				if (P.Id == C.Leader) Sitting = i;
 			}
 			// A leader keeps the role until someone is clearly more trusted, or they lose most of it.
