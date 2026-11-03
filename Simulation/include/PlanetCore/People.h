@@ -1439,7 +1439,7 @@ private:
 					BestLon = Lo;
 				}
 			}
-			const double Found = 6.0 * P.ForageSkill * std::min(1.0, Best / 500.0) * P.Own.Forage;
+			const double Found = 6.0 * P.ForageSkill * std::min(1.0, Best / 500.0) * P.Own.Forage * Craft(P);
 			Gathered[KeyOf(BestLat, BestLon)] += Found;
 			P.CarriedKg = static_cast<float>(std::min(10.0 * P.Own.Carry, P.CarriedKg + Found));
 			P.ForageSkill = std::min(1.0f, P.ForageSkill + 0.002f);
@@ -1452,7 +1452,7 @@ private:
 			const int Party = std::max(1, Hunters);
 			const double MaxMass = 250.0 * std::pow(static_cast<double>(Party), 1.5);
 			const double Game = std::clamp(Eco->GameNear(C.Lat, C.Lon, MaxMass) / 300.0, 0.0, 1.0);
-			const double Success = std::min(0.6, (0.05 + 0.05 * std::min(Party, 8)) * Game * (0.4 + P.HuntSkill) * P.Own.Hunt);
+			const double Success = std::min(0.6, (0.05 + 0.05 * std::min(Party, 8)) * Game * (0.4 + P.HuntSkill) * P.Own.Hunt * Craft(P));
 			P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.003f);
 			P.Fatigue += 0.15f;
 			// Once the camp has all the meat it can eat today, nobody kills more; it would only rot.
@@ -1583,7 +1583,7 @@ private:
 			const float Hunting = Shares[i][static_cast<int>(Action::Hunt)];
 			if (Hunting > 0.01f && Chance[Slot] > 0.0)
 			{
-				Share[i] = std::min(0.6, Chance[Slot] * (0.4 + Npcs[i].HuntSkill) * Npcs[i].Own.Hunt) * Hunting * Days;
+				Share[i] = std::min(0.6, Chance[Slot] * (0.4 + Npcs[i].HuntSkill) * Npcs[i].Own.Hunt * Craft(Npcs[i])) * Hunting * Days;
 				Expected[Slot] += Share[i];
 			}
 		}
@@ -1837,7 +1837,7 @@ private:
 	}
 
 	// Plant food an NPC gathers in a full day at its camp's best spot.
-	static double ForageYield(const Npc& P, const Camp& C) { return 6.0 * P.ForageSkill * std::min(1.0, C.ForageKg / 500.0) * P.Own.Forage; }
+	static double ForageYield(const Npc& P, const Camp& C) { return 6.0 * P.ForageSkill * std::min(1.0, C.ForageKg / 500.0) * P.Own.Forage * Craft(P); }
 
 	// The wettest place within a short walk of camp.
 	double BestWaterNear(double Lat, double Lon)
@@ -1977,6 +1977,8 @@ private:
 	}
 
 	// How quick-witted an NPC is: bigger brains find and learn new skills faster.
+	// A bigger brain also pays its owner directly: a little more food from the same work, up to 60% more.
+	static double Craft(const Npc& P) { return std::clamp(0.85 + 0.15 * Smarts(P), 0.6, 1.6); }
 	static double Smarts(const Npc& P) { return static_cast<double>(P.BrainSize()) / kBrainHidden; }
 
 	// Over Days days, each person may hit on a skill they have what it takes for, and picks up

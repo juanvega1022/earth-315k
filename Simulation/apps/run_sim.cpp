@@ -13,7 +13,7 @@
 #include <fstream>
 #include <string>
 
-// Saves the brain of the oldest NPC, who has had the longest to learn.
+// Saves the brain of the oldest NPC, who has had the longest to learn, and the biggest brain.
 static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string& Path)
 {
 	const earth::Npc* Oldest = &Folk.All()[0];
@@ -22,6 +22,15 @@ static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string&
 		if (P.AgeDays > Oldest->AgeDays) Oldest = &P;
 	}
 	std::ofstream(Path) << Folk.BrainJson(*Oldest) << '\n';
+	// And the biggest brain alive, next to it as name_biggest.json.
+	const earth::Npc* Biggest = &Folk.All()[0];
+	for (const earth::Npc& P : Folk.All())
+	{
+		if (P.BrainSize() > Biggest->BrainSize()) Biggest = &P;
+	}
+	const size_t Dot = Path.find_last_of('.');
+	const std::string Big = Dot == std::string::npos ? Path + "_biggest" : Path.substr(0, Dot) + "_biggest" + Path.substr(Dot);
+	std::ofstream(Big) << Folk.BrainJson(*Biggest) << '\n';
 	return *Oldest;
 }
 
