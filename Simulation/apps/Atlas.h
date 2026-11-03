@@ -60,6 +60,7 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 	{
 		int People = 0, Biggest = 0, Lang = 0;
 		uint32_t Belief = 0;
+		unsigned Crops = 0, Herds = 0; // Bits of AllCrops() and of the kept kinds, in species order.
 	};
 	std::map<int, Square> Squares;
 	std::map<int, int> LangSpeakers;
@@ -84,6 +85,7 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 		const int K = std::clamp(static_cast<int>((C.Lon + 180.0) / Deg), 0, Cols - 1);
 		Square& S = Squares[R * Cols + K];
 		S.People += Size;
+		S.Crops |= C.Crops;
 		if (Size > S.Biggest)
 		{
 			S.Biggest = Size;
@@ -91,13 +93,33 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 			S.Belief = Belief;
 		}
 	}
+	std::vector<std::string> KeptNames;
+	std::map<int, unsigned> KeptBit;
+	for (size_t k = 0; k < Eco.GetSpecies().size(); ++k)
+	{
+		if (Eco.GetSpecies()[k].TameSkill < 0) continue;
+		KeptBit[static_cast<int>(k)] = 1u << KeptNames.size();
+		KeptNames.push_back(Eco.GetSpecies()[k].Name);
+	}
+	for (const earth::AnimalGroup& G : Eco.Groups())
+	{
+		if (G.Herder == 0 || G.Count < 1.0) continue;
+		const int R = std::clamp(static_cast<int>((90.0 - G.Lat) / Deg), 0, Rows - 1);
+		const int K = std::clamp(static_cast<int>((G.Lon + 180.0) / Deg), 0, Cols - 1);
+		auto It = Squares.find(R * Cols + K);
+		if (It != Squares.end()) It->second.Herds |= KeptBit[G.SpeciesIndex];
+	}
 	O << ",sq:[";
 	First = true;
 	for (const auto& [Key, S] : Squares)
 	{
-		O << (First ? "" : ",") << '[' << Key << ',' << S.People << ',' << S.Lang << ',' << S.Belief << ']';
+		O << (First ? "" : ",") << '[' << Key << ',' << S.People << ',' << S.Lang << ',' << S.Belief << ',' << S.Crops << ',' << S.Herds << ']';
 		First = false;
 	}
+	O << "],crops:[";
+	for (size_t k = 0; k < earth::AllCrops().size(); ++k) O << (k ? "," : "") << JsonText(earth::AllCrops()[k].Name);
+	O << "],kept:[";
+	for (size_t k = 0; k < KeptNames.size(); ++k) O << (k ? "," : "") << JsonText(KeptNames[k]);
 	O << "],langs:{";
 	First = true;
 	for (const auto& [Id, Speakers] : LangSpeakers)
@@ -148,7 +170,7 @@ h2{font-size:15px;margin:0 0 6px}ul{list-style:none;padding:0;margin:0;max-heigh
 .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}.m{color:var(--muted)}
 </style></head><body><h1>Earth 315k atlas</h1><p class="sub" id="when">Loading...</p>
 <div class="bar"><button id="play">Play</button><input type="range" id="t" min="0" max="0" value="0" aria-label="Time">
-<select id="mode" aria-label="Colour by"><option value="lang">Languages</option><option value="belief">Beliefs</option><option value="people">People</option></select></div>
+<select id="mode" aria-label="Colour by"><option value="lang">Languages</option><option value="belief">Beliefs</option><option value="people">People</option><option value="farm">Crops and herds</option></select></div>
 <canvas id="map" width="1080" height="540"></canvas>
 <div class="cols"><div><h2 id="keyhead">Languages</h2><ul id="key"></ul></div><div><h2>What happened (up to this moment)</h2><ul id="ev"></ul></div></div>
 <script>window.ATLAS=[];</script><script src=")HTML" << JsName << R"HTML("></script><script>
@@ -161,8 +183,10 @@ function draw(i){const f=F[i];if(!f)return;const W=cv.width,H=cv.height,cols=180
 g.fillStyle=css('--sea');g.fillRect(0,0,W,H);g.fillStyle=css('--land');let p=0,land=false;
 for(const n of f.land.split(',').map(Number)){if(land)for(let k=p;k<p+n;k++){g.fillRect((k%cols)*cw,Math.floor(k/cols)*ch,cw+.5,ch+.5)}p+=n;land=!land}
 const m=mode.value,max=Math.max(1,...f.sq.map(s=>s[1]));
-for(const [k,ppl,l,b] of f.sq){const x=(k%cols)*cw,y=Math.floor(k/cols)*ch;
-g.fillStyle=m==='lang'?col(l):m==='belief'?(b?col(b):css('--muted')):`hsl(25 80% ${70-45*Math.sqrt(ppl/max)}%)`;g.fillRect(x,y,cw+.5,ch+.5)}
+const low=v=>v?Math.log2(v&-v):-1;
+for(const [k,ppl,l,b,cr=0,hd=0] of f.sq){const x=(k%cols)*cw,y=Math.floor(k/cols)*ch;
+g.fillStyle=m==='lang'?col(l):m==='belief'?(b?col(b):css('--muted')):m==='farm'?(cr?col(1+low(cr)):hd?col(50+low(hd)):css('--muted')):`hsl(25 80% ${70-45*Math.sqrt(ppl/max)}%)`;g.fillRect(x,y,cw+.5,ch+.5);
+if(m==='farm'&&cr&&hd){g.fillStyle=col(50+low(hd));g.beginPath();g.arc(x+cw/2,y+ch/2,Math.min(cw,ch)/3,0,7);g.fill()}}
 const people=f.sq.reduce((a,s)=>a+s[1],0);
 document.getElementById('when').textContent=`Year ${fmt(f.y)}, ${fmt(f.ago)} years ago. ${fmt(people)} people, sea level ${f.sea} m.`;
 const key=document.getElementById('key');key.innerHTML='';
@@ -170,6 +194,12 @@ if(m==='belief'){document.getElementById('keyhead').textContent='Beliefs (each b
 for(const [id,[w,gl,n]] of Object.entries(f.beliefs).sort((a,b)=>b[1][2]-a[1][2]).slice(0,40)){const li=document.createElement('li');
 li.innerHTML=`<span class="sw" style="background:${col(+id)}"></span><b></b> <span class="m"></span><br><span></span>`;li.querySelector('b').textContent='"'+w+'"';
 li.querySelector('.m').textContent=n+' bands';li.lastChild.textContent=gl;key.appendChild(li)}}
+else if(m==='farm'){document.getElementById('keyhead').textContent='Crops sown and animals kept (places)';
+const n=(bit,idx)=>f.sq.filter(s=>(s[idx]||0)>>bit&1).length,rows=[];
+(f.crops||[]).forEach((c,i)=>{const k=n(i,4);if(k)rows.push([col(1+i),c,k])});(f.kept||[]).forEach((c,i)=>{const k=n(i,5);if(k)rows.push([col(50+i),c,k])});
+if(!rows.length){const li=document.createElement('li');li.className='m';li.textContent='Nobody farms or keeps animals yet.';key.appendChild(li)}
+for(const [c,name,k] of rows){const li=document.createElement('li');li.innerHTML=`<span class="sw" style="background:${c}"></span><b></b> <span class="m"></span>`;
+li.querySelector('b').textContent=name;li.querySelector('.m').textContent=k+(k===1?' place':' places');key.appendChild(li)}}
 else{document.getElementById('keyhead').textContent='Languages (their word for water)';
 for(const [id,[w,n]] of Object.entries(f.langs).sort((a,b)=>b[1][1]-a[1][1]).slice(0,40)){const li=document.createElement('li');
 li.innerHTML=`<span class="sw" style="background:${col(+id)}"></span><b></b> <span class="m"></span>`;li.querySelector('b').textContent='"'+w+'"';
