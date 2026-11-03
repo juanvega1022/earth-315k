@@ -233,8 +233,41 @@ static void TestBrainsInherited()
 	EXPECT(P.Capacity > 0.0 && P.Plants >= 0.0 && P.Plants <= P.Capacity * 1.01);
 }
 
+// Plant growth follows warmth and rain, and rain gathers downhill into rivers.
+static void TestClimateAndRivers()
+{
+	EXPECT(earth::Ecosystem::Growth(27.0, 2500.0) > 0.95); // Rainforest.
+	EXPECT(earth::Ecosystem::Growth(27.0, 30.0) < 0.05);   // Desert.
+	EXPECT(earth::Ecosystem::Growth(-12.0, 400.0) < 0.15); // Tundra.
+
+	// A continent rising from its west coast to a ridge in the east, warm and wet all over.
+	earth::ElevationGrid G = MakePlanet();
+	for (int R = 0; R < 180; ++R)
+	{
+		for (int C = 0; C < 360; ++C)
+		{
+			const double Lon = -180.0 + C + 0.5;
+			if (Lon > -20.0 && Lon < 60.0) G.Heights[static_cast<size_t>(R) * 360 + C] = static_cast<int16_t>(100 + (Lon + 20.0) * 40.0);
+		}
+	}
+	earth::ElevationGrid Temp, Rain;
+	Temp.Width = Rain.Width = 360;
+	Temp.Height = Rain.Height = 180;
+	Temp.Heights.assign(360 * 180, 250);
+	Rain.Heights.assign(360 * 180, 1500);
+	earth::EcosystemSettings Settings;
+	Settings.Temperature = &Temp;
+	Settings.Rain = &Rain;
+	Settings.StartYearsAgo = 0.0;
+	earth::Ecosystem E(&G, {Grazer()}, 1, Settings);
+	EXPECT(E.RiverAt(10.0, -19.5) > 0.5);  // Water from the whole slope reaches the west coast...
+	EXPECT(E.RiverAt(10.0, 58.0) < 0.05);  // ...but none gathers on the ridge.
+	EXPECT(E.WaterAt(10.0, -19.5) >= E.RiverAt(10.0, -19.5));
+}
+
 int main()
 {
+	TestClimateAndRivers();
 	TestDeterministic();
 	TestStayOnLandAndInRange();
 	TestSeasons();

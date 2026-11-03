@@ -37,7 +37,7 @@ DEFAULT_CACHE = Path(__file__).resolve().parent / "cache"
 AFRICA = {"north": 40.0, "south": -36.0, "west": -20.0, "east": 60.0}
 
 
-def download(url, dest):
+def download(url, dest, page=ETOPO_PAGE, what="the 60 arc-second 'surface' GeoTIFF"):
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         print(f"Using cached {dest}")
@@ -55,8 +55,8 @@ def download(url, dest):
         urllib.request.urlretrieve(url, tmp, progress)
     except Exception as exc:  # noqa: BLE001
         print(f"\nDownload failed: {exc}")
-        print(f"Download the 60 arc-second 'surface' GeoTIFF by hand from {ETOPO_PAGE}")
-        print("then run again with --source <path to the .tif>")
+        print(f"Download {what} by hand from {page}")
+        print("then run again with --source <path to the file>")
         sys.exit(1)
     print()
     tmp.rename(dest)

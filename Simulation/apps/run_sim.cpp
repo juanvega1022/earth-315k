@@ -121,6 +121,18 @@ int main(int Argc, char** Argv)
 		return 1;
 	}
 
+	// Real climate, if tools/prepare_climate.py has been run; otherwise a rough one from latitude.
+	earth::ElevationGrid Temperature, Rain;
+	if (earth::LoadElevationGrid(DataDir, "temperature", Temperature) && earth::LoadElevationGrid(DataDir, "rain", Rain))
+	{
+		Settings.Temperature = &Temperature;
+		Settings.Rain = &Rain;
+		std::printf("Using the real climate in %s (temperature and rain)\n", DataDir.c_str());
+	}
+	else
+	{
+		std::printf("No climate data in %s: using a rough climate from latitude. Run tools/prepare_climate.py for the real one.\n", DataDir.c_str());
+	}
 	Settings.SeaLevelMeters = SeaLevel;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), Seed, Settings);
 	const auto& Species = Eco.GetSpecies();
