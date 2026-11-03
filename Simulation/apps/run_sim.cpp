@@ -81,6 +81,7 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--seed") && HasValue) Seed = std::strtoull(Argv[++i], nullptr, 10);
 		else if (!std::strcmp(Argv[i], "--data") && HasValue) DataDir = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--csv") && HasValue) CsvPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--other-humans")) PeopleCfg.OtherHumans = true;
 		else if (!std::strcmp(Argv[i], "--sea-level") && HasValue) SeaLevel = std::atof(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--brain") && HasValue) BrainPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--no-people")) WithPeople = false;
@@ -100,7 +101,7 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--resume") && HasValue) ResumePath = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
@@ -109,6 +110,7 @@ int main(int Argc, char** Argv)
 			std::printf("  --resume F      carry on from a save instead of starting over; --years is then the year to run to\n");
 			std::printf("  --report F      write an HTML report with charts and a scorecard against real history (needs --csv)\n");
 			std::printf("  --atlas F       keep a map of languages, beliefs and people over time in F (an HTML page) and F.js\n");
+			std::printf("  --other-humans  add Neanderthals, Denisovans and other kinds of human in their real homes (experimental)\n");
 			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
 			return 1;
 		}

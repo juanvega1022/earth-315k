@@ -365,6 +365,7 @@ static void TestSaveAndResume()
 	earth::PeopleSettings Settings;
 	Settings.InventionTriesPerYear = 0.2;
 	Settings.Threads = 2;
+	Settings.OtherHumans = true; // Their bands, kinds and skills must survive a save too.
 	earth::Ecosystem EcoA(&Grid, earth::DefaultSpecies(), 7);
 	earth::People FolkA(&EcoA, 7, Settings);
 	for (int i = 0; i < 12; ++i)
@@ -436,7 +437,9 @@ static void TestTrust()
 
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 9);
-	earth::People Folk(&Eco, 9);
+	earth::PeopleSettings WithOthers;
+	WithOthers.OtherHumans = true;
+	earth::People Folk(&Eco, 9, WithOthers);
 	for (int i = 0; i < 365 * 10 / 30; ++i)
 	{
 		Eco.Step(30);

@@ -434,7 +434,9 @@ struct PeopleSettings
 	// successful NPCs so far (lightly mutated), so the run goes on and keeps what evolved.
 	bool NewBandWhenGone = true;
 	// Neanderthals, Denisovans and the other kinds of human alive at the start, in their real homes.
-	bool OtherHumans = true;
+	// shortcut: off by default until tuned; in tests Neanderthals die out within centuries and
+	// Homo naledi spreads across Africa, neither like the real record.
+	bool OtherHumans = false;
 	// Chance a year that one person of average wits hits on a simple skill on their own; deeper
 	// skills are 4 times rarer per step down the tree.
 	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
@@ -2151,7 +2153,7 @@ private:
 		{
 			Room *= 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
 		}
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room, Days)))
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
 		{
 			return;
 		}
