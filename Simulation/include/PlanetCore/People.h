@@ -591,7 +591,8 @@ public:
 			for (const auto& [Key, Word] : C->Lexicon)
 			{
 				const uint32_t Id = Key & 0xFFFFFFu;
-				Out += "  " + SayWord(Word) + " = " + ((Key >> 24) == 1u ? std::string(AllMaterials()[Id].Name) : InventionGloss(Id)) + "\n";
+				const uint32_t Kind = Key >> 24;
+				Out += "  " + SayWord(Word) + " = " + (Kind == 1u ? std::string(AllMaterials()[Id].Name) : Kind == 2u ? InventionGloss(Id) : std::string(Concepts()[Id])) + "\n";
 			}
 		}
 		return Out;
@@ -1555,7 +1556,8 @@ private:
 					AnyRefuge = true;
 					AddEvent(PersonName(Elder->Name) + ", aged " + std::to_string(static_cast<int>(Elder->AgeYears())) +
 						", leads their band in a hard time to a place they remember from years before");
-					Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before");
+					Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before" +
+						Say(C, NameWord(*Elder), {C.Words[7], "come"}, {C.Words[0], "water"}));
 				}
 			}
 			else if (C.ScoutScore > Here + 0.05)
@@ -2524,6 +2526,57 @@ private:
 
 	static uint32_t MaterialKey(int M) { return 0x1000000u | static_cast<uint32_t>(M); }
 	static uint32_t InventionKey(uint32_t Id) { return 0x2000000u | Id; }
+	static uint32_t ConceptKey(int K) { return 0x3000000u | static_cast<uint32_t>(K); }
+
+	// Words a band coins the first time it has something new to tell: its vocabulary grows with its story.
+	static const std::vector<const char*>& Concepts()
+	{
+		static const std::vector<const char*> List = {"make", "lead", "teach", "find", "arrive", "us", "the dead", "the sea", "the cold",
+			"the land", "beast", "animal"};
+		return List;
+	}
+	enum ConceptWord { Make, Lead, Teach, FindIt, Arrive, Us, TheDead, TheSea, TheCold, TheLand, Beast, Animal };
+
+	// The band's word for a concept, coined now if they have none.
+	uint16_t Coin(Camp& C, int K)
+	{
+		if (const uint16_t* W = WordFor(C, ConceptKey(K))) return *W;
+		const uint16_t W = static_cast<uint16_t>(Dice.Next());
+		Name(C, ConceptKey(K), W);
+		return W;
+	}
+
+	// The band's word for a belief subject: one of its first words where there is one, else coined.
+	uint16_t SubjectWord(Camp& C, int Subject)
+	{
+		static const int Slots[] = {-TheDead, 12, 13, 0, 4, -TheLand, -Beast, -Animal, -TheSea, -TheCold, 6};
+		if (Subject >= SubjectCount())
+		{
+			const uint16_t* W = WordFor(C, MaterialKey(Subject - SubjectCount()));
+			return W ? *W : Coin(C, TheLand);
+		}
+		const int S = Slots[Subject];
+		return S > 0 || Subject == 3 ? C.Words[static_cast<size_t>(S)] : Coin(C, -S);
+	}
+
+	// A sentence in the band's own speech, with a word-by-word gloss. Each language's word order
+	// (doer-deed-thing, doer-thing-deed or deed-doer-thing) drifts with its words for come and go.
+	static std::string Say(const Camp& C, std::pair<uint16_t, std::string> Doer, std::pair<uint16_t, std::string> Deed, std::pair<uint16_t, std::string> Thing)
+	{
+		const int Order = (C.Words[7] ^ C.Words[8]) % 3;
+		const std::pair<uint16_t, std::string>* Parts[3] = {&Doer, &Deed, &Thing};
+		if (Order == 1) std::swap(Parts[1], Parts[2]);
+		if (Order == 2) std::swap(Parts[0], Parts[1]);
+		std::string Said, Gloss;
+		for (const auto* P : Parts)
+		{
+			Said += (Said.empty() ? "" : " ") + SayWord(P->first);
+			Gloss += (Gloss.empty() ? "" : " ") + P->second;
+		}
+		Said[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(Said[0])));
+		return " (in their words: \"" + Said + "\", " + Gloss + ")";
+	}
+	static std::pair<uint16_t, std::string> NameWord(const Npc& P) { return {P.Name, PersonName(P.Name)}; }
 
 	static const uint16_t* WordFor(const Camp& C, uint32_t Key)
 	{
@@ -2740,7 +2793,8 @@ private:
 				{
 					FirstLeader = L.Id;
 					AddEvent(PersonName(L.Name) + " becomes the first leader: the person their band trusts most");
-					Remember(L, "became the first leader anyone followed, because their band trusted them most");
+					Remember(L, "became the first leader anyone followed, because their band trusted them most" +
+						Say(C, NameWord(L), {Coin(C, Lead), "lead"}, {Coin(C, Us), "us"}));
 				}
 				else if (Notables.count(L.Id))
 				{
@@ -2914,7 +2968,8 @@ private:
 						const BeliefRecord& B = BeliefOf(Id);
 						const std::string Gloss = BeliefGloss(Subject, Claim, Practice);
 						if (BeliefLog.size() == 1) AddEvent("The first belief: " + Gloss + " (called \"" + SayWord(B.Word) + "\")");
-						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"");
+						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"" +
+							Say(C, {SubjectWord(C, Subject), SubjectName(Subject)}, {Coin(C, Teach), "teach"}, {B.Word, SayWord(B.Word)}));
 					}
 				}
 			}
@@ -2995,7 +3050,8 @@ private:
 		R.Word = Word;
 		const std::string Gloss = InventionGloss(Id);
 		AddEvent("First invention of " + Gloss + ", called \"" + SayWord(Word) + "\" by its makers");
-		Remember(Maker, "was the first ever to make " + Gloss + ", which their band called \"" + SayWord(Word) + "\"");
+		Remember(Maker, "was the first ever to make " + Gloss + ", which their band called \"" + SayWord(Word) + "\"" +
+			Say(C, NameWord(Maker), {Coin(C, Make), "make"}, {Word, Gloss}));
 	}
 	void NoteName(uint32_t Id, uint16_t Name) { KnownNames[Id] = Name; }
 	static std::string PersonName(uint16_t Name)

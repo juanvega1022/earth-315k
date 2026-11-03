@@ -412,6 +412,8 @@ static void TestBeliefs()
 	EXPECT(HasFirst(Folk, "The first belief:"));
 	EXPECT(Folk.BeliefsText().find("first taught in year") != std::string::npos);
 	EXPECT(Folk.StoriesText().find("first taught that") != std::string::npos);
+	EXPECT(Folk.StoriesText().find("(in their words: \"") != std::string::npos); // Told as a sentence in their speech.
+	EXPECT(Folk.LanguagesText().find(" = teach") != std::string::npos); // A word coined to tell it.
 }
 
 // People have names, come to trust those who feed them, and distrust whoever doesn't.
