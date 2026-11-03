@@ -390,8 +390,33 @@ static void TestSaveAndResume()
 	EXPECT(!earth::LoadWorld("no_such_save.bin", EcoB, FolkB));
 }
 
+// Bands that can talk come up with beliefs, which spread, and a belief that forbids a material
+// keeps the band from using inventions made with it.
+static void TestBeliefs()
+{
+	EXPECT(earth::BeliefGloss(1, 2, 2) == "The sun is where we came from; they dance through the night");
+	EXPECT(earth::BeliefGloss(0, 0, 0) == "The dead are alive and watch us; they bury their dead with gifts");
+	EXPECT(earth::SubjectName(earth::SubjectCount()) == earth::AllMaterials()[0].Name);
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
+	earth::PeopleSettings Settings;
+	Settings.DiscoveryPerYear = 0.2;
+	Settings.BeliefTriesPerYear = 0.05;
+	earth::People Folk(&Eco, 8, Settings);
+	for (int i = 0; i < 365 * 6 / 30; ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+	}
+	EXPECT(Folk.BeliefsHeld() > 0);
+	EXPECT(HasFirst(Folk, "The first belief:"));
+	EXPECT(Folk.BeliefsText().find("first taught in year") != std::string::npos);
+	EXPECT(Folk.StoriesText().find("first taught that") != std::string::npos);
+}
+
 int main()
 {
+	TestBeliefs();
 	TestInventionRules();
 	TestInventionsHappen();
 	TestSaveAndResume();

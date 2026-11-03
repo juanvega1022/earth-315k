@@ -14,6 +14,7 @@
 
 #include "Archive.h"
 #include "Ecosystem.h"
+#include "Beliefs.h"
 #include "Inventions.h"
 #include "Parallel.h"
 #include "Random.h"
@@ -259,6 +260,10 @@ struct Camp
 	uint64_t Met = 0;
 	std::vector<uint32_t> Inventions;
 	std::vector<std::pair<uint32_t, uint16_t>> Lexicon;
+	// What the band believes (ids into People's list of beliefs), at most three.
+	std::vector<uint32_t> Faith;
+	float Cohesion = 0.0f; // From its beliefs' practices, worked out each step.
+	int DeathsLately = 0;  // Deaths since the band last wondered why.
 
 	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
 	// rest is saved.
@@ -267,6 +272,7 @@ struct Camp
 	{
 		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
 		if (Ar.Version >= 2) Ar.Io(Met), Ar.Io(Inventions), Ar.Io(Lexicon);
+		if (Ar.Version >= 3) Ar.Io(Faith), Ar.Io(DeathsLately);
 	}
 };
 
@@ -319,6 +325,32 @@ struct InventionRecord
 	}
 };
 
+// A belief as it was first taught, and how far it has spread.
+struct BeliefRecord
+{
+	uint32_t Id = 0;
+	int Subject = 0;
+	int Claim = 0;
+	int Practice = 0;
+	uint32_t Parent = 0; // The belief it split from, 0 if none.
+	double Year = 0.0;
+	uint32_t Founder = 0;
+	int CampId = 0;
+	double Lat = 0.0;
+	double Lon = 0.0;
+	uint16_t Word = 0; // What its first believers called it.
+	int Peak = 0;      // Most bands that ever held it at once.
+	int NextMark = 10; // Bands it must reach for the next "religion" event.
+	int Origin = 0;    // 0: from people wondering, as with inventions.
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Id), Ar.Io(Subject), Ar.Io(Claim), Ar.Io(Practice), Ar.Io(Parent), Ar.Io(Year), Ar.Io(Founder), Ar.Io(CampId), Ar.Io(Lat), Ar.Io(Lon);
+		Ar.Io(Word), Ar.Io(Peak), Ar.Io(NextMark), Ar.Io(Origin);
+	}
+};
+
 struct PeopleSettings
 {
 	// Omo Kibish in southern Ethiopia, among the oldest Homo sapiens sites in East Africa.
@@ -342,6 +374,9 @@ struct PeopleSettings
 	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
 	// Tries a year at making something new from materials, per person of average wits and curiosity.
 	double InventionTriesPerYear = 2e-4;
+	// Chance a year that one person of average wits, in a band that can talk, explains something
+	// with a new belief; hardship makes it up to four times likelier.
+	double BeliefTriesPerYear = 5e-5;
 	// CPU threads for Step(); 0 uses all cores. Results are the same for any number.
 	int Threads = 0;
 };
@@ -363,6 +398,7 @@ public:
 
 	const std::vector<Npc>& All() const { return Npcs; }
 	const std::vector<Camp>& AllCamps() const { return Camps; }
+	const std::vector<BeliefRecord>& AllBeliefs() const { return BeliefLog; }
 	const std::vector<EcoEvent>& Firsts() const { return Events; }
 	int Alive() const { return static_cast<int>(Npcs.size()); }
 	int BandCount() const { return static_cast<int>(Camps.size()); }
@@ -409,6 +445,7 @@ public:
 		Ar.Io(Notables), Ar.Io(PlaceNames), Ar.Io(RecordBrain), Ar.Io(NextLanguageMark), Ar.Io(LanguageYear), Ar.Io(KnownNow), Ar.Io(EverKnown);
 		Ar.Io(Gathered), Ar.Io(Npcs), Ar.Io(Camps), Ar.Io(Events);
 		if (Ar.Version >= 2) Ar.Io(InventionLog);
+		if (Ar.Version >= 3) Ar.Io(BeliefLog), Ar.Io(Shunned), Ar.Io(ReligionYear);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -524,6 +561,54 @@ public:
 				(R->Times == 1 ? " band" : " bands") + "; " + (Bands ? "known by " + std::to_string(Bands) + " bands now" : "forgotten") + "\n";
 		}
 		return Out;
+	}
+	// Beliefs held now, most widely held first, with where they came from.
+	std::string BeliefsText(int Most = 60) const
+	{
+		std::vector<int> Bands(BeliefLog.size() + 1, 0);
+		for (const Camp& C : Camps)
+		{
+			for (uint32_t F : C.Faith) Bands[F] += 1;
+		}
+		std::vector<const BeliefRecord*> List;
+		for (const BeliefRecord& B : BeliefLog)
+		{
+			if (Bands[B.Id] > 0) List.push_back(&B);
+		}
+		std::sort(List.begin(), List.end(), [&](const BeliefRecord* A, const BeliefRecord* B) { return Bands[A->Id] != Bands[B->Id] ? Bands[A->Id] > Bands[B->Id] : A->Id < B->Id; });
+		std::string Out = std::to_string(List.size()) + " beliefs are held now; " + std::to_string(BeliefLog.size()) + " have ever been held. " +
+			std::to_string(Shunned) + " times a band refused an invention because of what it believed.\n\n";
+		int n = 0;
+		for (const BeliefRecord* B : List)
+		{
+			if (n++ >= Most) break;
+			char Line[160];
+			std::snprintf(Line, sizeof(Line), "\"%s\", held by %d bands (at most %d), first taught in year %.0f near %.0f, %.0f",
+				SayWord(B->Word).c_str(), Bands[B->Id], B->Peak, B->Year, B->Lat, B->Lon);
+			Out += Line;
+			if (B->Parent) Out += ", broke away from \"" + SayWord(BeliefOf(B->Parent).Word) + "\"";
+			Out += "\n  " + BeliefGloss(B->Subject, B->Claim, B->Practice) + "\n";
+		}
+		return Out;
+	}
+	int BeliefsHeld() const
+	{
+		std::vector<uint32_t> All;
+		for (const Camp& C : Camps) All.insert(All.end(), C.Faith.begin(), C.Faith.end());
+		std::sort(All.begin(), All.end());
+		return static_cast<int>(std::unique(All.begin(), All.end()) - All.begin());
+	}
+	// Beliefs held by at least ten bands.
+	int Religions() const
+	{
+		std::unordered_map<uint32_t, int> Bands;
+		for (const Camp& C : Camps)
+		{
+			for (uint32_t F : C.Faith) Bands[F] += 1;
+		}
+		int N = 0;
+		for (const auto& [Id, Count] : Bands) N += Count >= 10;
+		return N;
 	}
 	int InventionsKnown() const
 	{
@@ -755,6 +840,7 @@ public:
 
 		LearnSkills(1);
 		Invent(1);
+		Believe(1);
 		DriftLanguages(1);
 		BirthsAndDeaths();
 		IndexCamps();
@@ -927,6 +1013,7 @@ public:
 
 		LearnSkills(Days);
 		Invent(Days);
+		Believe(Days);
 		DriftLanguages(Days);
 		BirthsAndDeaths(Days);
 		IndexCamps();
@@ -974,6 +1061,10 @@ private:
 	SkillSet EverKnown = 0; // Skills anyone has ever known.
 	// Every invention ever made, keyed by InventionId: where, when and by whom it was first made.
 	std::unordered_map<uint32_t, InventionRecord> InventionLog;
+	// Every belief ever held; a belief's id is its place in this list plus one.
+	std::vector<BeliefRecord> BeliefLog;
+	int64_t Shunned = 0; // Inventions a band refused because its beliefs forbade them.
+	int ReligionYear = -1;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1287,6 +1378,7 @@ private:
 			}
 			C.Effects = EffectsOf(C.Known);
 			AddInventionEffects(C.Inventions, C.Known, C.Effects);
+			AddBeliefEffects(C);
 		}
 		for (Camp& C : Camps)
 		{
@@ -1446,7 +1538,9 @@ private:
 			// ones who leave go far, looking for land of their own.
 			const int Size = static_cast<int>(Camps[c].Members.size());
 			const bool Full = Size >= 20 && Camps[c].Room < 0.2f;
-			if ((Size < Settings.SplitSize && !Full) || !Dice.Chance(OverDays(0.01, Days)))
+			// Bands held together by shared beliefs grow bigger before they split.
+			const int SplitAt = static_cast<int>(Settings.SplitSize * (1.0f + 0.5f * Camps[c].Cohesion));
+			if ((Size < SplitAt && !Full) || !Dice.Chance(OverDays(0.01, Days)))
 			{
 				continue;
 			}
@@ -1457,6 +1551,9 @@ private:
 			New.Met = Camps[c].Met;
 			New.Inventions = Camps[c].Inventions;
 			New.Lexicon = Camps[c].Lexicon;
+			New.Faith = Camps[c].Faith;
+			New.Cohesion = Camps[c].Cohesion;
+			MaybeSchism(New);
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
 			if (Camps[c].ScoutScore > 0.0)
 			{
@@ -1540,6 +1637,10 @@ private:
 				Camps[b].Members.clear();
 				Camps[a].Met |= Camps[b].Met;
 				for (uint32_t Id : Camps[b].Inventions) TakeUp(Camps[a], Id, Camps[b]);
+				for (uint32_t Id : Camps[b].Faith)
+				{
+					if (Camps[a].Faith.size() < kMaxFaith && std::find(Camps[a].Faith.begin(), Camps[a].Faith.end(), Id) == Camps[a].Faith.end()) Camps[a].Faith.push_back(Id);
+				}
 				Merged = true;
 			}
 		}
@@ -2380,7 +2481,13 @@ private:
 				{
 					if ((Pick -= Knack[Who]) < 0.0) break;
 				}
-				MakeFirst(C, Id, Npcs[static_cast<size_t>(C.Members[Who])]);
+				const Npc& Maker = Npcs[static_cast<size_t>(C.Members[Who])];
+				if (const BeliefRecord* No = Forbids(C, Id))
+				{
+					Shun(C, Id, Maker, *No);
+					continue;
+				}
+				MakeFirst(C, Id, Maker);
 			}
 			// Neighbours' things are copied more easily when their speech can be followed.
 			if (C.Neighbour != 0)
@@ -2390,8 +2497,230 @@ private:
 				if (!O.Inventions.empty() && Dice.Chance(Copy))
 				{
 					const uint32_t Id = O.Inventions[Dice.Next() % O.Inventions.size()];
-					if (InventionStrength(WorkingOf(Id), MaterialA(Id), MaterialB(Id), C.Known) > 0.0f) TakeUp(C, Id, O);
+					if (InventionStrength(WorkingOf(Id), MaterialA(Id), MaterialB(Id), C.Known) > 0.0f && !Forbids(C, Id)) TakeUp(C, Id, O);
 				}
+			}
+		}
+	}
+
+
+	// ---- Beliefs ----------------------------------------------------------------------------
+
+	static constexpr size_t kMaxFaith = 3;
+	static std::string Lower(std::string S)
+	{
+		if (!S.empty()) S[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(S[0])));
+		return S;
+	}
+	static constexpr int kShellMaterial = 20; // Found on coasts, so it doubles as "by the sea".
+
+	const BeliefRecord& BeliefOf(uint32_t Id) const { return BeliefLog[Id - 1]; }
+
+	// A belief this band holds that forbids a material the invention uses, if any.
+	const BeliefRecord* Forbids(const Camp& C, uint32_t InventionId) const
+	{
+		for (uint32_t F : C.Faith)
+		{
+			const BeliefRecord& B = BeliefOf(F);
+			if (B.Claim != kForbidden || B.Subject < SubjectCount()) continue;
+			const int M = B.Subject - SubjectCount();
+			if (MaterialA(InventionId) == M || MaterialB(InventionId) == M) return &B;
+		}
+		return nullptr;
+	}
+
+	// Someone made something their band's beliefs forbid: the band won't have it, and they lose face.
+	void Shun(const Camp& C, uint32_t Id, const Npc& Maker, const BeliefRecord& Why)
+	{
+		++Shunned;
+		const bool First = InventionLog.find(Id) == InventionLog.end();
+		if (!First) return;
+		(void)C;
+		Remember(Maker, "made " + InventionGloss(Id) + ", ahead of anyone, but the band would not have it: they believe that " +
+			Lower(BeliefGloss(Why.Subject, Why.Claim, Why.Practice)) + ". The maker was shunned");
+		if (Shunned == 1) AddEvent("First invention refused because of a belief: " + InventionGloss(Id));
+	}
+
+	// Whether a band could keep up a practice at all.
+	bool CanPractise(const Camp& C, int Subject, int P) const
+	{
+		const Practice& Pr = BeliefPractices()[static_cast<size_t>(P)];
+		if (Pr.AnimalsOnly && Subject != 6 && Subject != 7) return false;
+		if (Pr.NeedsSkill >= 0 && !Knows(C.Known, Pr.NeedsSkill)) return false;
+		if (Pr.NeedsMaterial >= 0 && !((C.Met >> Pr.NeedsMaterial) & 1u)) return false;
+		if (Pr.NeedsWorking >= 0)
+		{
+			bool Any = false;
+			for (uint32_t Id : C.Inventions) Any = Any || WorkingOf(Id) == Pr.NeedsWorking;
+			if (!Any) return false;
+		}
+		return true;
+	}
+
+	void AddBeliefEffects(Camp& C) const
+	{
+		C.Cohesion = 0.0f;
+		SkillEffects Add;
+		float* Fields[] = {&Add.Forage, &Add.Hunt, &Add.PredatorDeaths, &Add.ChildDeaths, &Add.Warmth, &Add.Travel, &Add.Land, &Add.Carry, &Add.Teaching};
+		for (uint32_t F : C.Faith)
+		{
+			const Practice& Pr = BeliefPractices()[static_cast<size_t>(BeliefOf(F).Practice)];
+			C.Cohesion += Pr.Cohesion;
+			if (Pr.Effect == 4) *Fields[4] += Pr.Factor - 1.0f;
+			else if (Pr.Effect >= 0) *Fields[Pr.Effect] *= Pr.Factor;
+		}
+		C.Cohesion = std::min(C.Cohesion, 1.0f);
+		C.Effects.Add(Add);
+	}
+
+	// What a band facing hardship puts it down to: what struck it, or what is around it.
+	int PickSubject(const Camp& C, double DeathShare)
+	{
+		const double R = Dice.Uniform();
+		if (DeathShare > 0.05 && R < 0.4) return 0;
+		if (C.SeenDanger > 0.3f && R < 0.6) return 6;
+		if (R < 0.85)
+		{
+			// Only what they live with: the cold away from the tropics, the sea on a coast.
+			const int S = static_cast<int>(Dice.Next() % static_cast<uint64_t>(SubjectCount()));
+			if (S == 9 && std::abs(C.Lat) < 35.0 && Eco->IceCover() < 0.5) return 1;
+			if (S == 8 && !Present(C, kShellMaterial)) return 3;
+			return S;
+		}
+		// Now and then something from the band's own world of materials.
+		int Count = 0;
+		std::array<int, 64> Met{};
+		for (int m = 0; m < static_cast<int>(AllMaterials().size()); ++m)
+		{
+			if ((C.Met >> m) & 1u) Met[static_cast<size_t>(Count++)] = m;
+		}
+		return Count ? SubjectCount() + Met[Dice.Next() % static_cast<uint64_t>(Count)] : 1;
+	}
+
+	// A band takes up a belief, dropping its oldest one if it already holds three.
+	static void Adopt(Camp& C, uint32_t Id)
+	{
+		if (std::find(C.Faith.begin(), C.Faith.end(), Id) != C.Faith.end()) return;
+		if (C.Faith.size() >= kMaxFaith) C.Faith.erase(C.Faith.begin());
+		C.Faith.push_back(Id);
+	}
+
+	uint32_t FoundBelief(const Camp& C, int Subject, int Claim, int Practice, uint32_t Parent, uint32_t Founder)
+	{
+		BeliefRecord B;
+		B.Id = static_cast<uint32_t>(BeliefLog.size() + 1);
+		B.Subject = Subject;
+		B.Claim = Claim;
+		B.Practice = Practice;
+		B.Parent = Parent;
+		B.Year = Eco->Years();
+		B.Founder = Founder;
+		B.CampId = C.Id;
+		B.Lat = C.Lat;
+		B.Lon = C.Lon;
+		B.Word = static_cast<uint16_t>(Dice.Next());
+		BeliefLog.push_back(B);
+		return B.Id;
+	}
+
+	// Bands that can talk wonder about what happens to them, believe, and pass beliefs on.
+	void Believe(int Days)
+	{
+		const int Claims = static_cast<int>(BeliefClaims().size());
+		const int Practices = static_cast<int>(BeliefPractices().size());
+		for (Camp& C : Camps)
+		{
+			if (C.Members.empty()) continue;
+			const double DeathShare = static_cast<double>(C.DeathsLately) / static_cast<double>(C.Members.size());
+			C.DeathsLately = 0;
+			// Beliefs need words: only bands with spoken language make them.
+			if (Knows(C.Known, 13))
+			{
+				const double Hardship = std::clamp(DeathShare * 10.0 + C.SeenDanger, 0.0, 1.0);
+				double Knack = 0.0;
+				for (int i : C.Members)
+				{
+					const Npc& P = Npcs[static_cast<size_t>(i)];
+					if (P.AgeYears() >= 12.0) Knack += Smarts(P) * Smarts(P) * P.Genes->Curiosity / 0.6;
+				}
+				if (Dice.Chance(std::min(1.0, Knack * Settings.BeliefTriesPerYear * (1.0 + 3.0 * Hardship) * Days / 365.0)))
+				{
+					const int Subject = PickSubject(C, DeathShare);
+					const int Claim = static_cast<int>(Dice.Next() % static_cast<uint64_t>(Claims));
+					const int Practice = static_cast<int>(Dice.Next() % static_cast<uint64_t>(Practices));
+					if (CanPractise(C, Subject, Practice))
+					{
+						// Usually the oldest adult is the one who explains; elders keep the stories.
+						const Npc* Teller = nullptr;
+						for (int i : C.Members)
+						{
+							const Npc& P = Npcs[static_cast<size_t>(i)];
+							if (!Teller || P.AgeDays > Teller->AgeDays) Teller = &P;
+						}
+						const uint32_t Id = FoundBelief(C, Subject, Claim, Practice, 0, Teller->Id);
+						Adopt(C, Id);
+						const BeliefRecord& B = BeliefOf(Id);
+						const std::string Gloss = BeliefGloss(Subject, Claim, Practice);
+						if (BeliefLog.size() == 1) AddEvent("The first belief: " + Gloss + " (called \"" + SayWord(B.Word) + "\")");
+						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"");
+					}
+				}
+			}
+			// Neighbours' beliefs spread, more easily between bands that understand each other and
+			// less into bands already held together by their own.
+			if (C.Neighbour != 0)
+			{
+				const Camp& O = Camps[CampSlot(C.Neighbour)];
+				const double Rate = 1.0 / ((Understand(C, O) ? 200.0 : 2000.0) * 365.0) * (1.0 - 0.5 * C.Cohesion);
+				if (!O.Faith.empty() && Dice.Chance(OverDays(Rate, Days)))
+				{
+					const uint32_t Id = O.Faith[Dice.Next() % O.Faith.size()];
+					if (CanPractise(C, BeliefOf(Id).Subject, BeliefOf(Id).Practice)) Adopt(C, Id);
+				}
+			}
+		}
+		NoteReligions();
+	}
+
+	// When a band splits off, the ones who leave sometimes change what they believe a little: a new sect.
+	void MaybeSchism(Camp& New)
+	{
+		for (uint32_t& F : New.Faith)
+		{
+			if (!Dice.Chance(0.05)) continue;
+			const BeliefRecord Old = BeliefOf(F);
+			int Claim = Old.Claim, Practice = Old.Practice;
+			if (Dice.Chance(0.5)) Claim = static_cast<int>(Dice.Next() % BeliefClaims().size());
+			else Practice = static_cast<int>(Dice.Next() % BeliefPractices().size());
+			if ((Claim == Old.Claim && Practice == Old.Practice) || !CanPractise(New, Old.Subject, Practice)) continue;
+			F = FoundBelief(New, Old.Subject, Claim, Practice, Old.Id, 0);
+			if (Old.Peak >= 10)
+			{
+				AddEvent("A schism: some of those who believe \"" + SayWord(Old.Word) + "\" break away, believing that " + Lower(BeliefGloss(Old.Subject, Claim, Practice)));
+			}
+		}
+	}
+
+	// Counts each belief's bands once a year, and notes beliefs that become religions.
+	void NoteReligions()
+	{
+		const int Year = static_cast<int>(Eco->Years());
+		if (Year == ReligionYear) return;
+		ReligionYear = Year;
+		std::vector<int> Bands(BeliefLog.size() + 1, 0);
+		for (const Camp& C : Camps)
+		{
+			for (uint32_t F : C.Faith) Bands[F] += 1;
+		}
+		for (BeliefRecord& B : BeliefLog)
+		{
+			const int N = Bands[B.Id];
+			B.Peak = std::max(B.Peak, N);
+			if (N >= B.NextMark)
+			{
+				AddEvent("The belief \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ") is now held by " + std::to_string(N) +
+					" bands" + (B.NextMark == 10 ? ": a religion is born" : ""));
+				while (B.NextMark <= N) B.NextMark *= 10;
 			}
 		}
 	}
@@ -2735,6 +3064,7 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
+		if (!Camps.empty()) Camps[CampSlot(P.Camp)].DeathsLately += 1;
 		auto Story = Notables.find(P.Id);
 		if (Story != Notables.end())
 		{

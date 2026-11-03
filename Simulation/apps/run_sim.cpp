@@ -5,6 +5,8 @@
 #include "PlanetCore/Ecosystem.h"
 #include "PlanetCore/People.h"
 #include "PlanetCore/WorldSave.h"
+#include "Atlas.h"
+#include "RunReport.h"
 
 #include <algorithm>
 #include <chrono>
@@ -61,6 +63,9 @@ int main(int Argc, char** Argv)
 	std::string LanguagesPath;
 	std::string StoriesPath;
 	std::string InventionsPath;
+	std::string ReportPath;
+	std::string BeliefsPath;
+	std::string AtlasPath;
 	std::string SavePath;
 	std::string ResumePath;
 	int SaveEvery = 1000;
@@ -87,18 +92,23 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--languages") && HasValue) LanguagesPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--stories") && HasValue) StoriesPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--inventions") && HasValue) InventionsPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--report") && HasValue) ReportPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--beliefs") && HasValue) BeliefsPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--atlas") && HasValue) AtlasPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--save") && HasValue) SavePath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--save-every") && HasValue) SaveEvery = std::max(1, std::atoi(Argv[++i]));
 		else if (!std::strcmp(Argv[i], "--resume") && HasValue) ResumePath = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--save file.bin] [--save-every years] [--resume file.bin]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
 			std::printf("  --start N       begin N years ago (default 315000); sea level and ice follow Earth's history\n");
 			std::printf("  --save F        save the whole world to F every --save-every years (default 1000), and when stopped\n");
 			std::printf("  --resume F      carry on from a save instead of starting over; --years is then the year to run to\n");
+			std::printf("  --report F      write an HTML report with charts and a scorecard against real history (needs --csv)\n");
+			std::printf("  --atlas F       keep a map of languages, beliefs and people over time in F (an HTML page) and F.js\n");
 			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
 			return 1;
 		}
@@ -134,6 +144,27 @@ int main(int Argc, char** Argv)
 	{
 		std::printf("The land can feed about %.0f people.\n", Folk.LandCapacity());
 	}
+	std::ofstream Csv;
+	// Every session of a run is logged next to its outputs: which build, seed and settings made it.
+	const std::string FirstOutput = !SavePath.empty() ? SavePath : !CsvPath.empty() ? CsvPath : ReportPath;
+	const std::string RunLog = FirstOutput.empty() ? "" : FolderOf(FirstOutput) + "runs.txt";
+	std::string Args;
+	for (int i = 1; i < Argc; ++i) Args += std::string(i > 1 ? " " : "") + Argv[i];
+	const std::string Label = std::string("Build ") + kSimVersion + ", seed " + std::to_string(Seed);
+	AppendRunLog(RunLog, (ResumePath.empty() ? "Started    " : "Resumed    ") + Label + " (save format " + std::to_string(earth::kSaveVersion) +
+		") at year " + std::to_string(FirstYear) + ". Arguments: " + Args);
+	// The atlas starts afresh with a new run and grows with each session of a resumed one.
+	const std::string AtlasJs = AtlasPath + ".js";
+	size_t AtlasFirsts = ResumePath.empty() ? 0 : Folk.Firsts().size();
+	if (!AtlasPath.empty() && ResumePath.empty()) std::remove(AtlasJs.c_str());
+	auto Report = [&](int Y)
+	{
+		if (!ReportPath.empty() && !CsvPath.empty())
+		{
+			Csv.flush();
+			WriteReport(ReportPath, CsvPath, Eco.YearsAgo() + Eco.Years(), Y, Folk.Firsts(), Label);
+		}
+	};
 	if (!SavePath.empty())
 	{
 		std::signal(SIGINT, AskToStop);
@@ -156,7 +187,6 @@ int main(int Argc, char** Argv)
 		}
 	};
 
-	std::ofstream Csv;
 	const bool Appending = FirstYear > 0 && FileExists(CsvPath);
 	if (!CsvPath.empty() && Appending)
 	{
@@ -167,7 +197,7 @@ int main(int Argc, char** Argv)
 		Csv.open(CsvPath);
 		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m,languages";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
-		Csv << ",inventions\n";
+		Csv << ",inventions,beliefs,religions\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -189,7 +219,7 @@ int main(int Argc, char** Argv)
 			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount() << ',' << Folk.SkillsKnown() << ','
 				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain() << ',' << Eco.SeaLevelChange() << ',' << Folk.Languages();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
-			Csv << ',' << Folk.InventionsKnown() << '\n';
+			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
@@ -202,12 +232,23 @@ int main(int Argc, char** Argv)
 			std::printf("            Sea level %+.0f m from today, ice age strength %.0f%%\n", Eco.SeaLevelChange(), Eco.IceCover() * 100.0);
 			if (WithPeople)
 			{
-				std::printf("            %d skills and %d inventions known, brains of %.1f hidden neurons on average (biggest %d), %d languages\n",
-					Folk.SkillsKnown(), Folk.InventionsKnown(), Folk.AverageBrain(), Folk.BiggestBrain(), Folk.Languages());
+				std::printf("            %d skills and %d inventions known, brains of %.1f hidden neurons on average (biggest %d), %d languages, %d beliefs (%d religions)\n",
+					Folk.SkillsKnown(), Folk.InventionsKnown(), Folk.AverageBrain(), Folk.BiggestBrain(), Folk.Languages(), Folk.BeliefsHeld(), Folk.Religions());
 			}
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{
 				std::ofstream(LanguagesPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago\n\n" << Folk.LanguagesText();
+			}
+			Report(Y);
+			if (!AtlasPath.empty() && WithPeople)
+			{
+				AppendAtlasFrame(AtlasJs, Eco, Folk, Y, AtlasFirsts);
+				const size_t Slash = AtlasJs.find_last_of("/\\");
+				WriteAtlasPage(AtlasPath, Slash == std::string::npos ? AtlasJs : AtlasJs.substr(Slash + 1));
+			}
+			if (!BeliefsPath.empty())
+			{
+				std::ofstream(BeliefsPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago: what the people believe\n\n" << Folk.BeliefsText();
 			}
 			if (!InventionsPath.empty())
 			{
@@ -240,6 +281,8 @@ int main(int Argc, char** Argv)
 		{
 			std::remove(StopFile.c_str());
 			std::printf("Stopped at year %d. Carry on later with --resume %s\n", Y, SavePath.c_str());
+			Report(Y);
+			AppendRunLog(RunLog, "Stopped    at year " + std::to_string(Y) + ", saved to " + SavePath);
 			return 0;
 		}
 	}
@@ -264,5 +307,6 @@ int main(int Argc, char** Argv)
 		std::printf("  %-26s %10.0f\n", Species[s].Name.c_str(), Eco.CountOf(static_cast<int>(s)));
 	}
 	std::printf("Simulated %d years in %.1f seconds.\n", TotalYears, Seconds);
+	AppendRunLog(RunLog, "Finished   at year " + std::to_string(TotalYears) + " after " + std::to_string(static_cast<long long>(Seconds)) + " seconds");
 	return 0;
 }
