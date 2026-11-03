@@ -114,6 +114,10 @@ Simulation/build/Release/earth315k_sim --years 315000 --fast 30 --csv population
 
 `--density D` changes how many people a square km of the greenest land can feed (default 0.0003); more people means a slower run. `--max-people N` adds a hard limit if you want one.
 
+### Save points
+
+Add `--save out\world.bin` and the whole world is saved every 1,000 years (`--save-every N` to change that). To stop cleanly, press Ctrl+C or create an empty file `out\world.bin.stop`; it saves first, then exits. To carry on, after installing a newer build or not, run with `--resume out\world.bin` and the same other flags; `--years` is then the year to stop at. The CSV is appended to. A resumed run gives exactly the same results as one that never stopped. Saves from older builds keep loading after new features are added.
+
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 
 ## Settings worth playing with
