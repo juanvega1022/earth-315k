@@ -281,6 +281,10 @@ static void TestSkillsSpread()
 	}
 	EXPECT(Folk.SkillsKnown() > 0);
 	EXPECT(HasFirst(Folk, "First discovery of"));
+	// Whoever found it gets a life story, and the land they started in has a name of their own.
+	EXPECT(!Folk.NotablePeople().empty());
+	EXPECT(Folk.StoriesText().find("was the first ever to discover") != std::string::npos);
+	EXPECT(!Folk.LandNames()[0].empty());
 	EXPECT(Folk.AverageBrain() > 4.0);
 }
 

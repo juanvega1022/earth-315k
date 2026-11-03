@@ -43,6 +43,7 @@ int main(int Argc, char** Argv)
 	double SeaLevel = -30.0;
 	std::string BrainPath;
 	std::string LanguagesPath;
+	std::string StoriesPath;
 	bool WithPeople = true;
 	int FastDays = 1;
 	earth::PeopleSettings PeopleCfg;
@@ -64,9 +65,10 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--start") && HasValue) Settings.StartYearsAgo = std::atof(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--no-ice-ages")) Settings.IceAges = false;
 		else if (!std::strcmp(Argv[i], "--languages") && HasValue) LanguagesPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--stories") && HasValue) StoriesPath = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
@@ -140,6 +142,10 @@ int main(int Argc, char** Argv)
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{
 				std::ofstream(LanguagesPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago\n\n" << Folk.LanguagesText();
+			}
+			if (!StoriesPath.empty())
+			{
+				std::ofstream(StoriesPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago: the people who made a difference\n\n" << Folk.StoriesText();
 			}
 			if (!BrainPath.empty() && Folk.Alive() > 0)
 			{

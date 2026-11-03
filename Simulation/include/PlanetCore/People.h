@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <bitset>
 #include <cmath>
 #include <cstdint>
@@ -228,6 +229,27 @@ struct Camp
 	float ForageKg = 0.0f;
 };
 
+// Someone who made a difference: found a skill, was born with a record brain or first reached
+// new land. Their family and life are kept so their story can be told.
+struct Notable
+{
+	uint32_t Id = 0;
+	uint32_t Mother = 0;
+	uint32_t Father = 0;
+	bool Female = false;
+	int Generation = 0;
+	int Brain = 0;
+	double BornYear = 0.0;
+	std::string Speech; // Their band's word for water when they were noted.
+	std::vector<std::string> Deeds;
+	std::vector<uint32_t> Partners;
+	std::vector<uint32_t> Children;
+	bool Dead = false;
+	std::string Death;
+	double LastLat = 0.0;
+	double LastLon = 0.0;
+};
+
 struct PeopleSettings
 {
 	// Omo Kibish in southern Ethiopia, among the oldest Homo sapiens sites in East Africa.
@@ -262,7 +284,8 @@ public:
 		Regions.assign(6, false);
 		Regions[0] = true; // Africa
 		StartBand();
-		AddEvent("A band of " + std::to_string(Settings.StartCount) + " people wakes up in East Africa, knowing nothing");
+		PlaceNames[0] = LandName(Camps[0], 0);
+		AddEvent("A band of " + std::to_string(Settings.StartCount) + " people wakes up in East Africa, knowing nothing. They call their land " + PlaceNames[0]);
 	}
 
 	// ---- Queries ----------------------------------------------------------------------------
@@ -300,6 +323,72 @@ public:
 			}
 		}
 		std::sort(Out.begin(), Out.end(), [](const auto& A, const auto& B) { return A.second > B.second; });
+		return Out;
+	}
+
+	const std::unordered_map<uint32_t, Notable>& NotablePeople() const { return Notables; }
+	// What the first people to reach each land called it: Africa, Asia, Europe, Australia, the Americas, new land.
+	const std::array<std::string, 6>& LandNames() const { return PlaceNames; }
+
+	// The life stories of everyone who made a difference, in the order they first did.
+	std::string StoriesText() const
+	{
+		std::vector<const Notable*> List;
+		for (const auto& [Id, N] : Notables) List.push_back(&N);
+		std::sort(List.begin(), List.end(), [](const Notable* A, const Notable* B) { return A->Id < B->Id; });
+		auto Who = [&](uint32_t Id) -> std::string
+		{
+			if (Id == 0) return "unknown";
+			auto It = Notables.find(Id);
+			return "#" + std::to_string(Id) + (It != Notables.end() ? " (has a story here)" : "");
+		};
+		std::string Out;
+		char Line[256];
+		for (const Notable* N : List)
+		{
+			std::snprintf(Line, sizeof(Line), "#%u, a %s of generation %d with a %d-neuron brain, born about year %.0f\n", N->Id, N->Female ? "woman" : "man",
+				N->Generation, N->Brain, N->BornYear);
+			Out += Line;
+			Out += "  Mother " + Who(N->Mother) + ", father " + Who(N->Father) + "\n";
+			// Ancestors with stories of their own, a few generations back.
+			std::string Line2;
+			uint32_t Up[2] = {N->Mother, N->Father};
+			for (int Side = 0; Side < 2; ++Side)
+			{
+				uint32_t Id = Up[Side];
+				for (int Depth = 1; Depth <= 4 && Id; ++Depth)
+				{
+					auto It = Notables.find(Id);
+					if (It == Notables.end()) break;
+					static const char* Rel[2][4] = {{"mother", "grandmother", "great-grandmother", "great-great-grandmother"},
+						{"father", "grandfather", "great-grandfather", "great-great-grandfather"}};
+					Line2 += std::string(Line2.empty() ? "" : ", ") + Rel[Side][Depth - 1] + " #" + std::to_string(Id);
+					Id = Side == 0 ? It->second.Mother : It->second.Father;
+				}
+			}
+			if (!Line2.empty()) Out += "  Notable ancestors: " + Line2 + "\n";
+			if (!N->Speech.empty()) Out += "  Spoke a language where water is \"" + N->Speech + "\"\n";
+			for (const std::string& D : N->Deeds) Out += "  " + D + "\n";
+			if (!N->Partners.empty())
+			{
+				Out += "  Had children with";
+				for (uint32_t Pa : N->Partners) Out += " " + Who(Pa);
+				Out += "\n";
+			}
+			Out += "  " + std::to_string(N->Children.size()) + (N->Children.size() == 1 ? " child" : " children");
+			for (size_t c = 0; c < N->Children.size() && c < 12; ++c) Out += std::string(c ? ", " : ": ") + Who(N->Children[c]);
+			Out += "\n";
+			if (N->Dead)
+			{
+				Out += "  " + N->Death + "\n";
+			}
+			else
+			{
+				std::snprintf(Line, sizeof(Line), "  Still alive, last seen near %.0f, %.0f\n", N->LastLat, N->LastLon);
+				Out += Line;
+			}
+			Out += "\n";
+		}
 		return Out;
 	}
 
@@ -757,6 +846,9 @@ private:
 	// The most successful NPCs so far (most children, then longest lives), whose instincts a new band starts from.
 	std::vector<std::pair<double, std::shared_ptr<const Genome>>> HallOfFame;
 
+	std::unordered_map<uint32_t, Notable> Notables;
+	std::array<std::string, 6> PlaceNames;
+	int RecordBrain = kBrainHidden; // Only brains bigger than the first band's count as records.
 	int NextLanguageMark = 2;
 	int LanguageYear = 0;
 	SkillSet KnownNow = 0;  // Skills someone alive knows.
@@ -1542,7 +1634,7 @@ private:
 					C.ScoutLon = Lo;
 					P.Pleasure += 0.1f; // Finding somewhere good feels good.
 				}
-				NoteRegion(La, Lo);
+				NoteRegion(La, Lo, &P);
 			}
 			P.Fatigue += 0.25f;
 			break;
@@ -2036,6 +2128,28 @@ private:
 		NoteSkills();
 	}
 
+	// Starts or adds to someone's story.
+	void Remember(const Npc& P, const std::string& Deed)
+	{
+		Notable& N = Notables[P.Id];
+		if (N.Id == 0)
+		{
+			N.Id = P.Id;
+			N.Mother = P.Mother;
+			N.Father = P.Father;
+			N.Female = P.Female;
+			N.Generation = P.Generation;
+			N.Brain = P.BrainSize();
+			N.BornYear = Eco->Years() - P.AgeYears();
+			if (!Camps.empty()) N.Speech = SayWord(Camps[CampSlot(P.Camp)].Words[0]);
+		}
+		char Head[96];
+		std::snprintf(Head, sizeof(Head), "Year %.0f, aged %.0f, near %.0f, %.0f: ", Eco->Years(), P.AgeYears(), P.Lat, P.Lon);
+		N.Deeds.push_back(Head + Deed);
+		N.LastLat = P.Lat;
+		N.LastLon = P.Lon;
+	}
+
 	void Discover(Npc& P, int Skill)
 	{
 		P.LearnSkill(Skill);
@@ -2043,6 +2157,7 @@ private:
 		{
 			const std::string Name = AllSkills()[Skill].Name;
 			AddEvent(Knows(EverKnown, Skill) ? "Someone rediscovers " + Name : "First discovery of " + Name);
+			Remember(P, (Knows(EverKnown, Skill) ? "rediscovered " : "was the first ever to discover ") + Name);
 			KnownNow |= SkillSet(1) << Skill;
 			EverKnown |= SkillSet(1) << Skill;
 		}
@@ -2213,6 +2328,20 @@ private:
 				P.LastBirthDay = Eco->Day();
 				P.BabyFatherGenes.reset();
 				P.Children += 1;
+				for (uint32_t Parent : {Baby.Mother, Baby.Father})
+				{
+					auto It = Notables.find(Parent);
+					if (It == Notables.end()) continue;
+					It->second.Children.push_back(Baby.Id);
+					const uint32_t Other = Parent == Baby.Mother ? Baby.Father : Baby.Mother;
+					std::vector<uint32_t>& Pa = It->second.Partners;
+					if (Other && std::find(Pa.begin(), Pa.end(), Other) == Pa.end()) Pa.push_back(Other);
+				}
+				if (Baby.BrainSize() > RecordBrain)
+				{
+					RecordBrain = Baby.BrainSize();
+					if (Eco->Years() > 0.0) Remember(Baby, "was born with the biggest brain yet, " + std::to_string(RecordBrain) + " neurons");
+				}
 				Born.push_back(Baby);
 				++Births;
 				if (Births == 1)
@@ -2314,6 +2443,16 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
+		auto Story = Notables.find(P.Id);
+		if (Story != Notables.end())
+		{
+			static const char* How[5] = {"of old age or illness", "killed by a predator", "of hunger", "of thirst", "of an injury"};
+			char Line[160];
+			std::snprintf(Line, sizeof(Line), "Died in year %.0f, aged %.0f, %s, near %.0f, %.0f, knowing %d skills", Eco->Years(), P.AgeYears(), How[Cause],
+				P.Lat, P.Lon, static_cast<int>(std::bitset<64>(P.Skills).count()));
+			Story->second.Dead = true;
+			Story->second.Death = Line;
+		}
 		Causes[Cause] += 1;
 		if (FirstDeath[Cause] && !AnyDeathBy[Cause])
 		{
@@ -2339,14 +2478,30 @@ private:
 		return 5;
 	}
 
-	void NoteRegion(double Lat, double Lon)
+	// A band names a land in its own speech: a new word built from its words for sun and plant.
+	static std::string LandName(const Camp& C, int Region)
+	{
+		std::string Called = SayWord(static_cast<uint16_t>(C.Words[12] * 31u + C.Words[11] + static_cast<uint32_t>(Region) * 7919u));
+		Called[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(Called[0])));
+		return Called;
+	}
+
+	void NoteRegion(double Lat, double Lon, const Npc* Who = nullptr)
 	{
 		static const char* RegionNames[6] = {"Africa", "Asia", "Europe", "Australia", "the Americas", "a new land"};
 		const int Region = RegionOf(Lat, Lon);
 		if (!Regions[Region])
 		{
 			Regions[Region] = true;
-			AddEvent("First NPC sets foot in " + std::string(RegionNames[Region]));
+			std::string Called;
+			if (Who && !Camps.empty())
+			{
+				Called = LandName(Camps[CampSlot(Who->Camp)], Region);
+				PlaceNames[Region] = Called;
+			}
+			const std::string Where = std::string(RegionNames[Region]) + (Called.empty() ? "" : ", which they call " + Called);
+			AddEvent("First NPC sets foot in " + Where);
+			if (Who) Remember(*Who, "was the first to set foot in " + Where);
 		}
 	}
 
@@ -2371,7 +2526,7 @@ private:
 		}
 		for (const Camp& C : Camps)
 		{
-			NoteRegion(C.Lat, C.Lon);
+			NoteRegion(C.Lat, C.Lon, C.Members.empty() ? nullptr : &Npcs[C.Members[0]]);
 		}
 		for (const Npc& P : Npcs)
 		{
