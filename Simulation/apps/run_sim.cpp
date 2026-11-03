@@ -209,7 +209,9 @@ int main(int Argc, char** Argv)
 		Csv.open(CsvPath);
 		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m,languages";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
-		Csv << ",inventions,beliefs,religions,kindness,curiosity\n";
+		Csv << ",inventions,beliefs,religions,kindness,curiosity";
+		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
+		Csv << '\n';
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -232,7 +234,9 @@ int main(int Argc, char** Argv)
 				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain() << ',' << Eco.SeaLevelChange() << ',' << Folk.Languages();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
-				<< Folk.AverageCuriosity() << '\n';
+				<< Folk.AverageCuriosity();
+			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
+			Csv << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
@@ -247,6 +251,13 @@ int main(int Argc, char** Argv)
 			{
 				std::printf("            %d skills and %d inventions known, brains of %.1f hidden neurons on average (biggest %d), %d languages, %d beliefs (%d religions)\n",
 					Folk.SkillsKnown(), Folk.InventionsKnown(), Folk.AverageBrain(), Folk.BiggestBrain(), Folk.Languages(), Folk.BeliefsHeld(), Folk.Religions());
+				std::string Others;
+				for (size_t k = 1; k < earth::OtherKinds().size(); ++k)
+				{
+					const int N = Folk.AliveOfKind(static_cast<int>(k));
+					if (N > 0) Others += (Others.empty() ? "" : ", ") + std::to_string(N) + " " + earth::OtherKinds()[k].Plural;
+				}
+				if (!Others.empty()) std::printf("            NPCs: %d; other kinds of human: %s\n", Folk.AliveOfKind(0), Others.c_str());
 			}
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{

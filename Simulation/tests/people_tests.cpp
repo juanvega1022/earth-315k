@@ -456,6 +456,10 @@ static void TestTrust()
 	for (const auto& E : Folk.Firsts()) Grieved = Grieved || E.Text.find(" grieves for ") != std::string::npos;
 	EXPECT(Grieved); // Someone has lost a person they loved.
 	EXPECT(Folk.AverageKindness() > 0.0 && Folk.AverageKindness() < 1.0);
+	// Other kinds of human start in their homes (Atapuerca, the Rhine... lie on this planet's land).
+	int Others = 0;
+	for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Others += Folk.AliveOfKind(static_cast<int>(k));
+	EXPECT(Others > 0 && Folk.AliveOfKind(0) > 0);
 	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
 }
 
