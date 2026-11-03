@@ -2507,6 +2507,7 @@ private:
 	// ---- Beliefs ----------------------------------------------------------------------------
 
 	static constexpr size_t kMaxFaith = 3;
+	static constexpr int kShellMaterial = 20; // Found on coasts, so it doubles as "by the sea".
 
 	const BeliefRecord& BeliefOf(uint32_t Id) const { return BeliefLog[Id - 1]; }
 
@@ -2573,7 +2574,14 @@ private:
 		const double R = Dice.Uniform();
 		if (DeathShare > 0.05 && R < 0.4) return 0;
 		if (C.SeenDanger > 0.3f && R < 0.6) return 6;
-		if (R < 0.85) return static_cast<int>(Dice.Next() % static_cast<uint64_t>(SubjectCount()));
+		if (R < 0.85)
+		{
+			// Only what they live with: the cold away from the tropics, the sea on a coast.
+			const int S = static_cast<int>(Dice.Next() % static_cast<uint64_t>(SubjectCount()));
+			if (S == 9 && std::abs(C.Lat) < 35.0 && Eco->IceCover() < 0.5) return 1;
+			if (S == 8 && !Present(C, kShellMaterial)) return 3;
+			return S;
+		}
 		// Now and then something from the band's own world of materials.
 		int Count = 0;
 		std::array<int, 64> Met{};

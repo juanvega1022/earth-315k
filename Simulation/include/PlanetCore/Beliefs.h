@@ -32,6 +32,14 @@ inline const std::vector<const char*>& BeliefClaims()
 		"is forbidden to touch", "gives life and takes it", "will bring back those we lost", "speaks in the dreams of the old"};
 	return List;
 }
+
+// The same claims about something plural, such as the dead.
+inline const std::vector<const char*>& BeliefClaimsPlural()
+{
+	static const std::vector<const char*> List = {"are alive and watch us", "must be fed or they will take from us", "are where we came from",
+		"are forbidden to touch", "give life and take it", "will bring back those we lost", "speak in the dreams of the old"};
+	return List;
+}
 inline constexpr int kForbidden = 3;
 
 struct Practice
@@ -77,7 +85,8 @@ inline std::string BeliefGloss(int Subject, int Claim, int Practice)
 {
 	std::string S = SubjectName(Subject);
 	S[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(S[0])));
-	return S + " " + BeliefClaims()[static_cast<size_t>(Claim)] + "; " + BeliefPractices()[static_cast<size_t>(Practice)].Gloss;
+	const bool Plural = Subject == 0 || Subject == 6 || Subject == 7 || Subject == 10 || S.back() == 's';
+	return S + " " + (Plural ? BeliefClaimsPlural() : BeliefClaims())[static_cast<size_t>(Claim)] + "; " + BeliefPractices()[static_cast<size_t>(Practice)].Gloss;
 }
 
 } // namespace earth
