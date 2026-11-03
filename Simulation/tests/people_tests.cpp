@@ -1,5 +1,6 @@
 // Tests for the NPCs on a small synthetic planet: a block of land around East Africa.
 #include "PlanetCore/People.h"
+#include "PlanetCore/WorldSave.h"
 
 #include <cstdio>
 #include <memory>
@@ -309,8 +310,91 @@ static void TestSayWord()
 	EXPECT(std::string(earth::WordMeaning(0)) == "water");
 }
 
+// Whether a way of working suits the materials depends only on their properties.
+static void TestInventionRules()
+{
+	auto Index = [](const char* Name)
+	{
+		const auto& L = earth::AllMaterials();
+		for (size_t i = 0; i < L.size(); ++i)
+		{
+			if (std::string(L[i].Name) == Name) return static_cast<int>(i);
+		}
+		return -1;
+	};
+	const int Flint = Index("flint"), Clay = Index("clay"), Wood = Index("wood");
+	EXPECT(Flint >= 0 && Clay >= 0 && Wood >= 0);
+	EXPECT(earth::InventionStrength(0, Flint, -1, 0) > 0.8f); // A struck flint blade.
+	EXPECT(earth::InventionStrength(0, Clay, -1, 0) == 0.0f); // Clay won't take an edge.
+	EXPECT(earth::InventionStrength(1, Flint, Wood, 0) > 0.0f); // A flint point on a wooden shaft...
+	EXPECT(earth::InventionStrength(1, Wood, Flint, 0) == 0.0f); // ...but not the other way round.
+	EXPECT(earth::InventionStrength(7, Clay, -1, 0) == 0.0f); // Fired pots need fire first.
+	EXPECT(earth::InventionStrength(7, Clay, -1, earth::SkillSet(1) << 2) > 0.0f);
+	const uint32_t Id = earth::InventionId(1, Flint, Wood);
+	EXPECT(earth::WorkingOf(Id) == 1 && earth::MaterialA(Id) == Flint && earth::MaterialB(Id) == Wood);
+	EXPECT(earth::InventionGloss(Id) == "flint point tied to a shaft of wood");
+	EXPECT(earth::MaterialB(earth::InventionId(0, Flint, -1)) == -1);
+}
+
+// People who try often enough make things, name them, and the words join their language.
+static void TestInventionsHappen()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6);
+	earth::PeopleSettings Settings;
+	Settings.InventionTriesPerYear = 0.5;
+	earth::People Folk(&Eco, 6, Settings);
+	for (int i = 0; i < 365 * 3 / 30; ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+	}
+	EXPECT(Folk.InventionsKnown() > 0);
+	EXPECT(HasFirst(Folk, "First invention of"));
+	EXPECT(Folk.InventionsText().find("first called") != std::string::npos);
+	EXPECT(Folk.StoriesText().find("was the first ever to make") != std::string::npos);
+	EXPECT(Folk.LanguagesText().find(" = limestone") != std::string::npos);
+}
+
+// A world saved and loaded carries on exactly as if it had never stopped.
+static void TestSaveAndResume()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::PeopleSettings Settings;
+	Settings.InventionTriesPerYear = 0.2;
+	Settings.Threads = 2;
+	earth::Ecosystem EcoA(&Grid, earth::DefaultSpecies(), 7);
+	earth::People FolkA(&EcoA, 7, Settings);
+	for (int i = 0; i < 12; ++i)
+	{
+		EcoA.Step(30);
+		FolkA.Step(30);
+	}
+	const std::string Path = "people_tests_save.bin";
+	EXPECT(earth::SaveWorld(Path, EcoA, FolkA));
+	earth::Ecosystem EcoB(&Grid, earth::DefaultSpecies(), 99);
+	earth::People FolkB(&EcoB, 99, Settings);
+	EXPECT(earth::LoadWorld(Path, EcoB, FolkB));
+	std::remove(Path.c_str());
+	for (int i = 0; i < 12; ++i)
+	{
+		EcoA.Step(30);
+		FolkA.Step(30);
+		EcoB.Step(30);
+		FolkB.Step(30);
+	}
+	EXPECT(FolkA.Alive() == FolkB.Alive());
+	EXPECT(EcoA.TotalAnimals() == EcoB.TotalAnimals());
+	EXPECT(FolkA.InventionsText() == FolkB.InventionsText());
+	EXPECT(FolkA.LanguagesText() == FolkB.LanguagesText());
+	EXPECT(!earth::LoadWorld("no_such_save.bin", EcoB, FolkB));
+}
+
 int main()
 {
+	TestInventionRules();
+	TestInventionsHappen();
+	TestSaveAndResume();
 	TestUnderstand();
 	TestSayWord();
 	TestSkillTree();

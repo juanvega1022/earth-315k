@@ -561,6 +561,7 @@ public:
 	template <class A>
 	void Serialize(A& Ar)
 	{
+		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Random), Ar.Io(NextGroupId), Ar.Io(Cells), Ar.Io(AnimalGroups), Ar.Io(SpeciesAlive), Ar.Io(EventLog), Ar.Io(DayNumber);
 		Ar.Io(SeaChange), Ar.Io(ClimateStep), Ar.Io(ClimateCount), Ar.Io(Settings.StartYearsAgo), Ar.Io(Settings.IceAges);
 		if (Ar.IsReading())

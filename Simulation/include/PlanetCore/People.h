@@ -14,6 +14,7 @@
 
 #include "Archive.h"
 #include "Ecosystem.h"
+#include "Inventions.h"
 #include "Parallel.h"
 #include "Random.h"
 #include "Skills.h"
@@ -253,6 +254,11 @@ struct Camp
 	float BestWater = 0.0f;
 	std::array<int64_t, 5> ForageSquares{};
 	float ForageKg = 0.0f;
+	// Materials the band has come across, what it has made from them, and its words for both,
+	// kept sorted by what they name (see People::MaterialKey and InventionKey).
+	uint64_t Met = 0;
+	std::vector<uint32_t> Inventions;
+	std::vector<std::pair<uint32_t, uint16_t>> Lexicon;
 
 	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
 	// rest is saved.
@@ -260,6 +266,7 @@ struct Camp
 	void Serialize(A& Ar)
 	{
 		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
+		if (Ar.Version >= 2) Ar.Io(Met), Ar.Io(Inventions), Ar.Io(Lexicon);
 	}
 };
 
@@ -291,6 +298,27 @@ struct Notable
 	}
 };
 
+// The first time something was made, and how often bands hit on it again by themselves.
+struct InventionRecord
+{
+	uint32_t Id = 0;
+	double Year = 0.0;
+	uint32_t Inventor = 0;
+	int CampId = 0;
+	double Lat = 0.0;
+	double Lon = 0.0;
+	uint16_t Word = 0; // What its makers called it.
+	int Times = 0;     // Bands that made it by themselves, without learning it.
+	// How it came about: 0 by people trying things. Kept so ideas from other sources can be told apart later.
+	int Origin = 0;
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Id), Ar.Io(Year), Ar.Io(Inventor), Ar.Io(CampId), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(Word), Ar.Io(Times), Ar.Io(Origin);
+	}
+};
+
 struct PeopleSettings
 {
 	// Omo Kibish in southern Ethiopia, among the oldest Homo sapiens sites in East Africa.
@@ -312,6 +340,8 @@ struct PeopleSettings
 	// Chance a year that one person of average wits hits on a simple skill on their own; deeper
 	// skills are 4 times rarer per step down the tree.
 	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
+	// Tries a year at making something new from materials, per person of average wits and curiosity.
+	double InventionTriesPerYear = 2e-4;
 	// CPU threads for Step(); 0 uses all cores. Results are the same for any number.
 	int Threads = 0;
 };
@@ -372,11 +402,13 @@ public:
 	template <class A>
 	void Serialize(A& Ar)
 	{
+		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Dice), Ar.Io(NextId), Ar.Io(NextCampId), Ar.Io(HighestGeneration), Ar.Io(Births), Ar.Io(Deaths), Ar.Io(Kills), Ar.Io(Causes);
 		Ar.Io(Regions), Ar.Io(SpeciesHunted), Ar.Io(NextPopulationMark), Ar.Io(NextBandMark), Ar.Io(NextGenerationMark), Ar.Io(NextAgeMark);
 		Ar.Io(AnyHunt), Ar.Io(AnyShare), Ar.Io(AnyDeathBy), Ar.Io(Arrivals), Ar.Io(HallOfFame);
 		Ar.Io(Notables), Ar.Io(PlaceNames), Ar.Io(RecordBrain), Ar.Io(NextLanguageMark), Ar.Io(LanguageYear), Ar.Io(KnownNow), Ar.Io(EverKnown);
 		Ar.Io(Gathered), Ar.Io(Npcs), Ar.Io(Camps), Ar.Io(Events);
+		if (Ar.Version >= 2) Ar.Io(InventionLog);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -466,8 +498,39 @@ public:
 			{
 				Out += "  " + SayWord(C->Words[w]) + " = " + WordMeaning(w) + "\n";
 			}
+			for (const auto& [Key, Word] : C->Lexicon)
+			{
+				const uint32_t Id = Key & 0xFFFFFFu;
+				Out += "  " + SayWord(Word) + " = " + ((Key >> 24) == 1u ? std::string(AllMaterials()[Id].Name) : InventionGloss(Id)) + "\n";
+			}
 		}
 		return Out;
+	}
+
+	// Things made from materials, in the order they were first made, with how many bands make them now.
+	std::string InventionsText() const
+	{
+		std::vector<const InventionRecord*> List;
+		for (const auto& [Id, R] : InventionLog) List.push_back(&R);
+		std::sort(List.begin(), List.end(), [](const InventionRecord* A, const InventionRecord* B) { return A->Year != B->Year ? A->Year < B->Year : A->Id < B->Id; });
+		std::string Out;
+		for (const InventionRecord* R : List)
+		{
+			int Bands = 0;
+			for (const Camp& C : Camps) Bands += HasInvention(C, R->Id);
+			char Line[160];
+			std::snprintf(Line, sizeof(Line), "Year %.0f near %.0f, %.0f: ", R->Year, R->Lat, R->Lon);
+			Out += Line + InventionGloss(R->Id) + ", first called \"" + SayWord(R->Word) + "\". Made independently by " + std::to_string(R->Times) +
+				(R->Times == 1 ? " band" : " bands") + "; " + (Bands ? "known by " + std::to_string(Bands) + " bands now" : "forgotten") + "\n";
+		}
+		return Out;
+	}
+	int InventionsKnown() const
+	{
+		std::vector<uint32_t> All;
+		for (const Camp& C : Camps) All.insert(All.end(), C.Inventions.begin(), C.Inventions.end());
+		std::sort(All.begin(), All.end());
+		return static_cast<int>(std::unique(All.begin(), All.end()) - All.begin());
 	}
 
 	std::vector<const Camp*> LanguageCamps() const
@@ -691,6 +754,7 @@ public:
 		}
 
 		LearnSkills(1);
+		Invent(1);
 		DriftLanguages(1);
 		BirthsAndDeaths();
 		IndexCamps();
@@ -862,6 +926,7 @@ public:
 		}
 
 		LearnSkills(Days);
+		Invent(Days);
 		DriftLanguages(Days);
 		BirthsAndDeaths(Days);
 		IndexCamps();
@@ -907,6 +972,8 @@ private:
 	int LanguageYear = 0;
 	SkillSet KnownNow = 0;  // Skills someone alive knows.
 	SkillSet EverKnown = 0; // Skills anyone has ever known.
+	// Every invention ever made, keyed by InventionId: where, when and by whom it was first made.
+	std::unordered_map<uint32_t, InventionRecord> InventionLog;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1219,6 +1286,7 @@ private:
 				C.Known |= Npcs[i].Skills;
 			}
 			C.Effects = EffectsOf(C.Known);
+			AddInventionEffects(C.Inventions, C.Known, C.Effects);
 		}
 		for (Camp& C : Camps)
 		{
@@ -1386,6 +1454,9 @@ private:
 			Camp New;
 			New.Id = NextCampId++;
 			New.Words = Camps[c].Words;
+			New.Met = Camps[c].Met;
+			New.Inventions = Camps[c].Inventions;
+			New.Lexicon = Camps[c].Lexicon;
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
 			if (Camps[c].ScoutScore > 0.0)
 			{
@@ -1467,6 +1538,8 @@ private:
 					Camps[a].Members.push_back(i);
 				}
 				Camps[b].Members.clear();
+				Camps[a].Met |= Camps[b].Met;
+				for (uint32_t Id : Camps[b].Inventions) TakeUp(Camps[a], Id, Camps[b]);
 				Merged = true;
 			}
 		}
@@ -2190,6 +2263,159 @@ private:
 		NoteSkills();
 	}
 
+
+	// ---- Inventions -------------------------------------------------------------------------
+
+	static uint32_t MaterialKey(int M) { return 0x1000000u | static_cast<uint32_t>(M); }
+	static uint32_t InventionKey(uint32_t Id) { return 0x2000000u | Id; }
+
+	static const uint16_t* WordFor(const Camp& C, uint32_t Key)
+	{
+		auto It = std::lower_bound(C.Lexicon.begin(), C.Lexicon.end(), Key, [](const auto& E, uint32_t K) { return E.first < K; });
+		return It != C.Lexicon.end() && It->first == Key ? &It->second : nullptr;
+	}
+	static void Name(Camp& C, uint32_t Key, uint16_t Word)
+	{
+		auto It = std::lower_bound(C.Lexicon.begin(), C.Lexicon.end(), Key, [](const auto& E, uint32_t K) { return E.first < K; });
+		if (It != C.Lexicon.end() && It->first == Key) return;
+		C.Lexicon.insert(It, {Key, Word});
+	}
+	static bool HasInvention(const Camp& C, uint32_t Id) { return std::binary_search(C.Inventions.begin(), C.Inventions.end(), Id); }
+
+	// A band takes up something another band makes, along with the other band's word for it.
+	static void TakeUp(Camp& C, uint32_t Id, const Camp& From)
+	{
+		if (HasInvention(C, Id)) return;
+		C.Inventions.insert(std::upper_bound(C.Inventions.begin(), C.Inventions.end(), Id), Id);
+		const uint16_t* W = WordFor(From, InventionKey(Id));
+		if (W) Name(C, InventionKey(Id), *W);
+		for (int M : {MaterialA(Id), MaterialB(Id)})
+		{
+			if (M < 0) continue;
+			C.Met |= uint64_t(1) << M;
+			const uint16_t* MW = WordFor(From, MaterialKey(M));
+			if (MW) Name(C, MaterialKey(M), *MW);
+		}
+	}
+
+	// Whether a material is to be had around a camp.
+	bool Present(const Camp& C, int Index) const
+	{
+		const Material& M = AllMaterials()[static_cast<size_t>(Index)];
+		const double AbsLat = std::abs(C.Lat);
+		switch (M.Where)
+		{
+		case Found::Anywhere: return true;
+		case Found::Stone: return RegionHas(C.Lat, C.Lon, Index, M.Chance);
+		case Found::Places: return InArea(C.Lat, C.Lon, M.Areas);
+		case Found::Water: return Eco->WaterAt(C.Lat, C.Lon) > 0.4;
+		case Found::Trees: return Eco->BestCover(C.Lat, C.Lon) > 0.3;
+		case Found::WetTropics: return AbsLat < 25.0 && Eco->BestCover(C.Lat, C.Lon) > 0.5;
+		case Found::Game: return C.SeenGame > 0.05f;
+		case Found::ColdGame: return C.SeenGame > 0.05f && AbsLat > 35.0;
+		case Found::Cold: return AbsLat > 55.0 - 15.0 * Eco->IceCover();
+		case Found::Fire: return Knows(C.Known, 2);
+		case Found::Coast:
+		{
+			for (int d = 0; d < 4; ++d)
+			{
+				double La = 0.0, Lo = 0.0;
+				Offset(C.Lat, C.Lon, d * kPi / 2.0, 40.0, La, Lo);
+				if (!Eco->IsLand(La, Lo)) return true;
+			}
+			return false;
+		}
+		}
+		return false;
+	}
+
+	// Bands notice materials around them, now and then try working what they know in a new way,
+	// and pick up what their neighbours make.
+	void Invent(int Days)
+	{
+		const int Materials = static_cast<int>(AllMaterials().size());
+		const int Workings = static_cast<int>(AllWorkings().size());
+		std::vector<double> Knack;
+		std::array<int, 64> MetList{};
+		for (Camp& C : Camps)
+		{
+			if (C.Members.empty()) continue;
+			for (int m = 0; m < Materials; ++m)
+			{
+				if (!((C.Met >> m) & 1u) && Present(C, m))
+				{
+					C.Met |= uint64_t(1) << m;
+					Name(C, MaterialKey(m), static_cast<uint16_t>(Dice.Next()));
+				}
+			}
+			int MetCount = 0;
+			for (int m = 0; m < Materials; ++m)
+			{
+				if ((C.Met >> m) & 1u) MetList[static_cast<size_t>(MetCount++)] = m;
+			}
+			// The curious and the clever try more, and are likelier to be the one who gets it.
+			Knack.assign(C.Members.size(), 0.0);
+			double Sum = 0.0;
+			for (size_t k = 0; k < C.Members.size(); ++k)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(C.Members[k])];
+				if (P.AgeYears() < 12.0) continue;
+				const double Wits = Smarts(P);
+				Knack[k] = Wits * Wits * P.Genes->Curiosity / 0.6;
+				Sum += Knack[k];
+			}
+			const double Tries = Sum * Settings.InventionTriesPerYear * Days / 365.0;
+			int N = static_cast<int>(Tries);
+			if (Dice.Chance(Tries - N)) ++N;
+			for (int t = 0; t < N && MetCount > 0; ++t)
+			{
+				const int W = static_cast<int>(Dice.Next() % static_cast<uint64_t>(Workings));
+				const int A = MetList[Dice.Next() % static_cast<uint64_t>(MetCount)];
+				const int B = AllWorkings()[static_cast<size_t>(W)].NeedB < 0 ? -1 : MetList[Dice.Next() % static_cast<uint64_t>(MetCount)];
+				const uint32_t Id = InventionId(W, A, B);
+				if (InventionStrength(W, A, B, C.Known) <= 0.0f || HasInvention(C, Id)) continue;
+				double Pick = Dice.Uniform() * Sum;
+				size_t Who = 0;
+				for (; Who + 1 < Knack.size(); ++Who)
+				{
+					if ((Pick -= Knack[Who]) < 0.0) break;
+				}
+				MakeFirst(C, Id, Npcs[static_cast<size_t>(C.Members[Who])]);
+			}
+			// Neighbours' things are copied more easily when their speech can be followed.
+			if (C.Neighbour != 0)
+			{
+				const Camp& O = Camps[CampSlot(C.Neighbour)];
+				const double Copy = OverDays(1.0 / ((Understand(C, O) ? 300.0 : 3000.0) * 365.0), Days);
+				if (!O.Inventions.empty() && Dice.Chance(Copy))
+				{
+					const uint32_t Id = O.Inventions[Dice.Next() % O.Inventions.size()];
+					if (InventionStrength(WorkingOf(Id), MaterialA(Id), MaterialB(Id), C.Known) > 0.0f) TakeUp(C, Id, O);
+				}
+			}
+		}
+	}
+
+	// A band makes something by itself.
+	void MakeFirst(Camp& C, uint32_t Id, const Npc& Maker)
+	{
+		C.Inventions.insert(std::upper_bound(C.Inventions.begin(), C.Inventions.end(), Id), Id);
+		const uint16_t Word = static_cast<uint16_t>(Dice.Next());
+		Name(C, InventionKey(Id), Word);
+		InventionRecord& R = InventionLog[Id];
+		R.Times += 1;
+		if (R.Times > 1) return;
+		R.Id = Id;
+		R.Year = Eco->Years();
+		R.Inventor = Maker.Id;
+		R.CampId = C.Id;
+		R.Lat = C.Lat;
+		R.Lon = C.Lon;
+		R.Word = Word;
+		const std::string Gloss = InventionGloss(Id);
+		AddEvent("First invention of " + Gloss + ", called \"" + SayWord(Word) + "\" by its makers");
+		Remember(Maker, "was the first ever to make " + Gloss + ", which their band called \"" + SayWord(Word) + "\"");
+	}
 	// Starts or adds to someone's story.
 	void Remember(const Npc& P, const std::string& Deed)
 	{
@@ -2236,6 +2462,10 @@ private:
 			for (uint16_t& W : C.Words)
 			{
 				if (Dice.Chance(Change)) W = static_cast<uint16_t>(Dice.Next());
+			}
+			for (auto& Entry : C.Lexicon)
+			{
+				if (Dice.Chance(Change)) Entry.second = static_cast<uint16_t>(Dice.Next());
 			}
 			if (C.Neighbour != 0 && Dice.Chance(Borrow))
 			{
