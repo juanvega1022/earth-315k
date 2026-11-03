@@ -2507,6 +2507,11 @@ private:
 	// ---- Beliefs ----------------------------------------------------------------------------
 
 	static constexpr size_t kMaxFaith = 3;
+	static std::string Lower(std::string S)
+	{
+		if (!S.empty()) S[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(S[0])));
+		return S;
+	}
 	static constexpr int kShellMaterial = 20; // Found on coasts, so it doubles as "by the sea".
 
 	const BeliefRecord& BeliefOf(uint32_t Id) const { return BeliefLog[Id - 1]; }
@@ -2531,8 +2536,8 @@ private:
 		const bool First = InventionLog.find(Id) == InventionLog.end();
 		if (!First) return;
 		(void)C;
-		Remember(Maker, "made " + InventionGloss(Id) + ", ahead of anyone, but the band would not have it: they believe " +
-			BeliefGloss(Why.Subject, Why.Claim, Why.Practice) + ". The maker was shunned");
+		Remember(Maker, "made " + InventionGloss(Id) + ", ahead of anyone, but the band would not have it: they believe that " +
+			Lower(BeliefGloss(Why.Subject, Why.Claim, Why.Practice)) + ". The maker was shunned");
 		if (Shunned == 1) AddEvent("First invention refused because of a belief: " + InventionGloss(Id));
 	}
 
@@ -2657,7 +2662,7 @@ private:
 						const BeliefRecord& B = BeliefOf(Id);
 						const std::string Gloss = BeliefGloss(Subject, Claim, Practice);
 						if (BeliefLog.size() == 1) AddEvent("The first belief: " + Gloss + " (called \"" + SayWord(B.Word) + "\")");
-						Remember(*Teller, "first taught that " + Gloss + ", a belief their band called \"" + SayWord(B.Word) + "\"");
+						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"");
 					}
 				}
 			}
@@ -2691,7 +2696,7 @@ private:
 			F = FoundBelief(New, Old.Subject, Claim, Practice, Old.Id, 0);
 			if (Old.Peak >= 10)
 			{
-				AddEvent("A schism: some of those who believe \"" + SayWord(Old.Word) + "\" break away, believing " + BeliefGloss(Old.Subject, Claim, Practice));
+				AddEvent("A schism: some of those who believe \"" + SayWord(Old.Word) + "\" break away, believing that " + Lower(BeliefGloss(Old.Subject, Claim, Practice)));
 			}
 		}
 	}

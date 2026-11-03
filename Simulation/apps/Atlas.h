@@ -155,7 +155,7 @@ h2{font-size:15px;margin:0 0 6px}ul{list-style:none;padding:0;margin:0;max-heigh
 const F=[],seen={};for(const f of ATLAS){seen[f.y]=f}for(const y of Object.keys(seen).map(Number).sort((a,b)=>a-b))F.push(seen[y]);
 const cv=document.getElementById('map'),g=cv.getContext('2d'),t=document.getElementById('t'),mode=document.getElementById('mode');
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const hue=id=>(Math.imul(id,2654435761)>>>0)%360;const col=id=>id?`hsl(${hue(id)} 65% 50%)`:css('--muted');
+const hue=id=>(id*137.508)%360;const col=id=>id?`hsl(${hue(id)} 65% 50%)`:css('--muted');
 const fmt=n=>Math.round(n).toLocaleString('en-US');
 function draw(i){const f=F[i];if(!f)return;const W=cv.width,H=cv.height,cols=180,rows=90,cw=W/cols,ch=H/rows;
 g.fillStyle=css('--sea');g.fillRect(0,0,W,H);g.fillStyle=css('--land');let p=0,land=false;
