@@ -438,14 +438,16 @@ static void TestTrust()
 		Eco.Step(30);
 		Folk.Step(30);
 	}
-	int Named = 0, Bonded = 0, Remember = 0;
+	int Named = 0, Bonded = 0, Remember = 0, LoveDad = 0;
 	for (const earth::Npc& P : Folk.All())
 	{
 		Named += P.Name != 0;
 		Remember += P.RefugeWater > 0.0f;
+		LoveDad += P.Father != 0 && P.TrustIn(P.Father) > 0.0f;
 		for (uint32_t B : P.BondWith) Bonded += B != 0;
 	}
 	EXPECT(Named > 0 && Bonded > 0 && Remember > 0);
+	EXPECT(LoveDad > 0); // Fathers help feed their young children.
 	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
 }
 

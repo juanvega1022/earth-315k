@@ -2104,7 +2104,8 @@ private:
 			// She leans towards men she trusts and whom others think well of.
 			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id)
 			{
-				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f);
+				// Couples tend to stay together: the father of her last child comes first if he's still here.
+				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0);
 				if (Mate < 0 || Score > Best)
 				{
 					Best = Score;
@@ -2161,6 +2162,32 @@ private:
 		return Carer;
 	}
 
+	// A young child's father and its mother's mother, if alive and in the same camp (-1 if not).
+	std::array<int, 2> KinOf(const Npc& Child, const Npc& Mum) const
+	{
+		std::array<int, 2> Kin = {-1, -1};
+		const uint32_t Ids[2] = {Child.Father, Mum.Mother};
+		for (int k = 0; k < 2; ++k)
+		{
+			const Npc* Q = Ids[k] ? Find(Ids[k]) : nullptr;
+			if (Q && Q->Camp == Child.Camp && !Q->IsChild()) Kin[k] = static_cast<int>(Q - Npcs.data());
+		}
+		return Kin;
+	}
+
+	// Children play with others their age and grow up as friends.
+	void Play(Npc& Child, int Days)
+	{
+		const std::vector<int>& M = Camps[CampSlot(Child.Camp)].Members;
+		Npc& Other = Npcs[static_cast<size_t>(M[Dice.Next() % M.size()])];
+		if (&Other != &Child && Other.IsChild())
+		{
+			const float D = static_cast<float>(0.02 * Days);
+			Child.Feel(Other.Id, D);
+			Other.Feel(Child.Id, D);
+		}
+	}
+
 	void BeCaredFor(size_t Index)
 	{
 		Npc& Child = Npcs[Index];
@@ -2185,17 +2212,27 @@ private:
 			Wanted -= Spare;
 		};
 		Give(Mum);
+		// Then the child's father and grandmother, who come to be loved for it, then anyone.
+		const std::array<int, 2> Kin = KinOf(Child, Mum);
+		for (int k : Kin)
+		{
+			if (k < 0 || k == Carer || Wanted <= 0.0f) continue;
+			const float Before = Wanted;
+			Give(Npcs[static_cast<size_t>(k)]);
+			if (Wanted < Before) Child.Feel(Npcs[static_cast<size_t>(k)].Id, 0.01f);
+		}
 		for (int j : Camps[CampSlot(Child.Camp)].Members)
 		{
 			if (Wanted <= 0.0f)
 			{
 				break;
 			}
-			if (j != Carer && !Npcs[j].IsChild())
+			if (j != Carer && j != Kin[0] && j != Kin[1] && !Npcs[j].IsChild())
 			{
 				Give(Npcs[j]);
 			}
 		}
+		if (Dice.Chance(0.05)) Play(Child, 1);
 		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
 		Child.Energy += FromMum;
 		Mum.Energy -= FromMum * 0.5f;
@@ -2390,17 +2427,27 @@ private:
 			Wanted -= Take;
 		};
 		Give(CarerIndex);
+		// Then the child's father and grandmother, who come to be loved for it, then anyone.
+		const std::array<int, 2> Kin = KinOf(Child, Mum);
+		for (int k : Kin)
+		{
+			if (k < 0 || k == static_cast<int>(CarerIndex) || Wanted <= 0.0f) continue;
+			const float Before = Wanted;
+			Give(static_cast<size_t>(k));
+			if (Wanted < Before) Child.Feel(Npcs[static_cast<size_t>(k)].Id, static_cast<float>(0.01 * Days));
+		}
 		for (int j : Camps[CampSlot(Child.Camp)].Members)
 		{
 			if (Wanted <= 0.0f)
 			{
 				break;
 			}
-			if (j != static_cast<int>(CarerIndex) && !Npcs[j].IsChild())
+			if (j != static_cast<int>(CarerIndex) && j != Kin[0] && j != Kin[1] && !Npcs[j].IsChild())
 			{
 				Give(static_cast<size_t>(j));
 			}
 		}
+		Play(Child, Days);
 		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
 		Child.Energy += FromMum;
 		Mum.Energy -= FromMum * 0.5f;
