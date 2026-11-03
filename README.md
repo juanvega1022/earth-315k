@@ -4,7 +4,7 @@ A simulation of Earth starting 315,000 years ago, around the time of the oldest 
 
 The goal is to watch AI NPCs grow and develop from early-human starting traits. The work goes in steps:
 
-1. **The planet and its life.** A 3D globe of the whole planet from real elevation data, with a higher-detail patch over Africa, Arabia and the Levant. Plants grow and die back with the seasons, and 25 animal species of the time (elephants, mammoths, cave lions, Smilodon, Diprotodon and more) graze, hunt, breed and die out.
+1. **The planet and its life.** A 3D globe of the whole planet from real elevation data, with a higher-detail patch over Africa, Arabia and the Levant. Plants grow and die back with the seasons, and 49 wild animal species of the time (elephants, mammoths, cave lions, Smilodon, Diprotodon, red deer, reindeer, aurochs, wild boar, wild goats and sheep, junglefowl, turkeys, leopards and more), each in its real range, graze, hunt, breed and die out. Bands that learn dogs or herding tame the wild animals around them, and bands that learn planting sow the crops whose wild plants grow where they live.
 2. **The first NPC band (now)** in East Africa, with needs, a small brain that learns, and children who inherit from parents.
 3. **Watching tools:** time speed, following one NPC, and a timeline of firsts.
 
@@ -139,6 +139,14 @@ Every session of a run adds a line to `runs.txt` next to its outputs: when it st
 ### History atlas
 
 Add `--atlas out\atlas.html` and at every progress line the run adds a snapshot of the world to `out\atlas.html.js`: the coastline at that time's sea level, where people live, which language and belief each place holds, and what happened since the last snapshot. Open `out\atlas.html` in a browser and drag the slider or press Play to watch people spread, languages split and religions form, colouring the map by languages, beliefs or people. A resumed run keeps adding to the same atlas.
+
+### Kept animals and crops
+
+The world starts with only wild animals. When a band knows **dogs**, it can raise wolf pups if gray wolves live near its camp. When it knows **herding**, it can tame whatever wild herds live around it, as people really did: goats from wild goats and sheep from mouflon (the Zagros and Anatolia), cattle from aurochs, pigs from wild boar, horses from wild horses, donkeys from African wild asses, water buffalo, chickens from red junglefowl (South and Southeast Asia), turkeys (North America), llamas from guanacos (the Andes) and reindeer. Kept herds walk with their band, are drawn on the globe like any other herd, and grow only as big as the band can tend. When a band merges into another its herds go with it, and when a band dies out its herds go wild.
+
+When a band knows **planting**, it sows the crops whose wild plants grow where it lives: wheat, barley and lentils in the Fertile Crescent, rice on the Yangtze, millet on the Yellow River, maize, beans and squash in Mexico, potatoes in the Andes, sorghum in the Sahel, yams in West Africa, taro and bananas in New Guinea, and sunflowers in eastern North America. Neighbouring bands that plant pick up each other's crops where their climate lets them grow. The first of each kept animal and each crop is in the history and the stories, and the atlas has a **Crops and herds** view.
+
+Saves from before this update load as normal: the new wild animals appear in their ranges when the save is loaded.
 
 ### Other kinds of human (experimental, `--other-humans`)
 

@@ -130,12 +130,14 @@ struct AnimalGroup
 	std::array<float, kAnimalHidden> LastHidden{};
 	std::array<float, kAnimalOutputs> LastOutputs{};
 	int LastMove = static_cast<int>(AnimalMove::Stayed);
+	uint32_t Herder = 0; // The band (camp id) keeping this herd; 0 for wild animals.
 
 	template <class A>
 	void Serialize(A& Ar)
 	{
 		Ar.Io(SpeciesIndex), Ar.Io(Id), Ar.Io(Generation), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(Count), Ar.Io(WellFed), Ar.Io(Heading);
 		Ar.Io(Taken), Ar.Io(Hunted), Ar.Io(Brain), Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastOutputs), Ar.Io(LastMove);
+		if (Ar.Version >= 9) Ar.Io(Herder);
 	}
 };
 
@@ -431,7 +433,7 @@ public:
 			for (int Idx : GroupsInCell[C])
 			{
 				const Species& S = SpeciesList[AnimalGroups[Idx].SpeciesIndex];
-				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg)
+				if (S.Eats == Diet::Plants && !S.Companion && S.BodyMassKg <= MaxMassKg)
 				{
 					Total += AnimalGroups[Idx].Count;
 				}
@@ -452,7 +454,7 @@ public:
 			{
 				const AnimalGroup& G = AnimalGroups[Idx];
 				const Species& S = SpeciesList[G.SpeciesIndex];
-				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
+				if (S.Eats == Diet::Plants && !S.Companion && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
 				{
 					Candidates.push_back(Idx);
 					Total += G.Count;
@@ -487,7 +489,7 @@ public:
 			{
 				const AnimalGroup& G = AnimalGroups[Idx];
 				const Species& S = SpeciesList[G.SpeciesIndex];
-				if (S.Eats == Diet::Plants && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
+				if (S.Eats == Diet::Plants && !S.Companion && S.BodyMassKg <= MaxMassKg && CanTakeOne(G))
 				{
 					Candidates.push_back(Idx);
 					Total += G.Count;
@@ -526,6 +528,83 @@ public:
 	{
 		const double Share = std::min(0.2, 0.5 * SpeciesList[G.SpeciesIndex].BirthsPerYear);
 		return G.Count >= 2.0 && G.Hunted + 1.0 <= (G.Count + G.Hunted) * Share;
+	}
+
+	int SpeciesNamed(const std::string& Name) const
+	{
+		for (size_t s = 0; s < SpeciesList.size(); ++s)
+		{
+			if (SpeciesList[s].Name == Name) return static_cast<int>(s);
+		}
+		return -1;
+	}
+
+	// Whether the band already keeps a herd of this kind.
+	bool Keeps(uint32_t Herder, int Kind) const
+	{
+		for (const AnimalGroup& G : AnimalGroups)
+		{
+			if (G.Herder == Herder && G.SpeciesIndex == Kind && G.Count >= 1.0) return true;
+		}
+		return false;
+	}
+
+	// A band takes in a few animals from a herd of Kind's wild ancestor near its camp; from then
+	// on they are a kept herd of Kind that walks with the band. False if no wild herd is near.
+	bool Tame(int Kind, uint32_t Herder, double Lat, double Lon)
+	{
+		const Species& K = SpeciesList[static_cast<size_t>(Kind)];
+		const int Wild = SpeciesNamed(K.TamedFrom);
+		if (Wild < 0) return false;
+		if (IndexStale) BuildGroupIndex();
+		int From = -1;
+		ForNeighbourhood(CellIndex(Lat, Lon), [&](int C)
+		{
+			for (int Idx : GroupsInCell[C])
+			{
+				const AnimalGroup& G = AnimalGroups[Idx];
+				if (From < 0 && G.SpeciesIndex == Wild && G.Herder == 0 && G.Count >= 4.0) From = Idx;
+			}
+		});
+		if (From < 0) return false;
+		const double Taken = std::min(K.GroupSize * 0.3, AnimalGroups[From].Count * 0.5);
+		AnimalGroups[From].Count -= Taken;
+		AnimalGroup G;
+		G.SpeciesIndex = Kind;
+		G.Id = NextGroupId++;
+		G.Lat = Lat;
+		G.Lon = Lon;
+		G.Count = Taken;
+		G.Brain = InstinctAnimalBrain();
+		G.Herder = Herder;
+		AnimalGroups.push_back(G);
+		SpeciesAlive[static_cast<size_t>(Kind)] = true;
+		IndexStale = true;
+		return true;
+	}
+
+	// Kept herds go where their band goes. Where(Herder, Lat, Lon, People) gives the band now
+	// keeping a herd (a merged band's herds pass to the band it joined), moves Lat/Lon to its camp
+	// and sets People to its size, or returns 0 when no band is left to keep it, and the herd goes
+	// wild. A band can only tend so many animals: the rest are eaten or let go.
+	void FollowHerders(const std::function<uint32_t(uint32_t, double&, double&, double&)>& Where)
+	{
+		for (AnimalGroup& G : AnimalGroups)
+		{
+			if (G.Herder == 0) continue;
+			double Lat = G.Lat;
+			double Lon = G.Lon;
+			double Keepers = 0.0;
+			G.Herder = Where(G.Herder, Lat, Lon, Keepers);
+			if (G.Herder != 0)
+			{
+				G.Lat = Lat;
+				G.Lon = Lon;
+				const Species& S = SpeciesList[static_cast<size_t>(G.SpeciesIndex)];
+				G.Count = std::min(G.Count, std::max(S.GroupSize, Keepers * std::min(30.0, 1500.0 / S.BodyMassKg)));
+			}
+		}
+		IndexStale = true;
 	}
 
 	// ---- Simulation -------------------------------------------------------------------------
@@ -593,6 +672,15 @@ public:
 			if (!Ground.empty()) ApplySeaLevel();
 			BuildRivers();
 			IndexStale = true;
+			// A save from before kinds were added to the list: they turn up now, as if they had been
+			// there all along.
+			const size_t Saved = SpeciesAlive.size();
+			if (Saved < SpeciesList.size())
+			{
+				SpawnAnimals(Saved);
+				SpeciesAlive.resize(SpeciesList.size(), false);
+				for (size_t s = Saved; s < SpeciesList.size(); ++s) SpeciesAlive[s] = CountOf(static_cast<int>(s)) > 0.0;
+			}
 		}
 	}
 
@@ -875,13 +963,13 @@ private:
 		return Height > 0.0 && Height <= S.MaxElevationM && S.InRange(Lat, Lon);
 	}
 
-	void SpawnAnimals()
+	void SpawnAnimals(size_t FirstSpecies = 0)
 	{
 		const AnimalBrain Instinct = InstinctAnimalBrain();
 		// Plant eaters first, so hunters can start next to their prey.
 		for (int Pass = 0; Pass < 2; ++Pass)
 		{
-			for (size_t s = 0; s < SpeciesList.size(); ++s)
+			for (size_t s = FirstSpecies; s < SpeciesList.size(); ++s)
 			{
 				const Species& S = SpeciesList[s];
 				if (S.Range.empty() || (Pass == 0) != (S.Eats == Diet::Plants))
@@ -1096,6 +1184,15 @@ private:
 			const PlantCell& Home = Cells[Cell];
 			const double Expected = Home.Capacity * (0.15 + 0.85 * GrowingSeason(Home.Lat));
 			Births *= Expected > 0.0 ? std::clamp((Home.Plants / Expected - 0.6) / 0.3, 0.0, 1.0) : 0.0;
+			if (S.MaxPerKm2 > 0.0)
+			{
+				double Here = 0.0;
+				for (int Idx : GroupsInCell[Cell])
+				{
+					if (AnimalGroups[Idx].SpeciesIndex == G.SpeciesIndex) Here += AnimalGroups[Idx].Count;
+				}
+				Births *= std::clamp(1.0 - Here / (S.MaxPerKm2 * CellAreaKm2(Home.Lat, Settings.CellDegrees)), 0.0, 1.0);
+			}
 		}
 		if (S.Eats == Diet::Meat && Births > 0.0)
 		{
@@ -1213,6 +1310,7 @@ private:
 	// wandering roughly the same way, so groups explore instead of jittering in place.
 	void Move(AnimalGroup& G, const Species& S, int Days, Rng& Dice) const
 	{
+		if (G.Herder != 0) return; // Kept herds are driven by their band (FollowHerders).
 		const double Pi = 3.14159265358979323846;
 		const double StepKm = S.SpeedKmPerDay * Dice.Range(0.3, 1.0) * std::min(Days, 6);
 		const double CosLat = std::max(0.1, std::cos(G.Lat * Pi / 180.0));

@@ -16,6 +16,7 @@
 #include "Ecosystem.h"
 #include "Hominins.h"
 #include "Beliefs.h"
+#include "Crops.h"
 #include "Inventions.h"
 #include "Parallel.h"
 #include "Random.h"
@@ -305,6 +306,7 @@ struct Camp
 	std::array<uint16_t, kWords> Words{};
 	float Store = 0.0f; // Kg of dried and smoked food put by for lean times.
 	uint8_t Kind = 0;   // The kind of human the band started as.
+	uint16_t Crops = 0; // What the band sows (bits of AllCrops()).
 	int Neighbour = 0; // Id of a camp within reach this step, 0 if none.
 	// For Step(): the wettest place within reach, and the squares the band gathers in and how
 	// much food they hold on average.
@@ -332,6 +334,7 @@ struct Camp
 		if (Ar.Version >= 3) Ar.Io(Faith), Ar.Io(DeathsLately);
 		if (Ar.Version >= 7) Ar.Io(Store);
 		if (Ar.Version >= 8) Ar.Io(Kind);
+		if (Ar.Version >= 9) Ar.Io(Crops);
 		if (Ar.Version >= 4) Ar.Io(Leader);
 	}
 };
@@ -525,6 +528,7 @@ public:
 		if (Ar.Version >= 6) Ar.Io(AnyGrief);
 		if (Ar.Version >= 7) Ar.Io(AnyStore), Ar.Io(AnyToolmaker);
 		if (Ar.Version >= 8) Ar.Io(OthersStarted), Ar.Io(AnyMixedChild), Ar.Io(MetKinds);
+		if (Ar.Version >= 9) Ar.Io(EverKept), Ar.Io(EverSown);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -943,6 +947,7 @@ public:
 		IndexCamps();
 		MoveCamps();
 		SplitAndMergeCamps();
+		KeepHerdsAndCrops(1);
 		CheckFirsts();
 	}
 
@@ -1117,6 +1122,7 @@ public:
 		IndexCamps();
 		MoveCamps(Days);
 		SplitAndMergeCamps(Days);
+		KeepHerdsAndCrops(Days);
 		CheckFirsts();
 	}
 
@@ -1173,6 +1179,8 @@ private:
 	bool OthersStarted = false;
 	bool AnyMixedChild = false;
 	uint32_t MetKinds = 0;
+	std::vector<bool> EverKept; // Per species: anyone has kept a herd of it.
+	uint16_t EverSown = 0;      // Crops anyone has sown.
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -2196,13 +2204,81 @@ private:
 		}
 	}
 
+	// Bands that know dogs or herding tame the wild animals around them, where those live; kept
+	// herds walk with their band. Bands that plant sow the crops whose wild plants grow where they
+	// are, and pick up their neighbours' crops if those grow there too.
+	void KeepHerdsAndCrops(int Days)
+	{
+		const std::vector<Species>& All = Eco->GetSpecies();
+		EverKept.resize(All.size(), false);
+		const double TryTame = OverDays(1.0 / 500.0 / 365.0, Days);
+		const double Borrow = OverDays(1.0 / 200.0 / 365.0, Days);
+		const std::vector<Crop>& CropList = AllCrops();
+		for (Camp& C : Camps)
+		{
+			if (C.Members.empty()) continue;
+			for (size_t k = 0; k < All.size(); ++k)
+			{
+				const Species& K = All[k];
+				if (K.TameSkill < 0 || !Knows(C.Known, K.TameSkill) || !Dice.Chance(TryTame)) continue;
+				const uint32_t Herder = static_cast<uint32_t>(C.Id);
+				if (Eco->Keeps(Herder, static_cast<int>(k)) || !Eco->Tame(static_cast<int>(k), Herder, C.Lat, C.Lon)) continue;
+				if (!EverKept[k])
+				{
+					EverKept[k] = true;
+					const Npc& P = Npcs[static_cast<size_t>(C.Members[Dice.Next() % C.Members.size()])];
+					AddEvent(K.Companion ? "First dogs: " + PersonName(P.Name) + "'s band raises " + Lower(K.TamedFrom) + " pups at its camp"
+										 : "First kept " + Lower(K.Name) + " herd: " + PersonName(P.Name) + "'s band tames " + Lower(K.TamedFrom) + " near its camp");
+					Remember(P, K.Companion ? "raised the first dogs from wolf pups" : "was among the first to keep " + Lower(K.Name) + ", tamed from " + Lower(K.TamedFrom));
+				}
+			}
+			if (!Knows(C.Known, 25)) continue; // Planting.
+			uint16_t Add = 0;
+			for (size_t k = 0; k < CropList.size(); ++k)
+			{
+				if (CropList[k].Wild.Contains(C.Lat, C.Lon)) Add |= static_cast<uint16_t>(1u << k);
+			}
+			if (C.Neighbour != 0 && CampSlots.count(C.Neighbour) && Dice.Chance(Borrow))
+			{
+				const uint16_t Theirs = Camps[static_cast<size_t>(CampSlot(C.Neighbour))].Crops;
+				for (size_t k = 0; k < CropList.size(); ++k)
+				{
+					if ((Theirs >> k & 1u) && CropList[k].Grows(C.Lat)) Add |= static_cast<uint16_t>(1u << k);
+				}
+			}
+			const uint16_t New = static_cast<uint16_t>(Add & ~C.Crops);
+			C.Crops |= Add;
+			for (size_t k = 0; k < CropList.size(); ++k)
+			{
+				if (!(New >> k & 1u) || (EverSown >> k & 1u)) continue;
+				EverSown |= static_cast<uint16_t>(1u << k);
+				const Npc& P = Npcs[static_cast<size_t>(C.Members[Dice.Next() % C.Members.size()])];
+				AddEvent("First " + std::string(CropList[k].Name) + " sown, by " + PersonName(P.Name) + "'s band, from the wild plants around its camp");
+				Remember(P, "was among the first to sow " + std::string(CropList[k].Name));
+			}
+		}
+		// Herds follow their band; a merged band's herds pass to the nearest band, else they go wild.
+		Eco->FollowHerders([&](uint32_t Herder, double& Lat, double& Lon, double& Keepers) -> uint32_t
+		{
+			auto It = CampSlots.find(static_cast<int>(Herder));
+			const Camp* Best = It == CampSlots.end() || Camps[static_cast<size_t>(It->second)].Members.empty() ? nullptr : &Camps[static_cast<size_t>(It->second)];
+			for (size_t c = 0; !Best && c < Camps.size(); ++c)
+			{
+				const Camp& O = Camps[c];
+				if (!O.Members.empty() && std::abs(O.Lat - Lat) < 1.0 && std::abs(O.Lon - Lon) < 1.0) Best = &O;
+			}
+			if (!Best) return 0;
+			Lat = Best->Lat;
+			Lon = Best->Lon;
+			Keepers = static_cast<double>(Best->Members.size());
+			return static_cast<uint32_t>(Best->Id);
+		});
+	}
+
 	void NoteHunt(int Kind, int Party)
 	{
-		if (SpeciesHunted.size() != Eco->GetSpecies().size())
-		{
-			SpeciesHunted.assign(Eco->GetSpecies().size(), false);
-		}
-		if (SpeciesHunted[Kind])
+		SpeciesHunted.resize(Eco->GetSpecies().size(), false); // Grows when a newer build adds kinds.
+		if (SpeciesHunted[Kind] || Eco->GetSpecies()[Kind].TameSkill >= 0) // Killing a kept animal isn't a hunt.
 		{
 			return;
 		}

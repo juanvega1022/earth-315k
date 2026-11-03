@@ -401,12 +401,16 @@ static void TestBeliefs()
 	EXPECT(earth::BeliefGloss(0, 0, 0) == "The dead are alive and watch us; they bury their dead with gifts");
 	EXPECT(earth::SubjectName(earth::SubjectCount()) == earth::AllMaterials()[0].Name);
 	earth::ElevationGrid Grid = MakePlanet();
-	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
+	earth::EcosystemSettings EcoSettings;
+	EcoSettings.Threads = 1;
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8, EcoSettings);
 	earth::PeopleSettings Settings;
 	Settings.DiscoveryPerYear = 0.2;
 	Settings.BeliefTriesPerYear = 0.05;
+	Settings.Threads = 1; // The same world on every machine.
 	earth::People Folk(&Eco, 8, Settings);
-	for (int i = 0; i < 365 * 6 / 30; ++i)
+	// At least 6 years, then until a belief has been told in words (up to 30 years).
+	for (int i = 0; i < 365 * 30 / 30 && (i < 365 * 6 / 30 || Folk.LanguagesText().find(" = teach") == std::string::npos); ++i)
 	{
 		Eco.Step(30);
 		Folk.Step(30);
@@ -492,8 +496,48 @@ static void TestStores()
 	EXPECT(Stored && Toolmaker);
 }
 
+// A band in the Zagros that quickly learns planting and herding sows wheat and keeps a herd
+// tamed from the wild goats, sheep, boar or horses there, and its herd stays at its camp.
+static void TestHerdsAndCrops()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::EcosystemSettings EcoSettings;
+	EcoSettings.Threads = 1;
+	EcoSettings.IceAges = false; // Nobody plants in an ice age.
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
+	earth::PeopleSettings Settings;
+	Settings.DiscoveryPerYear = 1e5; // Every skill within years.
+	Settings.Threads = 1;
+	Settings.StartLat = 35.0;
+	Settings.StartLon = 46.0;
+	earth::People Folk(&Eco, 6, Settings);
+	bool Wheat = false, Herd = false;
+	for (int i = 0; i < 365 * 100 / 30 && !(Wheat && Herd); ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+		for (const auto& E : Folk.Firsts())
+		{
+			Wheat = Wheat || E.Text.find("First wheat sown") != std::string::npos;
+			Herd = Herd || E.Text.find("herd: ") != std::string::npos;
+		}
+	}
+	EXPECT(Wheat && Herd);
+	bool AtCamp = false;
+	for (const earth::AnimalGroup& G : Eco.Groups())
+	{
+		if (G.Herder == 0) continue;
+		for (const earth::Camp& C : Folk.AllCamps())
+		{
+			AtCamp = AtCamp || (static_cast<uint32_t>(C.Id) == G.Herder && C.Lat == G.Lat && C.Lon == G.Lon);
+		}
+	}
+	EXPECT(AtCamp);
+}
+
 int main()
 {
+	TestHerdsAndCrops();
 	TestStores();
 	TestTrust();
 	TestBeliefs();
