@@ -19,7 +19,7 @@
 namespace earth
 {
 
-inline constexpr uint32_t kSaveVersion = 4; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders.
+inline constexpr uint32_t kSaveVersion = 5; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders. 5: remembered places.
 
 class Archive
 {

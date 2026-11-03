@@ -164,6 +164,10 @@ struct Npc
 	std::array<float, kBonds> Trust{};
 	float Reputation = 0.0f; // How much those who know them trust them, summed; worked out each step.
 	bool Leads = false;      // Whether they led their band last step.
+	// The best-watered place they have lived, remembered for droughts; taught to children.
+	float RefugeLat = 0.0f;
+	float RefugeLon = 0.0f;
+	float RefugeWater = 0.0f; // How wet it was, fading slowly as the memory grows old.
 
 	float TrustIn(uint32_t Other) const
 	{
@@ -229,6 +233,7 @@ struct Npc
 		Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastChoice), Ar.Io(LastAction), Ar.Io(ActionCounts);
 		Ar.Io(Skills), Ar.Io(Pleasure), Ar.Io(RewardBaseline), Ar.Io(Wellbeing), Ar.Io(BandSize), Ar.Io(Alive);
 		if (Ar.Version >= 4) Ar.Io(Name), Ar.Io(BondWith), Ar.Io(Trust), Ar.Io(Leads);
+		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -491,6 +496,7 @@ public:
 		if (Ar.Version >= 2) Ar.Io(InventionLog);
 		if (Ar.Version >= 3) Ar.Io(BeliefLog), Ar.Io(Shunned), Ar.Io(ReligionYear);
 		if (Ar.Version >= 4) Ar.Io(KnownNames), Ar.Io(FirstLeader);
+		if (Ar.Version >= 5) Ar.Io(AnyRefuge);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1115,6 +1121,7 @@ private:
 	// Names of people with stories and of their parents, partners and children.
 	std::unordered_map<uint32_t, uint16_t> KnownNames;
 	uint32_t FirstLeader = 0;
+	bool AnyRefuge = false;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1431,6 +1438,7 @@ private:
 			AddBeliefEffects(C);
 		}
 		WeighReputations();
+		RememberPlaces();
 		for (Camp& C : Camps)
 		{
 			C.Nearby = 0;
@@ -1526,7 +1534,31 @@ private:
 			}
 			double TargetLat = C.Lat;
 			double TargetLon = C.Lon;
-			if (C.ScoutScore > Here + 0.05)
+			const Npc* Elder = nullptr;
+			if (Eco->WaterAt(C.Lat, C.Lon) < 0.3 || Food < 0.4)
+			{
+				// In hard times the band asks its oldest: where was there water before?
+				for (int i : C.Members)
+				{
+					const Npc& P = Npcs[static_cast<size_t>(i)];
+					if (P.RefugeWater > 0.0f && P.AgeYears() >= 25.0 && (!Elder || P.AgeDays > Elder->AgeDays)) Elder = &P;
+				}
+				if (Elder && (DistanceKm(C.Lat, C.Lon, Elder->RefugeLat, Elder->RefugeLon) > 1500.0 ||
+					PlaceScore(Elder->RefugeLat, Elder->RefugeLon, C.Id) < Here + 0.05)) Elder = nullptr;
+			}
+			if (Elder)
+			{
+				TargetLat = Elder->RefugeLat;
+				TargetLon = Elder->RefugeLon;
+				if (!AnyRefuge)
+				{
+					AnyRefuge = true;
+					AddEvent(PersonName(Elder->Name) + ", aged " + std::to_string(static_cast<int>(Elder->AgeYears())) +
+						", leads their band in a hard time to a place they remember from years before");
+					Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before");
+				}
+			}
+			else if (C.ScoutScore > Here + 0.05)
 			{
 				TargetLat = C.ScoutLat;
 				TargetLon = C.ScoutLon;
@@ -2580,6 +2612,39 @@ private:
 	}
 
 
+
+	// ---- Memory of places ----------------------------------------------------------------------
+
+	// Everyone keeps the best-watered place they have lived in mind; the memory fades slowly, and
+	// children on growing up take their mother's if it is better than their own.
+	void RememberPlaces()
+	{
+		for (const Camp& C : Camps)
+		{
+			const float W = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
+			for (int i : C.Members)
+			{
+				Npc& P = Npcs[static_cast<size_t>(i)];
+				P.RefugeWater *= 0.999f;
+				if (W > P.RefugeWater)
+				{
+					P.RefugeWater = W;
+					P.RefugeLat = static_cast<float>(C.Lat);
+					P.RefugeLon = static_cast<float>(C.Lon);
+				}
+				if (P.IsChild() && P.AgeYears() > 11.0)
+				{
+					auto It = std::lower_bound(Npcs.begin(), Npcs.end(), P.Mother, [](const Npc& N, uint32_t V) { return N.Id < V; });
+					if (It != Npcs.end() && It->Id == P.Mother && It->RefugeWater > P.RefugeWater)
+					{
+						P.RefugeWater = It->RefugeWater;
+						P.RefugeLat = It->RefugeLat;
+						P.RefugeLon = It->RefugeLon;
+					}
+				}
+			}
+		}
+	}
 
 	// ---- Trust, reputation and leaders --------------------------------------------------------
 
