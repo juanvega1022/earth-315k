@@ -76,6 +76,7 @@ struct Genome
 	float LearningRate = 0.05f; // How strongly a good or bad day changes later choices.
 	float Curiosity = 0.6f;     // How often it tries something other than its favourite choice.
 	float Imitation = 0.1f;     // How often it copies a successful camp mate.
+	float Kindness = 0.5f;      // Personality: how much of what it carries it gives when it shares.
 
 	int Hidden() const { return static_cast<int>(B1.size()); }
 
@@ -89,6 +90,7 @@ struct Genome
 		Ar.Io(LearningRate);
 		Ar.Io(Curiosity);
 		Ar.Io(Imitation);
+		if (Ar.Version >= 6) Ar.Io(Kindness);
 	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
@@ -154,7 +156,51 @@ struct Npc
 	std::array<int, kBrainActions> ActionCounts{};
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
-	SkillEffects Own;    // What those skills do for this NPC's own gathering, hunting and carrying.
+	SkillEffects Own;
+
+	// Who they are to others: a name in their band's speech, and the few people they know best,
+	// with how much they trust each (-1 a cheat they won't help, +1 someone they'd trust with anything).
+	uint16_t Name = 0;
+	static constexpr int kBonds = 4;
+	std::array<uint32_t, kBonds> BondWith{};
+	std::array<float, kBonds> Trust{};
+	float Reputation = 0.0f; // How much those who know them trust them, summed; worked out each step.
+	bool Leads = false;      // Whether they led their band last step.
+	// The best-watered place they have lived, remembered for droughts; taught to children.
+	float RefugeLat = 0.0f;
+	float RefugeLon = 0.0f;
+	float RefugeWater = 0.0f; // How wet it was, fading slowly as the memory grows old.
+	float Grief = 0.0f;       // Sorrow for someone they loved who died; it weighs on them and fades.
+
+	float TrustIn(uint32_t Other) const
+	{
+		for (int b = 0; b < kBonds; ++b)
+		{
+			if (BondWith[b] == Other) return Trust[b];
+		}
+		return 0.0f;
+	}
+	// Changes how much they trust someone, making room by forgetting whoever matters least.
+	void Feel(uint32_t Other, float Delta)
+	{
+		int Slot = -1;
+		for (int b = 0; b < kBonds && Slot < 0; ++b)
+		{
+			if (BondWith[b] == Other) Slot = b;
+		}
+		if (Slot < 0)
+		{
+			Slot = 0;
+			for (int b = 1; b < kBonds; ++b)
+			{
+				if (std::abs(Trust[b]) < std::abs(Trust[Slot])) Slot = b;
+			}
+			if (BondWith[Slot] != 0 && std::abs(Trust[Slot]) >= std::abs(Delta)) return;
+			BondWith[Slot] = Other;
+			Trust[Slot] = 0.0f;
+		}
+		Trust[Slot] = std::clamp(Trust[Slot] + Delta, -1.0f, 1.0f);
+	}    // What those skills do for this NPC's own gathering, hunting and carrying.
 
 	void LearnSkill(int Skill)
 	{
@@ -189,6 +235,9 @@ struct Npc
 		Ar.Io(Genes), Ar.Io(LearnedW2), Ar.Io(LearnedB2);
 		Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastChoice), Ar.Io(LastAction), Ar.Io(ActionCounts);
 		Ar.Io(Skills), Ar.Io(Pleasure), Ar.Io(RewardBaseline), Ar.Io(Wellbeing), Ar.Io(BandSize), Ar.Io(Alive);
+		if (Ar.Version >= 4) Ar.Io(Name), Ar.Io(BondWith), Ar.Io(Trust), Ar.Io(Leads);
+		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
+		if (Ar.Version >= 6) Ar.Io(Grief);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -264,6 +313,7 @@ struct Camp
 	std::vector<uint32_t> Faith;
 	float Cohesion = 0.0f; // From its beliefs' practices, worked out each step.
 	int DeathsLately = 0;  // Deaths since the band last wondered why.
+	uint32_t Leader = 0;   // The most trusted adult, worked out each step.
 
 	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
 	// rest is saved.
@@ -273,6 +323,7 @@ struct Camp
 		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
 		if (Ar.Version >= 2) Ar.Io(Met), Ar.Io(Inventions), Ar.Io(Lexicon);
 		if (Ar.Version >= 3) Ar.Io(Faith), Ar.Io(DeathsLately);
+		if (Ar.Version >= 4) Ar.Io(Leader);
 	}
 };
 
@@ -288,6 +339,7 @@ struct Notable
 	int Brain = 0;
 	double BornYear = 0.0;
 	std::string Speech; // Their band's word for water when they were noted.
+	uint16_t Name = 0;
 	std::vector<std::string> Deeds;
 	std::vector<uint32_t> Partners;
 	std::vector<uint32_t> Children;
@@ -301,6 +353,7 @@ struct Notable
 	{
 		Ar.Io(Id), Ar.Io(Mother), Ar.Io(Father), Ar.Io(Female), Ar.Io(Generation), Ar.Io(Brain), Ar.Io(BornYear), Ar.Io(Speech);
 		Ar.Io(Deeds), Ar.Io(Partners), Ar.Io(Children), Ar.Io(Dead), Ar.Io(Death), Ar.Io(LastLat), Ar.Io(LastLon);
+		if (Ar.Version >= 4) Ar.Io(Name);
 	}
 };
 
@@ -446,6 +499,9 @@ public:
 		Ar.Io(Gathered), Ar.Io(Npcs), Ar.Io(Camps), Ar.Io(Events);
 		if (Ar.Version >= 2) Ar.Io(InventionLog);
 		if (Ar.Version >= 3) Ar.Io(BeliefLog), Ar.Io(Shunned), Ar.Io(ReligionYear);
+		if (Ar.Version >= 4) Ar.Io(KnownNames), Ar.Io(FirstLeader);
+		if (Ar.Version >= 5) Ar.Io(AnyRefuge);
+		if (Ar.Version >= 6) Ar.Io(AnyGrief);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -468,7 +524,9 @@ public:
 		{
 			if (Id == 0) return "unknown";
 			auto It = Notables.find(Id);
-			return "#" + std::to_string(Id) + (It != Notables.end() ? " (has a story here)" : "");
+			auto Nm = KnownNames.find(Id);
+			return (Nm != KnownNames.end() ? PersonName(Nm->second) + " " : std::string()) + "#" + std::to_string(Id) +
+				(It != Notables.end() ? " (has a story here)" : "");
 		};
 		std::string Out;
 		char Line[256];
@@ -476,7 +534,7 @@ public:
 		{
 			std::snprintf(Line, sizeof(Line), "#%u, a %s of generation %d with a %d-neuron brain, born about year %.0f\n", N->Id, N->Female ? "woman" : "man",
 				N->Generation, N->Brain, N->BornYear);
-			Out += Line;
+			Out += (N->Name ? PersonName(N->Name) + " " : std::string()) + Line;
 			Out += "  Mother " + Who(N->Mother) + ", father " + Who(N->Father) + "\n";
 			// Ancestors with stories of their own, a few generations back.
 			std::string Line2;
@@ -499,8 +557,8 @@ public:
 			for (const std::string& D : N->Deeds) Out += "  " + D + "\n";
 			if (!N->Partners.empty())
 			{
-				Out += "  Had children with";
-				for (uint32_t Pa : N->Partners) Out += " " + Who(Pa);
+				Out += "  Had children with ";
+				for (size_t k = 0; k < N->Partners.size(); ++k) Out += (k ? ", " : "") + Who(N->Partners[k]);
 				Out += "\n";
 			}
 			Out += "  " + std::to_string(N->Children.size()) + (N->Children.size() == 1 ? " child" : " children");
@@ -538,7 +596,8 @@ public:
 			for (const auto& [Key, Word] : C->Lexicon)
 			{
 				const uint32_t Id = Key & 0xFFFFFFu;
-				Out += "  " + SayWord(Word) + " = " + ((Key >> 24) == 1u ? std::string(AllMaterials()[Id].Name) : InventionGloss(Id)) + "\n";
+				const uint32_t Kind = Key >> 24;
+				Out += "  " + SayWord(Word) + " = " + (Kind == 1u ? std::string(AllMaterials()[Id].Name) : Kind == 2u ? InventionGloss(Id) : std::string(Concepts()[Id])) + "\n";
 			}
 		}
 		return Out;
@@ -660,6 +719,19 @@ public:
 		for (const Npc& P : Npcs) Most = std::max(Most, P.BrainSize());
 		return Most;
 	}
+	// Average personality: how kind (share of food given when sharing) and how curious people are.
+	double AverageKindness() const
+	{
+		double Sum = 0.0;
+		for (const Npc& P : Npcs) Sum += P.Genes ? P.Genes->Kindness : 0.5f;
+		return Npcs.empty() ? 0.0 : Sum / static_cast<double>(Npcs.size());
+	}
+	double AverageCuriosity() const
+	{
+		double Sum = 0.0;
+		for (const Npc& P : Npcs) Sum += P.Genes ? P.Genes->Curiosity : 0.6f;
+		return Npcs.empty() ? 0.0 : Sum / static_cast<double>(Npcs.size());
+	}
 	double AverageBrain() const
 	{
 		double Sum = 0.0;
@@ -776,7 +848,7 @@ public:
 		Eco->RefreshIndex();
 		RegrowGatherable();
 		IndexCamps();
-		SenseCamps();
+		SenseCamps(1);
 
 		// Decide first, so everyone acts on the same picture of the day, then act.
 		std::vector<int> Chosen(Npcs.size(), -1);
@@ -873,7 +945,7 @@ public:
 		Eco->RefreshIndex();
 		RegrowGatherable(Days);
 		IndexCamps();
-		SenseCamps();
+		SenseCamps(Days);
 		for (Camp& C : Camps)
 		{
 			C.BestWater = static_cast<float>(BestWaterNear(C.Lat, C.Lon));
@@ -1065,6 +1137,11 @@ private:
 	std::vector<BeliefRecord> BeliefLog;
 	int64_t Shunned = 0; // Inventions a band refused because its beliefs forbade them.
 	int ReligionYear = -1;
+	// Names of people with stories and of their parents, partners and children.
+	std::unordered_map<uint32_t, uint16_t> KnownNames;
+	uint32_t FirstLeader = 0;
+	bool AnyRefuge = false;
+	bool AnyGrief = false;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1226,6 +1303,7 @@ private:
 		G.LearningRate = std::clamp(G.LearningRate * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.001f, 0.5f);
 		G.Curiosity = std::clamp(G.Curiosity * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.1f, 2.0f);
 		G.Imitation = std::clamp(G.Imitation * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.0f, 0.5f);
+		G.Kindness = std::clamp(G.Kindness + static_cast<float>(Dice.Gaussian() * 0.05), 0.05f, 0.95f);
 		return G;
 	}
 
@@ -1244,6 +1322,7 @@ private:
 		if (Dice.Chance(0.5)) G.LearningRate = Rest.LearningRate;
 		if (Dice.Chance(0.5)) G.Curiosity = Rest.Curiosity;
 		if (Dice.Chance(0.5)) G.Imitation = Rest.Imitation;
+		if (Dice.Chance(0.5)) G.Kindness = Rest.Kindness;
 		return Mutate(G, 0.15f);
 	}
 
@@ -1367,7 +1446,7 @@ private:
 	}
 
 	// Reads what each camp can see and knows today.
-	void SenseCamps()
+	void SenseCamps(int Days)
 	{
 		for (Camp& C : Camps)
 		{
@@ -1380,6 +1459,8 @@ private:
 			AddInventionEffects(C.Inventions, C.Known, C.Effects);
 			AddBeliefEffects(C);
 		}
+		WeighReputations();
+		RememberPlaces(Days);
 		for (Camp& C : Camps)
 		{
 			C.Nearby = 0;
@@ -1475,7 +1556,32 @@ private:
 			}
 			double TargetLat = C.Lat;
 			double TargetLon = C.Lon;
-			if (C.ScoutScore > Here + 0.05)
+			const Npc* Elder = nullptr;
+			if (Eco->WaterAt(C.Lat, C.Lon) < 0.3 || Food < 0.4)
+			{
+				// In hard times the band asks its oldest: where was there water before?
+				for (int i : C.Members)
+				{
+					const Npc& P = Npcs[static_cast<size_t>(i)];
+					if (P.RefugeWater > 0.0f && P.AgeYears() >= 25.0 && (!Elder || P.AgeDays > Elder->AgeDays)) Elder = &P;
+				}
+				if (Elder && (DistanceKm(C.Lat, C.Lon, Elder->RefugeLat, Elder->RefugeLon) > 1500.0 ||
+					PlaceScore(Elder->RefugeLat, Elder->RefugeLon, C.Id) < Here + 0.05)) Elder = nullptr;
+			}
+			if (Elder)
+			{
+				TargetLat = Elder->RefugeLat;
+				TargetLon = Elder->RefugeLon;
+				if (!AnyRefuge)
+				{
+					AnyRefuge = true;
+					AddEvent(PersonName(Elder->Name) + ", aged " + std::to_string(static_cast<int>(Elder->AgeYears())) +
+						", leads their band in a hard time to a place they remember from years before");
+					Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before" +
+						Say(C, NameWord(*Elder), {C.Words[7], "come"}, {C.Words[0], "water"}));
+				}
+			}
+			else if (C.ScoutScore > Here + 0.05)
 			{
 				TargetLat = C.ScoutLat;
 				TargetLon = C.ScoutLon;
@@ -1820,21 +1926,29 @@ private:
 			break;
 		case Action::ShareFood:
 		{
-			// Give half of what you carry to the hungriest person in camp.
+			// Give half of what you carry to whoever in camp needs it most, leaning towards those you
+			// trust and passing over anyone who has cheated you.
 			int Hungriest = -1;
+			float Best = -1e9f;
 			for (int j : C.Members)
 			{
-				if (j != static_cast<int>(Index) && (Hungriest < 0 || Npcs[j].Energy < Npcs[Hungriest].Energy))
+				if (j == static_cast<int>(Index)) continue;
+				const float T = P.TrustIn(Npcs[j].Id);
+				const float Score = (1.0f - Npcs[j].Energy) + 0.3f * T;
+				if (T > -0.3f && Score > Best)
 				{
+					Best = Score;
 					Hungriest = j;
 				}
 			}
 			if (Hungriest >= 0 && P.CarriedKg > 0.5f)
 			{
-				const float Give = P.CarriedKg * 0.5f;
+				const float Give = P.CarriedKg * P.Genes->Kindness;
 				P.CarriedKg -= Give;
 				Npcs[Hungriest].CarriedKg = std::min(10.0f, Npcs[Hungriest].CarriedKg + Give);
 				P.SocialNeed = std::max(0.0f, P.SocialNeed - 0.3f);
+				Npcs[Hungriest].Feel(P.Id, 0.2f);
+				P.Feel(Npcs[Hungriest].Id, 0.05f);
 				if (!AnyShare)
 				{
 					AnyShare = true;
@@ -1881,6 +1995,13 @@ private:
 			{
 				P.SocialNeed = 0.0f;
 				P.Pleasure += 0.1f; // Company feels good.
+				// Time together makes friends.
+				const int j = C.Members[Dice.Next() % C.Members.size()];
+				if (j != static_cast<int>(Index))
+				{
+					P.Feel(Npcs[j].Id, 0.03f);
+					Npcs[j].Feel(P.Id, 0.03f);
+				}
 			}
 			break;
 		}
@@ -1998,19 +2119,30 @@ private:
 		}
 		int Mate = -1;
 		int Seen = 0;
+		double Best = 0.0;
 		for (int j : Camps[CampSlot(P.Camp)].Members)
 		{
 			const Npc& Q = Npcs[j];
 			// No brothers or sons (as far as anyone can tell, by mother).
-			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id && Dice.Chance(1.0 / ++Seen))
+			// She leans towards men she trusts and whom others think well of.
+			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id)
 			{
-				Mate = j;
+				// Couples tend to stay together: the father of her last child comes first if he's still here.
+				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0);
+				if (Mate < 0 || Score > Best)
+				{
+					Best = Score;
+					Mate = j;
+				}
+				++Seen;
 			}
 		}
 		if (Mate < 0)
 		{
 			return;
 		}
+		P.Feel(Npcs[Mate].Id, 0.2f);
+		Npcs[Mate].Feel(P.Id, 0.2f);
 		P.PregnantDays = 0.0;
 		P.BabyFather = Npcs[Mate].Id;
 		P.BabyFatherGenes = Npcs[Mate].Genes;
@@ -2053,6 +2185,32 @@ private:
 		return Carer;
 	}
 
+	// A young child's father and its mother's mother, if alive and in the same camp (-1 if not).
+	std::array<int, 2> KinOf(const Npc& Child, const Npc& Mum) const
+	{
+		std::array<int, 2> Kin = {-1, -1};
+		const uint32_t Ids[2] = {Child.Father, Mum.Mother};
+		for (int k = 0; k < 2; ++k)
+		{
+			const Npc* Q = Ids[k] ? Find(Ids[k]) : nullptr;
+			if (Q && Q->Camp == Child.Camp && !Q->IsChild()) Kin[k] = static_cast<int>(Q - Npcs.data());
+		}
+		return Kin;
+	}
+
+	// Children play with others their age and grow up as friends.
+	void Play(Npc& Child, int Days)
+	{
+		const std::vector<int>& M = Camps[CampSlot(Child.Camp)].Members;
+		Npc& Other = Npcs[static_cast<size_t>(M[Dice.Next() % M.size()])];
+		if (&Other != &Child && Other.IsChild())
+		{
+			const float D = static_cast<float>(0.02 * Days);
+			Child.Feel(Other.Id, D);
+			Other.Feel(Child.Id, D);
+		}
+	}
+
 	void BeCaredFor(size_t Index)
 	{
 		Npc& Child = Npcs[Index];
@@ -2077,17 +2235,27 @@ private:
 			Wanted -= Spare;
 		};
 		Give(Mum);
+		// Then the child's father and grandmother, who come to be loved for it, then anyone.
+		const std::array<int, 2> Kin = KinOf(Child, Mum);
+		for (int k : Kin)
+		{
+			if (k < 0 || k == Carer || Wanted <= 0.0f) continue;
+			const float Before = Wanted;
+			Give(Npcs[static_cast<size_t>(k)]);
+			if (Wanted < Before) Child.Feel(Npcs[static_cast<size_t>(k)].Id, 0.01f);
+		}
 		for (int j : Camps[CampSlot(Child.Camp)].Members)
 		{
 			if (Wanted <= 0.0f)
 			{
 				break;
 			}
-			if (j != Carer && !Npcs[j].IsChild())
+			if (j != Carer && j != Kin[0] && j != Kin[1] && !Npcs[j].IsChild())
 			{
 				Give(Npcs[j]);
 			}
 		}
+		if (Dice.Chance(0.05)) Play(Child, 1);
 		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
 		Child.Energy += FromMum;
 		Mum.Energy -= FromMum * 0.5f;
@@ -2282,17 +2450,27 @@ private:
 			Wanted -= Take;
 		};
 		Give(CarerIndex);
+		// Then the child's father and grandmother, who come to be loved for it, then anyone.
+		const std::array<int, 2> Kin = KinOf(Child, Mum);
+		for (int k : Kin)
+		{
+			if (k < 0 || k == static_cast<int>(CarerIndex) || Wanted <= 0.0f) continue;
+			const float Before = Wanted;
+			Give(static_cast<size_t>(k));
+			if (Wanted < Before) Child.Feel(Npcs[static_cast<size_t>(k)].Id, static_cast<float>(0.01 * Days));
+		}
 		for (int j : Camps[CampSlot(Child.Camp)].Members)
 		{
 			if (Wanted <= 0.0f)
 			{
 				break;
 			}
-			if (j != static_cast<int>(CarerIndex) && !Npcs[j].IsChild())
+			if (j != static_cast<int>(CarerIndex) && j != Kin[0] && j != Kin[1] && !Npcs[j].IsChild())
 			{
 				Give(static_cast<size_t>(j));
 			}
 		}
+		Play(Child, Days);
 		const float FromMum = std::min(1.0f - Child.Energy, std::max(0.0f, Mum.Energy - 0.5f) * 0.5f);
 		Child.Energy += FromMum;
 		Mum.Energy -= FromMum * 0.5f;
@@ -2369,6 +2547,57 @@ private:
 
 	static uint32_t MaterialKey(int M) { return 0x1000000u | static_cast<uint32_t>(M); }
 	static uint32_t InventionKey(uint32_t Id) { return 0x2000000u | Id; }
+	static uint32_t ConceptKey(int K) { return 0x3000000u | static_cast<uint32_t>(K); }
+
+	// Words a band coins the first time it has something new to tell: its vocabulary grows with its story.
+	static const std::vector<const char*>& Concepts()
+	{
+		static const std::vector<const char*> List = {"make", "lead", "teach", "find", "arrive", "us", "the dead", "the sea", "the cold",
+			"the land", "beast", "animal"};
+		return List;
+	}
+	enum ConceptWord { Make, Lead, Teach, FindIt, Arrive, Us, TheDead, TheSea, TheCold, TheLand, Beast, Animal };
+
+	// The band's word for a concept, coined now if they have none.
+	uint16_t Coin(Camp& C, int K)
+	{
+		if (const uint16_t* W = WordFor(C, ConceptKey(K))) return *W;
+		const uint16_t W = static_cast<uint16_t>(Dice.Next());
+		Name(C, ConceptKey(K), W);
+		return W;
+	}
+
+	// The band's word for a belief subject: one of its first words where there is one, else coined.
+	uint16_t SubjectWord(Camp& C, int Subject)
+	{
+		static const int Slots[] = {-TheDead, 12, 13, 0, 4, -TheLand, -Beast, -Animal, -TheSea, -TheCold, 6};
+		if (Subject >= SubjectCount())
+		{
+			const uint16_t* W = WordFor(C, MaterialKey(Subject - SubjectCount()));
+			return W ? *W : Coin(C, TheLand);
+		}
+		const int S = Slots[Subject];
+		return S > 0 || Subject == 3 ? C.Words[static_cast<size_t>(S)] : Coin(C, -S);
+	}
+
+	// A sentence in the band's own speech, with a word-by-word gloss. Each language's word order
+	// (doer-deed-thing, doer-thing-deed or deed-doer-thing) drifts with its words for come and go.
+	static std::string Say(const Camp& C, std::pair<uint16_t, std::string> Doer, std::pair<uint16_t, std::string> Deed, std::pair<uint16_t, std::string> Thing)
+	{
+		const int Order = (C.Words[7] ^ C.Words[8]) % 3;
+		const std::pair<uint16_t, std::string>* Parts[3] = {&Doer, &Deed, &Thing};
+		if (Order == 1) std::swap(Parts[1], Parts[2]);
+		if (Order == 2) std::swap(Parts[0], Parts[1]);
+		std::string Said, Gloss;
+		for (const auto* P : Parts)
+		{
+			Said += (Said.empty() ? "" : " ") + SayWord(P->first);
+			Gloss += (Gloss.empty() ? "" : " ") + P->second;
+		}
+		Said[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(Said[0])));
+		return " (in their words: \"" + Said + "\", " + Gloss + ")";
+	}
+	static std::pair<uint16_t, std::string> NameWord(const Npc& P) { return {P.Name, PersonName(P.Name)}; }
 
 	static const uint16_t* WordFor(const Camp& C, uint32_t Key)
 	{
@@ -2503,6 +2732,107 @@ private:
 		}
 	}
 
+
+
+	// ---- Memory of places ----------------------------------------------------------------------
+
+	// Everyone keeps the best-watered place they have lived in mind; the memory fades slowly, and
+	// children on growing up take their mother's if it is better than their own.
+	void RememberPlaces(int Days)
+	{
+		const float Fade = static_cast<float>(std::pow(0.9999, Days)); // Places: half forgotten in about 20 years.
+		const float Heal = static_cast<float>(std::pow(0.99, Days));   // Grief: half gone in about 70 days.
+		for (const Camp& C : Camps)
+		{
+			const float W = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
+			for (int i : C.Members)
+			{
+				Npc& P = Npcs[static_cast<size_t>(i)];
+				P.RefugeWater *= Fade;
+				P.Grief *= Heal;
+				if (W > P.RefugeWater)
+				{
+					P.RefugeWater = W;
+					P.RefugeLat = static_cast<float>(C.Lat);
+					P.RefugeLon = static_cast<float>(C.Lon);
+				}
+				if (P.IsChild() && P.AgeYears() > 11.0)
+				{
+					auto It = std::lower_bound(Npcs.begin(), Npcs.end(), P.Mother, [](const Npc& N, uint32_t V) { return N.Id < V; });
+					if (It != Npcs.end() && It->Id == P.Mother && It->RefugeWater > P.RefugeWater)
+					{
+						P.RefugeWater = It->RefugeWater;
+						P.RefugeLat = It->RefugeLat;
+						P.RefugeLon = It->RefugeLon;
+					}
+				}
+			}
+		}
+	}
+
+	// ---- Trust, reputation and leaders --------------------------------------------------------
+
+	// Sums how much each person is trusted, lets the hungry resent whoever hoards, and finds
+	// each band's most trusted adult.
+	void WeighReputations()
+	{
+		for (Npc& P : Npcs) P.Reputation = 0.0f;
+		for (const Npc& P : Npcs)
+		{
+			for (int b = 0; b < Npc::kBonds; ++b)
+			{
+				if (P.BondWith[b] == 0) continue;
+				auto It = std::lower_bound(Npcs.begin(), Npcs.end(), P.BondWith[b], [](const Npc& N, uint32_t V) { return N.Id < V; });
+				if (It != Npcs.end() && It->Id == P.BondWith[b]) It->Reputation += P.Trust[b];
+			}
+		}
+		for (Camp& C : Camps)
+		{
+			int Hungriest = -1, Richest = -1, Leader = -1, Sitting = -1;
+			for (int i : C.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (Hungriest < 0 || P.Energy < Npcs[static_cast<size_t>(Hungriest)].Energy) Hungriest = i;
+				if (Richest < 0 || P.CarriedKg > Npcs[static_cast<size_t>(Richest)].CarriedKg) Richest = i;
+				if (!P.IsChild() && (Leader < 0 || P.Reputation > Npcs[static_cast<size_t>(Leader)].Reputation)) Leader = i;
+				if (P.Id == C.Leader) Sitting = i;
+			}
+			// A leader keeps the role until someone is clearly more trusted, or they lose most of it.
+			if (Sitting >= 0 && Npcs[static_cast<size_t>(Sitting)].Reputation >= 1.0f &&
+				Npcs[static_cast<size_t>(Leader)].Reputation < Npcs[static_cast<size_t>(Sitting)].Reputation + 0.5f)
+			{
+				Leader = Sitting;
+			}
+			// Going hungry while a camp mate sits on plenty is not forgotten.
+			if (Hungriest >= 0 && Richest >= 0 && Hungriest != Richest && Npcs[static_cast<size_t>(Hungriest)].Energy < 0.25f &&
+				Npcs[static_cast<size_t>(Richest)].CarriedKg > 4.0f)
+			{
+				Npcs[static_cast<size_t>(Hungriest)].Feel(Npcs[static_cast<size_t>(Richest)].Id, -0.1f);
+			}
+			C.Leader = Leader >= 0 && Npcs[static_cast<size_t>(Leader)].Reputation >= (Leader == Sitting ? 1.0f : 2.0f) ? Npcs[static_cast<size_t>(Leader)].Id : 0;
+			if (C.Leader && !Npcs[static_cast<size_t>(Leader)].Leads)
+			{
+				const Npc& L = Npcs[static_cast<size_t>(Leader)];
+				if (!FirstLeader)
+				{
+					FirstLeader = L.Id;
+					AddEvent(PersonName(L.Name) + " becomes the first leader: the person their band trusts most");
+					Remember(L, "became the first leader anyone followed, because their band trusted them most" +
+						Say(C, NameWord(L), {Coin(C, Lead), "lead"}, {Coin(C, Us), "us"}));
+				}
+				else if (Notables.count(L.Id))
+				{
+					Remember(L, "became the leader of their band");
+				}
+			}
+		}
+		for (Npc& P : Npcs) P.Leads = false;
+		for (const Camp& C : Camps)
+		{
+			auto It = C.Leader ? std::lower_bound(Npcs.begin(), Npcs.end(), C.Leader, [](const Npc& N, uint32_t V) { return N.Id < V; }) : Npcs.end();
+			if (It != Npcs.end() && It->Id == C.Leader) It->Leads = true;
+		}
+	}
 
 	// ---- Beliefs ----------------------------------------------------------------------------
 
@@ -2662,7 +2992,8 @@ private:
 						const BeliefRecord& B = BeliefOf(Id);
 						const std::string Gloss = BeliefGloss(Subject, Claim, Practice);
 						if (BeliefLog.size() == 1) AddEvent("The first belief: " + Gloss + " (called \"" + SayWord(B.Word) + "\")");
-						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"");
+						Remember(*Teller, "first taught that " + Lower(Gloss) + ", a belief their band called \"" + SayWord(B.Word) + "\"" +
+							Say(C, {SubjectWord(C, Subject), SubjectName(Subject)}, {Coin(C, Teach), "teach"}, {B.Word, SayWord(B.Word)}));
 					}
 				}
 			}
@@ -2743,8 +3074,17 @@ private:
 		R.Word = Word;
 		const std::string Gloss = InventionGloss(Id);
 		AddEvent("First invention of " + Gloss + ", called \"" + SayWord(Word) + "\" by its makers");
-		Remember(Maker, "was the first ever to make " + Gloss + ", which their band called \"" + SayWord(Word) + "\"");
+		Remember(Maker, "was the first ever to make " + Gloss + ", which their band called \"" + SayWord(Word) + "\"" +
+			Say(C, NameWord(Maker), {Coin(C, Make), "make"}, {Word, Gloss}));
 	}
+	void NoteName(uint32_t Id, uint16_t Name) { KnownNames[Id] = Name; }
+	static std::string PersonName(uint16_t Name)
+	{
+		std::string S = SayWord(Name);
+		if (!S.empty()) S[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(S[0])));
+		return S;
+	}
+
 	// Starts or adds to someone's story.
 	void Remember(const Npc& P, const std::string& Deed)
 	{
@@ -2752,6 +3092,12 @@ private:
 		if (N.Id == 0)
 		{
 			N.Id = P.Id;
+			N.Name = P.Name;
+			NoteName(P.Id, P.Name);
+			for (uint32_t Parent : {P.Mother, P.Father})
+			{
+				if (const Npc* Q = Find(Parent)) NoteName(Q->Id, Q->Name);
+			}
 			N.Mother = P.Mother;
 			N.Father = P.Father;
 			N.Female = P.Female;
@@ -2850,7 +3196,7 @@ private:
 		const float Hunger = 1.0f - P.Energy;
 		const float Thirst = 1.0f - P.Water;
 		// Food in hand counts too: it is tomorrow's meal, which lets effort that pays off later be learned.
-		return -(Hunger * Hunger + Thirst * Thirst + 0.5f * P.Fatigue * P.Fatigue + 0.5f * P.Fear + 0.3f * P.Loneliness) +
+		return -(Hunger * Hunger + Thirst * Thirst + 0.5f * P.Fatigue * P.Fatigue + 0.5f * P.Fear + 0.3f * P.Loneliness + 0.3f * P.Grief) +
 			(P.Health - 1.0f) + 0.04f * std::min(P.CarriedKg, 10.0f);
 	}
 
@@ -2939,6 +3285,10 @@ private:
 				Baby.HuntSkill = 0.1f;
 				Baby.ForageSkill = 0.3f;
 				Baby.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
+				Baby.Name = static_cast<uint16_t>(Dice.Next());
+				// A newborn starts out trusting its mother, and she it.
+				Baby.Feel(P.Id, 0.5f);
+				P.Feel(Baby.Id, 0.5f);
 				int FatherGeneration = 0;
 				if (const Npc* Father = Find(P.BabyFather))
 				{
@@ -2955,6 +3305,8 @@ private:
 					if (It == Notables.end()) continue;
 					It->second.Children.push_back(Baby.Id);
 					const uint32_t Other = Parent == Baby.Mother ? Baby.Father : Baby.Mother;
+					NoteName(Baby.Id, Baby.Name);
+					if (const Npc* O = Find(Other)) NoteName(O->Id, O->Name);
 					std::vector<uint32_t>& Pa = It->second.Partners;
 					if (Other && std::find(Pa.begin(), Pa.end(), Other) == Pa.end()) Pa.push_back(Other);
 				}
@@ -3019,6 +3371,7 @@ private:
 		{
 			Npc P;
 			P.Id = NextId++;
+			P.Name = static_cast<uint16_t>(Dice.Next());
 			P.Female = i % 2 == 0;
 			P.AgeDays = Dice.Range(14.0, 35.0) * 365.0;
 			if (HallOfFame.empty())
@@ -3064,7 +3417,24 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
-		if (!Camps.empty()) Camps[CampSlot(P.Camp)].DeathsLately += 1;
+		if (!Camps.empty())
+		{
+			Camp& C = Camps[CampSlot(P.Camp)];
+			C.DeathsLately += 1;
+			// Those who loved them grieve.
+			for (int i : C.Members)
+			{
+				Npc& Q = Npcs[static_cast<size_t>(i)];
+				const float Love = Q.TrustIn(P.Id);
+				if (&Q == &P || Love < 0.3f) continue;
+				Q.Grief = std::max(Q.Grief, Love);
+				if (!AnyGrief)
+				{
+					AnyGrief = true;
+					AddEvent(PersonName(Q.Name) + " grieves for " + PersonName(P.Name) + ": the first sorrow anyone feels for someone they loved");
+				}
+			}
+		}
 		auto Story = Notables.find(P.Id);
 		if (Story != Notables.end())
 		{

@@ -197,7 +197,7 @@ int main(int Argc, char** Argv)
 		Csv.open(CsvPath);
 		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m,languages";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
-		Csv << ",inventions,beliefs,religions\n";
+		Csv << ",inventions,beliefs,religions,kindness,curiosity\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -219,7 +219,8 @@ int main(int Argc, char** Argv)
 			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount() << ',' << Folk.SkillsKnown() << ','
 				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain() << ',' << Eco.SeaLevelChange() << ',' << Folk.Languages();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
-			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << '\n';
+			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
+				<< Folk.AverageCuriosity() << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.

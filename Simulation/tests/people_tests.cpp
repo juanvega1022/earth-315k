@@ -412,10 +412,54 @@ static void TestBeliefs()
 	EXPECT(HasFirst(Folk, "The first belief:"));
 	EXPECT(Folk.BeliefsText().find("first taught in year") != std::string::npos);
 	EXPECT(Folk.StoriesText().find("first taught that") != std::string::npos);
+	EXPECT(Folk.StoriesText().find("(in their words: \"") != std::string::npos); // Told as a sentence in their speech.
+	EXPECT(Folk.LanguagesText().find(" = teach") != std::string::npos); // A word coined to tell it.
+}
+
+// People have names, come to trust those who feed them, and distrust whoever doesn't.
+static void TestTrust()
+{
+	earth::Npc A;
+	A.Feel(7, 0.2f);
+	A.Feel(7, 0.2f);
+	EXPECT(A.TrustIn(7) > 0.39f && A.TrustIn(7) < 0.41f);
+	A.Feel(8, -0.5f);
+	A.Feel(9, 0.1f);
+	A.Feel(10, 0.1f);
+	// All four slots full: a weak new feeling doesn't push out stronger ones.
+	A.Feel(11, 0.05f);
+	EXPECT(A.TrustIn(11) == 0.0f && A.TrustIn(8) < 0.0f && A.TrustIn(7) > 0.0f);
+	for (int i = 0; i < 20; ++i) A.Feel(7, 0.2f);
+	EXPECT(A.TrustIn(7) == 1.0f);
+
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 9);
+	earth::People Folk(&Eco, 9);
+	for (int i = 0; i < 365 * 10 / 30; ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+	}
+	int Named = 0, Bonded = 0, Remember = 0, LoveDad = 0;
+	for (const earth::Npc& P : Folk.All())
+	{
+		Named += P.Name != 0;
+		Remember += P.RefugeWater > 0.0f;
+		LoveDad += P.Father != 0 && P.TrustIn(P.Father) > 0.0f;
+		for (uint32_t B : P.BondWith) Bonded += B != 0;
+	}
+	EXPECT(Named > 0 && Bonded > 0 && Remember > 0);
+	EXPECT(LoveDad > 0); // Fathers help feed their young children.
+	bool Grieved = false;
+	for (const auto& E : Folk.Firsts()) Grieved = Grieved || E.Text.find(" grieves for ") != std::string::npos;
+	EXPECT(Grieved); // Someone has lost a person they loved.
+	EXPECT(Folk.AverageKindness() > 0.0 && Folk.AverageKindness() < 1.0);
+	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
 }
 
 int main()
 {
+	TestTrust();
 	TestBeliefs();
 	TestInventionRules();
 	TestInventionsHappen();
