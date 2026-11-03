@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -178,6 +179,10 @@ struct EcosystemSettings
 	double PlantGrowthPerDay = 0.03;
 	// CPU threads used to move the animals; 0 uses all cores, 1 runs everything on the caller's thread.
 	int Threads = 0;
+	// Today's real climate (tools/prepare_climate.py): mean temperature in tenths of a degree C and
+	// yearly rain in mm. Without them a rough climate from latitude stands in.
+	const ElevationGrid* Temperature = nullptr;
+	const ElevationGrid* Rain = nullptr;
 };
 
 class Ecosystem
@@ -361,11 +366,30 @@ public:
 		return std::clamp(1.0 - Strength * (1.0 - Summer) * 0.6, 0.0, 1.0);
 	}
 
-	// How wet a place is (0 dry .. 1 wet), from how much it can grow at its best. Stands in for
-	// rivers, lakes and springs until real water data is added.
+	// How wet a place is (0 dry .. 1 wet): its own rain, or a river through it (like the Nile
+	// through the desert).
 	double WaterAt(double Lat, double Lon) const
 	{
-		return std::clamp(Cells[CellIndex(Lat, Lon)].Capacity / std::max(1.0, Settings.PeakPlantsPerKm2) * 1.5, 0.0, 1.0);
+		const int C = CellIndex(Lat, Lon);
+		const double Local = std::clamp(Cells[C].Capacity / std::max(1.0, Settings.PeakPlantsPerKm2) * 1.5, 0.0, 1.0);
+		return std::max(Local, RiverAt(Lat, Lon));
+	}
+
+	// The biggest river within about 30 km (0 none .. 1 a great river).
+	double RiverAt(double Lat, double Lon) const
+	{
+		if (Rivers.empty()) return 0.0;
+		const int R0 = static_cast<int>((90.0 - Lat) * kAltitudeCellsPerDegree);
+		const int C0 = static_cast<int>(std::floor((Lon + 180.0) * kAltitudeCellsPerDegree));
+		float Most = 0.0f;
+		for (int r = std::max(0, R0 - 1); r <= std::min(kAltitudeRows - 1, R0 + 1); ++r)
+		{
+			for (int c = C0 - 1; c <= C0 + 1; ++c)
+			{
+				Most = std::max(Most, Rivers[static_cast<size_t>(r) * kAltitudeCols + static_cast<size_t>((c % kAltitudeCols + kAltitudeCols) % kAltitudeCols)]);
+			}
+		}
+		return Most;
 	}
 
 	// ---- Sharing the land with people -------------------------------------------------------
@@ -567,6 +591,7 @@ public:
 		if (Ar.IsReading())
 		{
 			if (!Ground.empty()) ApplySeaLevel();
+			BuildRivers();
 			IndexStale = true;
 		}
 	}
@@ -579,7 +604,18 @@ public:
 		}
 	}
 
+	// Share of the best possible plant growth (0..1) for a yearly mean temperature and rainfall:
+	// the Miami model (Lieth 1975), growth limited by whichever of warmth and water is shorter.
+	static double Growth(double TempC, double RainMm)
+	{
+		const double Warmth = 1.0 / (1.0 + std::exp(1.315 - 0.119 * TempC));
+		const double Wet = 1.0 - std::exp(-0.000664 * RainMm);
+		return std::clamp(std::min(Warmth, Wet) / 0.8, 0.0, 1.0); // The wettest rainforests are the best there is.
+	}
+
 private:
+	std::vector<float> Rivers; // Per quarter-degree square; rebuilt with the plants, never saved.
+
 	struct PlantCell
 	{
 		double Capacity = 0.0; // kg per km^2 at the best time of year.
@@ -710,10 +746,100 @@ private:
 		{
 			return 0.0;
 		}
+		if (Settings.Temperature && Settings.Rain)
+		{
+			double T = 0.0, Mm = 0.0;
+			ClimateThen(Lat, Lon, T, Mm);
+			return Settings.PeakPlantsPerKm2 * Growth(T, Mm);
+		}
 		const double Desert = std::clamp(1.0 - std::abs(AbsLat - 24.0) / 8.0, 0.0, 1.0) * 0.85;
 		const double Cold = std::clamp((AbsLat - (50.0 - 12.0 * Ice)) / 25.0, 0.0, 1.0) * 0.8;
 		const double High = std::clamp((Height - 2500.0) / 2000.0, 0.0, 1.0);
 		return Settings.PeakPlantsPerKm2 * (1.0 - Desert) * (1.0 - Cold) * (1.0 - High);
+	}
+
+	// The real climate of today, moved back to the time of the run: in an ice age it was colder,
+	// most of all near the poles, and drier (about 6 degrees colder at the peak in the tropics' edge,
+	// up to 12 far north, and a third less rain).
+	void ClimateThen(double Lat, double Lon, double& TempC, double& RainMm) const
+	{
+		const double Ice = IceCover();
+		TempC = Settings.Temperature->Sample(Lat, Lon) / 10.0 - Ice * (4.0 + 8.0 * std::abs(Lat) / 90.0);
+		RainMm = std::max(0.0, Settings.Rain->Sample(Lat, Lon)) * (1.0 - 0.35 * Ice);
+	}
+
+	// Rivers: rain that falls on land runs downhill from square to square, gathering as it goes,
+	// so a river can carry the rain of wet highlands far into a desert.
+	void BuildRivers()
+	{
+		// On the quarter-degree height map, so rivers follow their real valleys.
+		constexpr int FR = kAltitudeRows, FC = kAltitudeCols;
+		Rivers.assign(static_cast<size_t>(FR) * FC, 0.0f);
+		if (Altitude.size() != Rivers.size() || Cells.empty()) return;
+		const size_t N = Rivers.size();
+		std::vector<double> Height(N, -1.0), Flow(N, 0.0);
+		for (int R = 0; R < FR; ++R)
+		{
+			for (int C = 0; C < FC; ++C)
+			{
+				const size_t i = static_cast<size_t>(R) * FC + C;
+				const double Lat = 90.0 - (R + 0.5) / kAltitudeCellsPerDegree;
+				const double Lon = -180.0 + (C + 0.5) / kAltitudeCellsPerDegree;
+				Height[i] = Altitude[i];
+				if (Height[i] <= 0.0) continue;
+				double T = 0.0, Mm = 0.0;
+				if (Settings.Temperature && Settings.Rain) ClimateThen(Lat, Lon, T, Mm);
+				else Mm = Cells[static_cast<size_t>(CellIndex(Lat, Lon))].Capacity / std::max(1.0, Settings.PeakPlantsPerKm2) * 1500.0;
+				// What isn't taken back up by the air: little in hot dry places, most in cool wet ones.
+				Flow[i] = std::max(0.0, Mm - 300.0);
+			}
+		}
+		// Each square drains towards the sea: filling the hollows of the map from the coast
+		// inwards (a "priority flood") gives every land square a way downhill to the sea.
+		std::vector<size_t> Down(N, N), Visited;
+		std::vector<char> Seen(N, 0);
+		using Item = std::pair<double, size_t>;
+		std::priority_queue<Item, std::vector<Item>, std::greater<Item>> Front;
+		auto Neighbours = [&](size_t i, auto&& Do)
+		{
+			const int R = static_cast<int>(i) / FC, C = static_cast<int>(i) % FC;
+			for (int dr = -1; dr <= 1; ++dr)
+			{
+				for (int dc = -1; dc <= 1; ++dc)
+				{
+					const int r = R + dr;
+					if ((dr || dc) && r >= 0 && r < FR) Do(static_cast<size_t>(r) * FC + ((C + dc + FC) % FC));
+				}
+			}
+		};
+		for (size_t i = 0; i < N; ++i)
+		{
+			if (Height[i] > 0.0) continue;
+			Seen[i] = 1;
+			Neighbours(i, [&](size_t j) { if (Height[j] > 0.0 && !Seen[j]) Seen[j] = 1, Front.push({Height[j], j}); });
+		}
+		while (!Front.empty())
+		{
+			const auto [Level, i] = Front.top();
+			Front.pop();
+			Visited.push_back(i);
+			Neighbours(i, [&, Lv = Level, From = i](size_t j)
+			{
+				if (Seen[j] || Height[j] <= 0.0) return;
+				Seen[j] = 1;
+				Down[j] = From;
+				Front.push({std::max(Height[j], Lv + 0.01), j});
+			});
+		}
+		// From the highest squares down, each passes its water on.
+		for (auto It = Visited.rbegin(); It != Visited.rend(); ++It)
+		{
+			const size_t i = *It;
+			// Rain gathered from about 2,000 wet quarter-degree squares (a basin the size of the
+			// Blue Nile's) makes a great river; a few dozen make a stream.
+			Rivers[i] = static_cast<float>(std::clamp((std::log10(Flow[i] + 1.0) - 4.4) / 1.8, 0.0, 1.0));
+			if (Down[i] < N) Flow[Down[i]] += Flow[i];
+		}
 	}
 
 	void BuildPlantCells()
@@ -740,6 +866,7 @@ private:
 				Cell.Plants = Cell.Capacity * 0.7;
 			}
 		}
+		BuildRivers();
 	}
 
 	bool Habitable(const Species& S, double Lat, double Lon) const

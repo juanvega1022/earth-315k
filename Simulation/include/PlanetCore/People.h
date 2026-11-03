@@ -14,6 +14,7 @@
 
 #include "Archive.h"
 #include "Ecosystem.h"
+#include "Hominins.h"
 #include "Beliefs.h"
 #include "Inventions.h"
 #include "Parallel.h"
@@ -171,6 +172,9 @@ struct Npc
 	float RefugeLon = 0.0f;
 	float RefugeWater = 0.0f; // How wet it was, fading slowly as the memory grows old.
 	float Grief = 0.0f;       // Sorrow for someone they loved who died; it weighs on them and fades.
+	uint8_t Kind = 0;         // 0 an NPC (early Homo sapiens); otherwise one of OtherKinds().
+	float OtherShare = 0.0f;  // Share of their ancestry from the other kinds of human.
+	float BabyFatherShare = 0.0f; // The same for the father of the child she carries.
 
 	float TrustIn(uint32_t Other) const
 	{
@@ -238,6 +242,7 @@ struct Npc
 		if (Ar.Version >= 4) Ar.Io(Name), Ar.Io(BondWith), Ar.Io(Trust), Ar.Io(Leads);
 		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
 		if (Ar.Version >= 6) Ar.Io(Grief);
+		if (Ar.Version >= 8) Ar.Io(Kind), Ar.Io(OtherShare), Ar.Io(BabyFatherShare);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -298,6 +303,8 @@ struct Camp
 	// The band's calls and words: each slot drifts to a new random word now and then, and bands that
 	// meet borrow words from each other. Bands sharing fewer than half can't understand each other.
 	std::array<uint16_t, kWords> Words{};
+	float Store = 0.0f; // Kg of dried and smoked food put by for lean times.
+	uint8_t Kind = 0;   // The kind of human the band started as.
 	int Neighbour = 0; // Id of a camp within reach this step, 0 if none.
 	// For Step(): the wettest place within reach, and the squares the band gathers in and how
 	// much food they hold on average.
@@ -323,6 +330,8 @@ struct Camp
 		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
 		if (Ar.Version >= 2) Ar.Io(Met), Ar.Io(Inventions), Ar.Io(Lexicon);
 		if (Ar.Version >= 3) Ar.Io(Faith), Ar.Io(DeathsLately);
+		if (Ar.Version >= 7) Ar.Io(Store);
+		if (Ar.Version >= 8) Ar.Io(Kind);
 		if (Ar.Version >= 4) Ar.Io(Leader);
 	}
 };
@@ -347,6 +356,7 @@ struct Notable
 	std::string Death;
 	double LastLat = 0.0;
 	double LastLon = 0.0;
+	uint8_t Kind = 0;
 
 	template <class A>
 	void Serialize(A& Ar)
@@ -354,6 +364,7 @@ struct Notable
 		Ar.Io(Id), Ar.Io(Mother), Ar.Io(Father), Ar.Io(Female), Ar.Io(Generation), Ar.Io(Brain), Ar.Io(BornYear), Ar.Io(Speech);
 		Ar.Io(Deeds), Ar.Io(Partners), Ar.Io(Children), Ar.Io(Dead), Ar.Io(Death), Ar.Io(LastLat), Ar.Io(LastLon);
 		if (Ar.Version >= 4) Ar.Io(Name);
+		if (Ar.Version >= 8) Ar.Io(Kind);
 	}
 };
 
@@ -393,7 +404,7 @@ struct BeliefRecord
 	double Lon = 0.0;
 	uint16_t Word = 0; // What its first believers called it.
 	int Peak = 0;      // Most bands that ever held it at once.
-	int NextMark = 10; // Bands it must reach for the next "religion" event.
+	int NextMark = 50; // Bands it must reach for the next event (the first makes it a religion).
 	int Origin = 0;    // 0: from people wondering, as with inventions.
 
 	template <class A>
@@ -422,6 +433,10 @@ struct PeopleSettings
 	// If everyone dies, a new band arrives at the start, born with the instincts of the most
 	// successful NPCs so far (lightly mutated), so the run goes on and keeps what evolved.
 	bool NewBandWhenGone = true;
+	// Neanderthals, Denisovans and the other kinds of human alive at the start, in their real homes.
+	// shortcut: off by default until tuned; in tests Neanderthals die out within centuries and
+	// Homo naledi spreads across Africa, neither like the real record.
+	bool OtherHumans = false;
 	// Chance a year that one person of average wits hits on a simple skill on their own; deeper
 	// skills are 4 times rarer per step down the tree.
 	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
@@ -429,7 +444,7 @@ struct PeopleSettings
 	double InventionTriesPerYear = 2e-4;
 	// Chance a year that one person of average wits, in a band that can talk, explains something
 	// with a new belief; hardship makes it up to four times likelier.
-	double BeliefTriesPerYear = 5e-5;
+	double BeliefTriesPerYear = 1e-5; // Run 4 had 50 religions 3,000 years after the first belief at 5e-5.
 	// CPU threads for Step(); 0 uses all cores. Results are the same for any number.
 	int Threads = 0;
 };
@@ -454,6 +469,12 @@ public:
 	const std::vector<BeliefRecord>& AllBeliefs() const { return BeliefLog; }
 	const std::vector<EcoEvent>& Firsts() const { return Events; }
 	int Alive() const { return static_cast<int>(Npcs.size()); }
+	// How many of one kind of human are alive.
+	int AliveOfKind(int Kind) const
+	{
+		return static_cast<int>(std::count_if(Npcs.begin(), Npcs.end(), [Kind](const Npc& P) { return P.Kind == Kind; }));
+	}
+
 	int BandCount() const { return static_cast<int>(Camps.size()); }
 	int MaxGeneration() const { return HighestGeneration; }
 	long long TotalBirths() const { return Births; }
@@ -502,6 +523,8 @@ public:
 		if (Ar.Version >= 4) Ar.Io(KnownNames), Ar.Io(FirstLeader);
 		if (Ar.Version >= 5) Ar.Io(AnyRefuge);
 		if (Ar.Version >= 6) Ar.Io(AnyGrief);
+		if (Ar.Version >= 7) Ar.Io(AnyStore), Ar.Io(AnyToolmaker);
+		if (Ar.Version >= 8) Ar.Io(OthersStarted), Ar.Io(AnyMixedChild), Ar.Io(MetKinds);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -532,7 +555,8 @@ public:
 		char Line[256];
 		for (const Notable* N : List)
 		{
-			std::snprintf(Line, sizeof(Line), "#%u, a %s of generation %d with a %d-neuron brain, born about year %.0f\n", N->Id, N->Female ? "woman" : "man",
+			std::snprintf(Line, sizeof(Line), "#%u, a %s%s of generation %d with a %d-neuron brain, born about year %.0f\n", N->Id,
+				N->Kind ? (std::string(OtherKinds()[N->Kind].Name) + " ").c_str() : "", N->Female ? "woman" : "man",
 				N->Generation, N->Brain, N->BornYear);
 			Out += (N->Name ? PersonName(N->Name) + " " : std::string()) + Line;
 			Out += "  Mother " + Who(N->Mother) + ", father " + Who(N->Father) + "\n";
@@ -666,7 +690,7 @@ public:
 			for (uint32_t F : C.Faith) Bands[F] += 1;
 		}
 		int N = 0;
-		for (const auto& [Id, Count] : Bands) N += Count >= 10;
+		for (const auto& [Id, Count] : Bands) N += Count >= kReligionBands;
 		return N;
 	}
 	int InventionsKnown() const
@@ -698,6 +722,7 @@ public:
 	}
 	static bool Understand(const Camp& A, const Camp& B)
 	{
+		if (A.Kind != B.Kind) return false;
 		int Shared = 0;
 		for (int w = 0; w < kWords; ++w) Shared += A.Words[w] == B.Words[w];
 		return Shared * 2 >= kWords;
@@ -1077,6 +1102,7 @@ public:
 			P.Pleasure = 0.0f;
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 		});
+		StoreFood(Carer, Spare, Days);
 		for (size_t i = 0; i < Count; ++i)
 		{
 			MaybeConceive(i, Chosen[i] >= 0 && Dice.Chance(OverDays(Shares[i][static_cast<int>(Action::Socialize)], Days)), Days);
@@ -1142,6 +1168,11 @@ private:
 	uint32_t FirstLeader = 0;
 	bool AnyRefuge = false;
 	bool AnyGrief = false;
+	bool AnyStore = false;
+	bool AnyToolmaker = false;
+	bool OthersStarted = false;
+	bool AnyMixedChild = false;
+	uint32_t MetKinds = 0;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1196,13 +1227,14 @@ private:
 	// False if everyone is gone and no new band comes.
 	bool RestartIfGone()
 	{
-		if (!Npcs.empty())
+		if (Settings.OtherHumans && !OthersStarted && !Npcs.empty()) StartOthers();
+		if (std::any_of(Npcs.begin(), Npcs.end(), [](const Npc& P) { return P.Kind == 0; }))
 		{
 			return true;
 		}
 		if (!Settings.NewBandWhenGone)
 		{
-			return false;
+			return !Npcs.empty();
 		}
 		StartBand();
 		AddEvent("A new band of " + std::to_string(Settings.StartCount) + " arrives in East Africa, born with the instincts of the most successful of those before (band " +
@@ -1654,10 +1686,12 @@ private:
 			Camp New;
 			New.Id = NextCampId++;
 			New.Words = Camps[c].Words;
+			New.Kind = Camps[c].Kind;
 			New.Met = Camps[c].Met;
 			New.Inventions = Camps[c].Inventions;
 			New.Lexicon = Camps[c].Lexicon;
-			New.Faith = Camps[c].Faith;
+			// The ones who leave don't always carry every belief with them.
+			for (uint32_t F : Camps[c].Faith) if (Dice.Chance(0.85)) New.Faith.push_back(F);
 			New.Cohesion = Camps[c].Cohesion;
 			MaybeSchism(New);
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
@@ -1734,6 +1768,12 @@ private:
 					DistanceKm(Camps[a].Lat, Camps[a].Lon, Camps[b].Lat, Camps[b].Lon) > 15.0)
 				{
 					continue;
+				}
+				// Bands of different kinds of human mostly keep apart; now and then they join.
+				if (Camps[a].Kind != Camps[b].Kind)
+				{
+					NoteMeeting(Camps[a], Camps[b]);
+					if (!Dice.Chance(0.05)) continue;
 				}
 				for (int i : Camps[b].Members)
 				{
@@ -1982,7 +2022,7 @@ private:
 					C.ScoutLon = Lo;
 					P.Pleasure += 0.1f; // Finding somewhere good feels good.
 				}
-				NoteRegion(La, Lo, &P);
+				if (P.Kind == 0) NoteRegion(La, Lo, &P);
 			}
 			P.Fatigue += 0.25f;
 			break;
@@ -2113,7 +2153,7 @@ private:
 		{
 			Room *= 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
 		}
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room, Days)))
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
 		{
 			return;
 		}
@@ -2128,7 +2168,8 @@ private:
 			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id)
 			{
 				// Couples tend to stay together: the father of her last child comes first if he's still here.
-				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0);
+				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0) -
+					(Q.Kind != P.Kind ? 0.8 : 0.0); // Seldom someone of another kind of human.
 				if (Mate < 0 || Score > Best)
 				{
 					Best = Score;
@@ -2146,6 +2187,13 @@ private:
 		P.PregnantDays = 0.0;
 		P.BabyFather = Npcs[Mate].Id;
 		P.BabyFatherGenes = Npcs[Mate].Genes;
+		P.BabyFatherShare = Npcs[Mate].OtherShare;
+		if (Npcs[Mate].Kind != P.Kind && !AnyMixedChild)
+		{
+			AnyMixedChild = true;
+			AddEvent(PersonName(P.Name) + ", " + KindName(P.Kind) + ", and " + PersonName(Npcs[Mate].Name) + ", " + KindName(Npcs[Mate].Kind) +
+				", have a child together: the first child of two kinds of human");
+		}
 	}
 
 	void NoteHunt(int Kind, int Party)
@@ -2433,6 +2481,35 @@ private:
 		return Food - Eat;
 	}
 
+	// Planning ahead: bands that know how to dry and smoke food put by what they can't carry, and
+	// draw on it when people go hungry, so a good season tides them over a lean one.
+	// shortcut: only in multi-day steps (long runs); the daily viewer step keeps no store.
+	void StoreFood(const std::vector<int>& Carer, const std::vector<float>& Spare, int Days)
+	{
+		constexpr int kDrying = 15;
+		const float Keep = static_cast<float>(std::pow(0.995, Days)); // Dried food lasts months, not years.
+		for (Camp& C : Camps) C.Store *= Keep;
+		for (size_t i = 0; i < Npcs.size() && i < Carer.size(); ++i)
+		{
+			Npc& P = Npcs[i];
+			Camp& C = Camps[CampSlot(P.Camp)];
+			if (!Knows(C.Known, kDrying)) continue;
+			if (Carer[i] < 0) C.Store += std::max(0.0f, Spare[i] * 0.85f - P.CarriedKg) * 0.5f; // Half survives drying.
+			C.Store = std::min(C.Store, 200.0f * static_cast<float>(C.Members.size()));
+			if (P.Energy < 0.4f && C.Store > 0.0f)
+			{
+				const float Take = std::min(C.Store, std::max(0.0f, 10.0f * P.Own.Carry - P.CarriedKg));
+				C.Store -= Take;
+				P.CarriedKg += Take;
+				if (Take > 0.0f && !AnyStore)
+				{
+					AnyStore = true;
+					AddEvent(PersonName(P.Name) + " eats from food their band dried and stored in better days: the first planning for a lean season");
+				}
+			}
+		}
+	}
+
 	// A young child over Days days: fed from its carer's leftovers, then the camp's, then its carer's own reserves.
 	void BeCaredForDays(size_t Index, size_t CarerIndex, std::vector<float>& Spare, int Days)
 	{
@@ -2492,7 +2569,11 @@ private:
 		const std::vector<Skill>& List = AllSkills();
 		const int Count = static_cast<int>(List.size());
 		std::array<double, 64> TierOdds{};
-		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1);
+		// Each tier deeper is 20 times rarer: run 3 reached farming 270,000 years too early at 10.
+		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(20.0, List[k].Tier - 1);
+		// Planting needs a warm, steady climate: in an ice age, seasons swing too hard to bet on a crop.
+		constexpr int kPlanting = 25;
+		if (Eco->IceCover() > 0.15) TierOdds[kPlanting] = 0.0;
 		for (Npc& P : Npcs)
 		{
 			if (P.AgeYears() < 5.0)
@@ -2694,6 +2775,23 @@ private:
 				Knack[k] = Wits * Wits * P.Genes->Curiosity / 0.6;
 				Sum += Knack[k];
 			}
+			// The first specialists: a big band with food put by can feed its most inventive member to
+			// spend their days making tools instead of foraging.
+			const double Feed = Days * 1.0; // A kg of stored food a day.
+			if (C.Members.size() >= 20 && C.Store > Feed + 2.0f * C.Members.size() && Sum > 0.0)
+			{
+				const size_t Best = static_cast<size_t>(std::max_element(Knack.begin(), Knack.end()) - Knack.begin());
+				Sum += Knack[Best] * 3.0;
+				Knack[Best] *= 4.0;
+				C.Store -= static_cast<float>(Feed);
+				const Npc& Maker = Npcs[static_cast<size_t>(C.Members[Best])];
+				if (!AnyToolmaker)
+				{
+					AnyToolmaker = true;
+					AddEvent(PersonName(Maker.Name) + " becomes the first toolmaker: their band feeds them from its stores while they work");
+					Remember(Maker, "became the first toolmaker, fed by their band from its stored food so they could spend their days making things");
+				}
+			}
 			const double Tries = Sum * Settings.InventionTriesPerYear * Days / 365.0;
 			int N = static_cast<int>(Tries);
 			if (Dice.Chance(Tries - N)) ++N;
@@ -2794,7 +2892,7 @@ private:
 				const Npc& P = Npcs[static_cast<size_t>(i)];
 				if (Hungriest < 0 || P.Energy < Npcs[static_cast<size_t>(Hungriest)].Energy) Hungriest = i;
 				if (Richest < 0 || P.CarriedKg > Npcs[static_cast<size_t>(Richest)].CarriedKg) Richest = i;
-				if (!P.IsChild() && (Leader < 0 || P.Reputation > Npcs[static_cast<size_t>(Leader)].Reputation)) Leader = i;
+				if (P.AgeYears() >= 18.0 && (Leader < 0 || P.Reputation > Npcs[static_cast<size_t>(Leader)].Reputation)) Leader = i;
 				if (P.Id == C.Leader) Sitting = i;
 			}
 			// A leader keeps the role until someone is clearly more trusted, or they lose most of it.
@@ -2997,6 +3095,11 @@ private:
 					}
 				}
 			}
+			// Without anything to keep it alive, a belief is now and then let go (about once in 2,000 years).
+			if (!C.Faith.empty() && Dice.Chance(OverDays(1.0 / (2000.0 * 365.0), Days)))
+			{
+				C.Faith.erase(C.Faith.begin() + static_cast<std::ptrdiff_t>(Dice.Next() % C.Faith.size()));
+			}
 			// Neighbours' beliefs spread, more easily between bands that understand each other and
 			// less into bands already held together by their own.
 			if (C.Neighbour != 0)
@@ -3018,7 +3121,7 @@ private:
 	{
 		for (uint32_t& F : New.Faith)
 		{
-			if (!Dice.Chance(0.05)) continue;
+			if (!Dice.Chance(0.02)) continue;
 			const BeliefRecord Old = BeliefOf(F);
 			int Claim = Old.Claim, Practice = Old.Practice;
 			if (Dice.Chance(0.5)) Claim = static_cast<int>(Dice.Next() % BeliefClaims().size());
@@ -3047,10 +3150,11 @@ private:
 		{
 			const int N = Bands[B.Id];
 			B.Peak = std::max(B.Peak, N);
+			if (B.NextMark < kReligionBands) B.NextMark = kReligionBands; // Saves from before the bar was raised.
 			if (N >= B.NextMark)
 			{
 				AddEvent("The belief \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ") is now held by " + std::to_string(N) +
-					" bands" + (B.NextMark == 10 ? ": a religion is born" : ""));
+					" bands" + (B.NextMark == kReligionBands ? ": a religion is born" : ""));
 				while (B.NextMark <= N) B.NextMark *= 10;
 			}
 		}
@@ -3101,6 +3205,7 @@ private:
 			N.Mother = P.Mother;
 			N.Father = P.Father;
 			N.Female = P.Female;
+			N.Kind = P.Kind;
 			N.Generation = P.Generation;
 			N.Brain = P.BrainSize();
 			N.BornYear = Eco->Years() - P.AgeYears();
@@ -3187,7 +3292,8 @@ private:
 		const double Far = std::clamp((std::abs(P.Lat) - 30.0) / 30.0, 0.0, 1.0);
 		const double Cold = Far * (0.5 + 0.5 * (1.0 - Eco->GrowingSeason(P.Lat)));
 		const float Warmth = Camps[CampSlot(P.Camp)].Effects.Warmth;
-		return 0.0015f * static_cast<float>(P.BrainSize() - kBrainHidden) + static_cast<float>(0.12 * Cold) * (1.0f - Warmth);
+		const HomininKind& K = OtherKinds()[P.Kind];
+		return 0.0015f * static_cast<float>(P.BrainSize() - kBrainHidden) + static_cast<float>(0.12 * Cold) * (1.0f - Warmth) * (1.0f - K.ColdHardy) + K.Appetite;
 	}
 
 	// How good an NPC feels right now; learning tries to make this go up.
@@ -3271,6 +3377,8 @@ private:
 				Baby.Id = NextId++;
 				Baby.Mother = P.Id;
 				Baby.Father = P.BabyFather;
+				Baby.Kind = P.Kind; // Raised in its mother's band, as one of her people.
+				Baby.OtherShare = 0.5f * (P.OtherShare + P.BabyFatherShare);
 				Baby.Female = Dice.Chance(0.5);
 				Baby.Camp = P.Camp;
 				Baby.Lat = P.Lat;
@@ -3364,7 +3472,7 @@ private:
 		First.Lat = Settings.StartLat;
 		First.Lon = Settings.StartLon;
 		for (uint16_t& W : First.Words) W = static_cast<uint16_t>(Dice.Next());
-		Camps.assign(1, First);
+		Camps.push_back(First);
 
 		const Genome Base = InstinctGenome();
 		for (int i = 0; i < Settings.StartCount; ++i)
@@ -3395,8 +3503,71 @@ private:
 		IndexCamps();
 	}
 
+	// The other kinds of human alive at this point in the run, a few bands each in their real homes.
+	void StartOthers()
+	{
+		OthersStarted = true;
+		const double Ago = Eco->YearsAgo();
+		const Genome Base = InstinctGenome();
+		for (size_t k = 1; k < OtherKinds().size(); ++k)
+		{
+			const HomininKind& K = OtherKinds()[k];
+			if (Ago < K.LastYearsAgo) continue;
+			for (const auto& [Lat, Lon] : K.Homes)
+			{
+				if (!Livable(Lat, Lon)) continue;
+				Camp C;
+				C.Id = NextCampId++;
+				C.Kind = static_cast<uint8_t>(k);
+				C.Lat = Lat;
+				C.Lon = Lon;
+				for (uint16_t& W : C.Words) W = static_cast<uint16_t>(Dice.Next());
+				Camps.push_back(C);
+				for (int i = 0; i < Settings.StartCount; ++i)
+				{
+					Npc P;
+					P.Id = NextId++;
+					P.Name = static_cast<uint16_t>(Dice.Next());
+					P.Kind = static_cast<uint8_t>(k);
+					P.OtherShare = 1.0f;
+					for (int Sk : K.Skills) P.Skills |= SkillSet(1) << Sk;
+					P.Own = EffectsOf(P.Skills);
+					P.Female = i % 2 == 0;
+					P.AgeDays = Dice.Range(14.0, 35.0) * 365.0;
+					Genome G = Mutate(Base, 0.3f);
+					for (int n = 0; n < K.FewerNeurons && G.Hidden() > 4; ++n) G.RemoveNeuron(G.Hidden() - 1);
+					P.Genes = std::make_shared<const Genome>(std::move(G));
+					P.FitBrain();
+					P.Camp = C.Id;
+					P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
+					P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
+					P.OffsetLon = static_cast<float>(Dice.Range(-0.04, 0.04));
+					P.Lat = Lat + P.OffsetLat;
+					P.Lon = Lon + P.OffsetLon;
+					Npcs.push_back(P);
+				}
+			}
+			AddEvent(std::string(K.Plural) + " live here too, in their own lands");
+		}
+		IndexCamps();
+	}
+
+	static std::string KindName(int Kind) { return Kind ? std::string("a ") + OtherKinds()[static_cast<size_t>(Kind)].Name : "an NPC"; }
+
+	// The first time NPCs and each other kind of human come face to face.
+	void NoteMeeting(const Camp& A, const Camp& B)
+	{
+		const int Other = A.Kind ? A.Kind : B.Kind;
+		if ((A.Kind && B.Kind) || ((MetKinds >> Other) & 1u)) return;
+		MetKinds |= 1u << Other;
+		char At[48];
+		std::snprintf(At, sizeof(At), " near %.0f, %.0f", A.Lat, A.Lon);
+		AddEvent(std::string("NPCs meet ") + OtherKinds()[static_cast<size_t>(Other)].Plural + " for the first time" + At);
+	}
+
 	void RememberIfSuccessful(const Npc& P)
 	{
+		if (P.Kind != 0) return; // New NPC bands take after NPCs only.
 		const double Score = P.Children * 100.0 + P.AgeYears();
 		if (HallOfFame.size() >= 10 && Score <= HallOfFame.back().first)
 		{
@@ -3520,7 +3691,7 @@ private:
 		}
 		for (const Camp& C : Camps)
 		{
-			NoteRegion(C.Lat, C.Lon, C.Members.empty() ? nullptr : &Npcs[C.Members[0]]);
+			if (C.Kind == 0) NoteRegion(C.Lat, C.Lon, C.Members.empty() ? nullptr : &Npcs[C.Members[0]]);
 		}
 		for (const Npc& P : Npcs)
 		{

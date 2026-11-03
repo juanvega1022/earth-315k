@@ -81,6 +81,7 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--seed") && HasValue) Seed = std::strtoull(Argv[++i], nullptr, 10);
 		else if (!std::strcmp(Argv[i], "--data") && HasValue) DataDir = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--csv") && HasValue) CsvPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--other-humans")) PeopleCfg.OtherHumans = true;
 		else if (!std::strcmp(Argv[i], "--sea-level") && HasValue) SeaLevel = std::atof(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--brain") && HasValue) BrainPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--no-people")) WithPeople = false;
@@ -100,7 +101,7 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--resume") && HasValue) ResumePath = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
@@ -109,6 +110,7 @@ int main(int Argc, char** Argv)
 			std::printf("  --resume F      carry on from a save instead of starting over; --years is then the year to run to\n");
 			std::printf("  --report F      write an HTML report with charts and a scorecard against real history (needs --csv)\n");
 			std::printf("  --atlas F       keep a map of languages, beliefs and people over time in F (an HTML page) and F.js\n");
+			std::printf("  --other-humans  add Neanderthals, Denisovans and other kinds of human in their real homes (experimental)\n");
 			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
 			return 1;
 		}
@@ -121,6 +123,18 @@ int main(int Argc, char** Argv)
 		return 1;
 	}
 
+	// Real climate, if tools/prepare_climate.py has been run; otherwise a rough one from latitude.
+	earth::ElevationGrid Temperature, Rain;
+	if (earth::LoadElevationGrid(DataDir, "temperature", Temperature) && earth::LoadElevationGrid(DataDir, "rain", Rain))
+	{
+		Settings.Temperature = &Temperature;
+		Settings.Rain = &Rain;
+		std::printf("Using the real climate in %s (temperature and rain)\n", DataDir.c_str());
+	}
+	else
+	{
+		std::printf("No climate data in %s: using a rough climate from latitude. Run tools/prepare_climate.py for the real one.\n", DataDir.c_str());
+	}
 	Settings.SeaLevelMeters = SeaLevel;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), Seed, Settings);
 	const auto& Species = Eco.GetSpecies();
@@ -197,7 +211,9 @@ int main(int Argc, char** Argv)
 		Csv.open(CsvPath);
 		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m,languages";
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
-		Csv << ",inventions,beliefs,religions,kindness,curiosity\n";
+		Csv << ",inventions,beliefs,religions,kindness,curiosity";
+		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
+		Csv << '\n';
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -220,7 +236,9 @@ int main(int Argc, char** Argv)
 				<< Folk.AverageBrain() << ',' << Folk.BiggestBrain() << ',' << Eco.SeaLevelChange() << ',' << Folk.Languages();
 			for (size_t s = 0; s < Species.size(); ++s) Csv << ',' << static_cast<long long>(Eco.CountOf(static_cast<int>(s)));
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
-				<< Folk.AverageCuriosity() << '\n';
+				<< Folk.AverageCuriosity();
+			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
+			Csv << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
@@ -235,6 +253,13 @@ int main(int Argc, char** Argv)
 			{
 				std::printf("            %d skills and %d inventions known, brains of %.1f hidden neurons on average (biggest %d), %d languages, %d beliefs (%d religions)\n",
 					Folk.SkillsKnown(), Folk.InventionsKnown(), Folk.AverageBrain(), Folk.BiggestBrain(), Folk.Languages(), Folk.BeliefsHeld(), Folk.Religions());
+				std::string Others;
+				for (size_t k = 1; k < earth::OtherKinds().size(); ++k)
+				{
+					const int N = Folk.AliveOfKind(static_cast<int>(k));
+					if (N > 0) Others += (Others.empty() ? "" : ", ") + std::to_string(N) + " " + earth::OtherKinds()[k].Plural;
+				}
+				if (!Others.empty()) std::printf("            NPCs: %d; other kinds of human: %s\n", Folk.AliveOfKind(0), Others.c_str());
 			}
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{

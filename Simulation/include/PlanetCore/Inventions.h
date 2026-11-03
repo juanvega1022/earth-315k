@@ -113,21 +113,23 @@ struct Working
 inline const std::vector<Working>& AllWorkings()
 {
 	enum { Forage, Hunt, Predators, Children, Warmth, Travel, Land, Carry, Teaching };
+	// Each way of working needs the skill it grows from, so inventions follow the skill tree
+	// (fired pots need pottery, walls need shelters) instead of running ahead of it.
 	static const std::vector<Working> List = {
 		{"struck {A} blade", Edge, .5f, -1, 0, -1, Hunt, .05f},
-		{"{A} point tied to a shaft of {B}", Edge, .5f, Long, .5f, -1, Hunt, .12f},
-		{"{B} edge set with {A}", Sticky, .5f, Edge, .5f, -1, Hunt, .06f},
-		{"{A} snare tied with {B}", Flex, .5f, Fiber, .5f, -1, Hunt, .08f},
+		{"{A} point tied to a shaft of {B}", Edge, .5f, Long, .5f, 12, Hunt, .12f},
+		{"{B} edge set with {A}", Sticky, .5f, Edge, .5f, 12, Hunt, .06f},
+		{"{A} snare tied with {B}", Flex, .5f, Fiber, .5f, 14, Hunt, .08f},
 		{"{A} hand stone on a {B} slab", Hard, .6f, Heavy, .5f, -1, Forage, .08f},
 		{"twisted {A} cord", Fiber, .5f, -1, 0, -1, Carry, .10f},
-		{"{A} woven over {B}", Fiber, .6f, Flex, .4f, -1, Carry, .15f},
-		{"fired {A} pot", Mould, .5f, -1, 0, 2, Carry, .20f},
-		{"{A} cloak scraped with {B}", Warm, .5f, Edge, .5f, -1, Warmth, .12f},
-		{"stacked {A} wall", Heavy, .5f, -1, 0, -1, Predators, -.15f},
-		{"{A} float shaped with {B}", Floats, .5f, Edge, .5f, -1, Travel, .40f},
-		{"boiling water in {A}", Watertight, .5f, -1, 0, 2, Children, -.06f},
+		{"{A} woven over {B}", Fiber, .6f, Flex, .4f, 5, Carry, .15f},
+		{"fired {A} pot", Mould, .5f, -1, 0, 28, Carry, .20f},
+		{"{A} cloak scraped with {B}", Warm, .5f, Edge, .5f, 9, Warmth, .12f},
+		{"stacked {A} wall", Heavy, .5f, -1, 0, 10, Predators, -.15f},
+		{"{A} float shaped with {B}", Floats, .5f, Edge, .5f, 6, Travel, .40f},
+		{"boiling water in {A}", Watertight, .5f, -1, 0, 8, Children, -.06f},
 		{"burning {A} to clear land", Burns, .6f, -1, 0, 2, Land, .10f},
-		{"{A} marks on {B}", Color, .5f, Hard, .3f, -1, Teaching, .08f},
+		{"{A} marks on {B}", Color, .5f, Hard, .3f, 20, Teaching, .08f},
 	};
 	return List;
 }

@@ -326,10 +326,12 @@ static void TestInventionRules()
 	EXPECT(Flint >= 0 && Clay >= 0 && Wood >= 0);
 	EXPECT(earth::InventionStrength(0, Flint, -1, 0) > 0.8f); // A struck flint blade.
 	EXPECT(earth::InventionStrength(0, Clay, -1, 0) == 0.0f); // Clay won't take an edge.
-	EXPECT(earth::InventionStrength(1, Flint, Wood, 0) > 0.0f); // A flint point on a wooden shaft...
-	EXPECT(earth::InventionStrength(1, Wood, Flint, 0) == 0.0f); // ...but not the other way round.
-	EXPECT(earth::InventionStrength(7, Clay, -1, 0) == 0.0f); // Fired pots need fire first.
-	EXPECT(earth::InventionStrength(7, Clay, -1, earth::SkillSet(1) << 2) > 0.0f);
+	const earth::SkillSet Spears = earth::SkillSet(1) << 12;
+	EXPECT(earth::InventionStrength(1, Flint, Wood, 0) == 0.0f); // Hafted points grow out of wooden spears...
+	EXPECT(earth::InventionStrength(1, Flint, Wood, Spears) > 0.0f); // ...a flint point on a wooden shaft...
+	EXPECT(earth::InventionStrength(1, Wood, Flint, Spears) == 0.0f); // ...but not the other way round.
+	EXPECT(earth::InventionStrength(7, Clay, -1, earth::SkillSet(1) << 2) == 0.0f); // Fired pots need pottery, not just fire.
+	EXPECT(earth::InventionStrength(7, Clay, -1, earth::SkillSet(1) << 28) > 0.0f);
 	const uint32_t Id = earth::InventionId(1, Flint, Wood);
 	EXPECT(earth::WorkingOf(Id) == 1 && earth::MaterialA(Id) == Flint && earth::MaterialB(Id) == Wood);
 	EXPECT(earth::InventionGloss(Id) == "flint point tied to a shaft of wood");
@@ -342,7 +344,7 @@ static void TestInventionsHappen()
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6);
 	earth::PeopleSettings Settings;
-	Settings.InventionTriesPerYear = 0.5;
+	Settings.InventionTriesPerYear = 2.0; // Few ways of working are open before any skills are known.
 	earth::People Folk(&Eco, 6, Settings);
 	for (int i = 0; i < 365 * 3 / 30; ++i)
 	{
@@ -363,6 +365,7 @@ static void TestSaveAndResume()
 	earth::PeopleSettings Settings;
 	Settings.InventionTriesPerYear = 0.2;
 	Settings.Threads = 2;
+	Settings.OtherHumans = true; // Their bands, kinds and skills must survive a save too.
 	earth::Ecosystem EcoA(&Grid, earth::DefaultSpecies(), 7);
 	earth::People FolkA(&EcoA, 7, Settings);
 	for (int i = 0; i < 12; ++i)
@@ -434,7 +437,9 @@ static void TestTrust()
 
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 9);
-	earth::People Folk(&Eco, 9);
+	earth::PeopleSettings WithOthers;
+	WithOthers.OtherHumans = true;
+	earth::People Folk(&Eco, 9, WithOthers);
 	for (int i = 0; i < 365 * 10 / 30; ++i)
 	{
 		Eco.Step(30);
@@ -454,11 +459,42 @@ static void TestTrust()
 	for (const auto& E : Folk.Firsts()) Grieved = Grieved || E.Text.find(" grieves for ") != std::string::npos;
 	EXPECT(Grieved); // Someone has lost a person they loved.
 	EXPECT(Folk.AverageKindness() > 0.0 && Folk.AverageKindness() < 1.0);
+	// Other kinds of human start in their homes (Atapuerca, the Rhine... lie on this planet's land).
+	int Others = 0;
+	for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Others += Folk.AliveOfKind(static_cast<int>(k));
+	EXPECT(Others > 0 && Folk.AliveOfKind(0) > 0);
 	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
+}
+
+// Bands that learn to dry food store it for lean times, and stores let them feed a toolmaker.
+static void TestStores()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::EcosystemSettings EcoSettings;
+	EcoSettings.Threads = 1;
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
+	earth::PeopleSettings Settings;
+	Settings.DiscoveryPerYear = 0.05; // Skills come within years, so drying is soon known.
+	Settings.Threads = 1;             // The same world on every machine.
+	earth::People Folk(&Eco, 6, Settings);
+	bool Stored = false, Toolmaker = false;
+	// A toolmaker needs a band of 20 with food put by, which can take a few generations.
+	for (int i = 0; i < 365 * 100 / 30 && !(Stored && Toolmaker); ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+		for (const auto& E : Folk.Firsts())
+		{
+			Stored = Stored || E.Text.find("first planning for a lean season") != std::string::npos;
+			Toolmaker = Toolmaker || E.Text.find("first toolmaker") != std::string::npos;
+		}
+	}
+	EXPECT(Stored && Toolmaker);
 }
 
 int main()
 {
+	TestStores();
 	TestTrust();
 	TestBeliefs();
 	TestInventionRules();

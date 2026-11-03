@@ -41,6 +41,8 @@ inline const std::vector<const char*>& BeliefClaimsPlural()
 	return List;
 }
 inline constexpr int kForbidden = 3;
+// A belief held by this many bands is a religion: far more than one band and its offshoots.
+inline constexpr int kReligionBands = 50;
 
 struct Practice
 {
