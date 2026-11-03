@@ -63,6 +63,12 @@ struct AnimalBrain
 	std::array<float, kAnimalHidden * kAnimalOutputs> W2{};
 	std::array<float, kAnimalOutputs> B2{};
 
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(W1), Ar.Io(B1), Ar.Io(W2), Ar.Io(B2);
+	}
+
 	void Think(const float* In, float* Hidden, float* Out) const
 	{
 		for (int h = 0; h < kAnimalHidden; ++h)
@@ -123,6 +129,13 @@ struct AnimalGroup
 	std::array<float, kAnimalHidden> LastHidden{};
 	std::array<float, kAnimalOutputs> LastOutputs{};
 	int LastMove = static_cast<int>(AnimalMove::Stayed);
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(SpeciesIndex), Ar.Io(Id), Ar.Io(Generation), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(Count), Ar.Io(WellFed), Ar.Io(Heading);
+		Ar.Io(Taken), Ar.Io(Hunted), Ar.Io(Brain), Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastOutputs), Ar.Io(LastMove);
+	}
 };
 
 // What a patch of plants is doing, for viewing tools.
@@ -142,6 +155,12 @@ struct EcoEvent
 {
 	double Year = 0.0;
 	std::string Text;
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Year), Ar.Io(Text);
+	}
 };
 
 struct EcosystemSettings
@@ -538,6 +557,19 @@ public:
 		DayNumber += Days;
 	}
 
+	// Everything that changes as the world runs; the rest is rebuilt from the elevation data.
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Random), Ar.Io(NextGroupId), Ar.Io(Cells), Ar.Io(AnimalGroups), Ar.Io(SpeciesAlive), Ar.Io(EventLog), Ar.Io(DayNumber);
+		Ar.Io(SeaChange), Ar.Io(ClimateStep), Ar.Io(ClimateCount), Ar.Io(Settings.StartYearsAgo), Ar.Io(Settings.IceAges);
+		if (Ar.IsReading())
+		{
+			if (!Ground.empty()) ApplySeaLevel();
+			IndexStale = true;
+		}
+	}
+
 	void StepDays(int N)
 	{
 		for (int i = 0; i < N; ++i)
@@ -553,6 +585,12 @@ private:
 		double Plants = 0.0;   // kg per km^2 right now.
 		double Lat = 0.0;
 		double EatenPerDay = 0.0; // kg per km^2, during the last step.
+
+		template <class A>
+		void Serialize(A& Ar)
+		{
+			Ar.Io(Capacity), Ar.Io(Plants), Ar.Io(Lat), Ar.Io(EatenPerDay);
+		}
 	};
 
 	static constexpr int kAltitudeCellsPerDegree = 4;

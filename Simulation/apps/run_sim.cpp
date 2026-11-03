@@ -4,9 +4,11 @@
 #include "PlanetCore/DataFiles.h"
 #include "PlanetCore/Ecosystem.h"
 #include "PlanetCore/People.h"
+#include "PlanetCore/WorldSave.h"
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,6 +36,20 @@ static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string&
 	return *Oldest;
 }
 
+// Ctrl+C (or closing the window) asks the run to save and stop at the end of the current year.
+static volatile std::sig_atomic_t StopAsked = 0;
+static void AskToStop(int) { StopAsked = 1; }
+
+static bool FileExists(const std::string& Path)
+{
+	if (std::FILE* F = std::fopen(Path.c_str(), "rb"))
+	{
+		std::fclose(F);
+		return true;
+	}
+	return false;
+}
+
 int main(int Argc, char** Argv)
 {
 	double Years = 100.0;
@@ -44,6 +60,9 @@ int main(int Argc, char** Argv)
 	std::string BrainPath;
 	std::string LanguagesPath;
 	std::string StoriesPath;
+	std::string SavePath;
+	std::string ResumePath;
+	int SaveEvery = 1000;
 	bool WithPeople = true;
 	int FastDays = 1;
 	earth::PeopleSettings PeopleCfg;
@@ -66,13 +85,19 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--no-ice-ages")) Settings.IceAges = false;
 		else if (!std::strcmp(Argv[i], "--languages") && HasValue) LanguagesPath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--stories") && HasValue) StoriesPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--save") && HasValue) SavePath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--save-every") && HasValue) SaveEvery = std::max(1, std::atoi(Argv[++i]));
+		else if (!std::strcmp(Argv[i], "--resume") && HasValue) ResumePath = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--save file.bin] [--save-every years] [--resume file.bin]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
 			std::printf("  --start N       begin N years ago (default 315000); sea level and ice follow Earth's history\n");
+			std::printf("  --save F        save the whole world to F every --save-every years (default 1000), and when stopped\n");
+			std::printf("  --resume F      carry on from a save instead of starting over; --years is then the year to run to\n");
+			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
 			return 1;
 		}
 	}
@@ -89,13 +114,53 @@ int main(int Argc, char** Argv)
 	const auto& Species = Eco.GetSpecies();
 	earth::People Folk(&Eco, Seed, PeopleCfg);
 	size_t FirstsShown = 0;
+	size_t EventsShown = 0;
+	int FirstYear = 0;
+	if (!ResumePath.empty())
+	{
+		if (!earth::LoadWorld(ResumePath, Eco, Folk))
+		{
+			std::printf("Could not read the save %s. It may be missing, damaged or from a newer version.\n", ResumePath.c_str());
+			return 1;
+		}
+		FirstYear = static_cast<int>(std::lround(Eco.Years()));
+		EventsShown = Eco.Events().size();
+		FirstsShown = Folk.Firsts().size() - 1;
+		std::printf("Carrying on from %s at year %d (%d years ago), with %d people.\n", ResumePath.c_str(), FirstYear, static_cast<int>(Eco.YearsAgo()), Folk.Alive());
+	}
 	if (WithPeople)
 	{
 		std::printf("The land can feed about %.0f people.\n", Folk.LandCapacity());
 	}
+	if (!SavePath.empty())
+	{
+		std::signal(SIGINT, AskToStop);
+		std::signal(SIGTERM, AskToStop);
+#ifdef SIGBREAK
+		std::signal(SIGBREAK, AskToStop); // Closing the console window on Windows.
+#endif
+	}
+	const std::string StopFile = SavePath + ".stop";
+	auto Save = [&](int Y)
+	{
+		if (SavePath.empty()) return;
+		if (earth::SaveWorld(SavePath, Eco, Folk))
+		{
+			std::printf("  Saved the world at year %d to %s\n", Y, SavePath.c_str());
+		}
+		else
+		{
+			std::printf("  Could not save the world to %s; the last good save is kept\n", SavePath.c_str());
+		}
+	};
 
 	std::ofstream Csv;
-	if (!CsvPath.empty())
+	const bool Appending = FirstYear > 0 && FileExists(CsvPath);
+	if (!CsvPath.empty() && Appending)
+	{
+		Csv.open(CsvPath, std::ios::app);
+	}
+	else if (!CsvPath.empty())
 	{
 		Csv.open(CsvPath);
 		Csv << "year,plant_cover,people,bands,skills_known,average_brain,biggest_brain,sea_level_m,languages";
@@ -104,9 +169,8 @@ int main(int Argc, char** Argv)
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
-	size_t EventsShown = 0;
 	const int TotalYears = static_cast<int>(Years);
-	for (int Y = 0; Y <= TotalYears; ++Y)
+	for (int Y = FirstYear > 0 ? FirstYear + 1 : 0; Y <= TotalYears; ++Y)
 	{
 		for (int D = 0; Y > 0 && D < 365;)
 		{
@@ -160,7 +224,18 @@ int main(int Argc, char** Argv)
 		{
 			std::printf("  Year %.1f: %s\n", Folk.Firsts()[FirstsShown].Year, Folk.Firsts()[FirstsShown].Text.c_str());
 		}
+		const bool Stopping = StopAsked || (!SavePath.empty() && FileExists(StopFile));
+		if (Y > FirstYear && (Y % SaveEvery == 0 || Y == TotalYears || Stopping))
+		{
+			Save(Y);
+		}
 		std::fflush(stdout);
+		if (Stopping)
+		{
+			std::remove(StopFile.c_str());
+			std::printf("Stopped at year %d. Carry on later with --resume %s\n", Y, SavePath.c_str());
+			return 0;
+		}
 	}
 
 	if (WithPeople)

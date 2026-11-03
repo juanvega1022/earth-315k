@@ -36,6 +36,12 @@ public:
 		return std::sqrt(-2.0 * std::log(U1)) * std::cos(6.283185307179586 * U2);
 	}
 
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(State);
+	}
+
 private:
 	uint64_t State;
 };

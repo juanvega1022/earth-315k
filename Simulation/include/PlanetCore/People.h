@@ -12,6 +12,7 @@
 // Plain C++ with no Unreal dependencies, stepped once per simulated day after the Ecosystem.
 #pragma once
 
+#include "Archive.h"
 #include "Ecosystem.h"
 #include "Parallel.h"
 #include "Random.h"
@@ -75,6 +76,18 @@ struct Genome
 	float Imitation = 0.1f;     // How often it copies a successful camp mate.
 
 	int Hidden() const { return static_cast<int>(B1.size()); }
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(W1);
+		Ar.Io(B1);
+		Ar.Io(W2);
+		Ar.Io(B2);
+		Ar.Io(LearningRate);
+		Ar.Io(Curiosity);
+		Ar.Io(Imitation);
+	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
 	void AddNeuron(Rng& Dice)
@@ -163,6 +176,19 @@ struct Npc
 		LastHidden.assign(static_cast<size_t>(BrainSize()), 0.0f);
 	}
 	bool IsChild() const { return AgeYears() < 12.0; }
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Id), Ar.Io(Mother), Ar.Io(Father), Ar.Io(Generation), Ar.Io(Female), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(AgeDays), Ar.Io(Camp);
+		Ar.Io(Energy), Ar.Io(Water), Ar.Io(Fatigue), Ar.Io(Health), Ar.Io(Fear), Ar.Io(Loneliness), Ar.Io(SocialNeed);
+		Ar.Io(CarriedKg), Ar.Io(HuntSkill), Ar.Io(ForageSkill), Ar.Io(Heading), Ar.Io(OffsetLat), Ar.Io(OffsetLon);
+		Ar.Io(PregnantDays), Ar.Io(LastBirthDay), Ar.Io(BabyFather), Ar.Io(BabyFatherGenes), Ar.Io(Children);
+		Ar.Io(Genes), Ar.Io(LearnedW2), Ar.Io(LearnedB2);
+		Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastChoice), Ar.Io(LastAction), Ar.Io(ActionCounts);
+		Ar.Io(Skills), Ar.Io(Pleasure), Ar.Io(RewardBaseline), Ar.Io(Wellbeing), Ar.Io(BandSize), Ar.Io(Alive);
+		if (Ar.IsReading()) Own = EffectsOf(Skills);
+	}
 };
 
 inline constexpr int kWords = 16;
@@ -227,6 +253,14 @@ struct Camp
 	float BestWater = 0.0f;
 	std::array<int64_t, 5> ForageSquares{};
 	float ForageKg = 0.0f;
+
+	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
+	// rest is saved.
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Id), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(ScoutLat), Ar.Io(ScoutLon), Ar.Io(ScoutScore), Ar.Io(DaysHere), Ar.Io(Room), Ar.Io(Words);
+	}
 };
 
 // Someone who made a difference: found a skill, was born with a record brain or first reached
@@ -248,6 +282,13 @@ struct Notable
 	std::string Death;
 	double LastLat = 0.0;
 	double LastLon = 0.0;
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Id), Ar.Io(Mother), Ar.Io(Father), Ar.Io(Female), Ar.Io(Generation), Ar.Io(Brain), Ar.Io(BornYear), Ar.Io(Speech);
+		Ar.Io(Deeds), Ar.Io(Partners), Ar.Io(Children), Ar.Io(Dead), Ar.Io(Death), Ar.Io(LastLat), Ar.Io(LastLon);
+	}
 };
 
 struct PeopleSettings
@@ -327,6 +368,24 @@ public:
 	}
 
 	const std::unordered_map<uint32_t, Notable>& NotablePeople() const { return Notables; }
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Dice), Ar.Io(NextId), Ar.Io(NextCampId), Ar.Io(HighestGeneration), Ar.Io(Births), Ar.Io(Deaths), Ar.Io(Kills), Ar.Io(Causes);
+		Ar.Io(Regions), Ar.Io(SpeciesHunted), Ar.Io(NextPopulationMark), Ar.Io(NextBandMark), Ar.Io(NextGenerationMark), Ar.Io(NextAgeMark);
+		Ar.Io(AnyHunt), Ar.Io(AnyShare), Ar.Io(AnyDeathBy), Ar.Io(Arrivals), Ar.Io(HallOfFame);
+		Ar.Io(Notables), Ar.Io(PlaceNames), Ar.Io(RecordBrain), Ar.Io(NextLanguageMark), Ar.Io(LanguageYear), Ar.Io(KnownNow), Ar.Io(EverKnown);
+		Ar.Io(Gathered), Ar.Io(Npcs), Ar.Io(Camps), Ar.Io(Events);
+		if (Ar.IsReading())
+		{
+			IndexCamps();
+			LandClimate = -1;
+		}
+	}
+
+	// Notes in the history that the world was carried on from a save, maybe by newer code.
+	void NoteResumed(uint32_t Version) { AddEvent("Carried on from a save made by save format " + std::to_string(Version)); }
 	// What the first people to reach each land called it: Africa, Asia, Europe, Australia, the Americas, new land.
 	const std::array<std::string, 6>& LandNames() const { return PlaceNames; }
 
@@ -474,16 +533,11 @@ public:
 	// How many bands have started from scratch (1 = the first band is still going).
 	int BandsStarted() const { return Arrivals; }
 
+	// NPCs are kept in the order they were born, so ids only go up along the list.
 	const Npc* Find(uint32_t Id) const
 	{
-		for (const Npc& P : Npcs)
-		{
-			if (P.Id == Id)
-			{
-				return &P;
-			}
-		}
-		return nullptr;
+		auto It = std::lower_bound(Npcs.begin(), Npcs.end(), Id, [](const Npc& P, uint32_t V) { return P.Id < V; });
+		return It != Npcs.end() && It->Id == Id ? &*It : nullptr;
 	}
 
 	// Share of each action among adults, today.
@@ -1070,7 +1124,8 @@ private:
 	}
 
 	// Other camps within Km of a point, not counting camp SelfId.
-	int CampsNear(double Lat, double Lon, double Km, int SelfId) const
+	// Counts other camps within Km, stopping once Limit are found.
+	int CampsNear(double Lat, double Lon, double Km, int SelfId, int Limit = 1 << 30) const
 	{
 		const int Rows = static_cast<int>(std::ceil(Km / kKmPerDegree));
 		const int Cols = std::min(180, static_cast<int>(std::ceil(Km / (kKmPerDegree * std::max(0.05, std::cos(Lat * kPi / 180.0))))));
@@ -1090,6 +1145,7 @@ private:
 				{
 					const Camp& C = Camps[Slot];
 					Count += C.Id != SelfId && DistanceKm(Lat, Lon, C.Lat, C.Lon) < Km;
+					if (Count >= Limit) return Count;
 				}
 			}
 		}
@@ -1203,7 +1259,7 @@ private:
 		{
 			return -1.0;
 		}
-		const double Crowd = 0.1 * std::min(4, CampsNear(Lat, Lon, 50.0, SelfId));
+		const double Crowd = 0.1 * CampsNear(Lat, Lon, 50.0, SelfId, 4);
 		const double Food = GatherableAt(Lat, Lon) / Settings.GatherableKg;
 		const double Water = Eco->WaterAt(Lat, Lon);
 		const double Game = std::clamp(Eco->GameNear(Lat, Lon, 1000.0) / 2000.0, 0.0, 1.0);
@@ -1251,7 +1307,7 @@ private:
 			C.DaysHere += Days;
 			const double Here = PlaceScore(C.Lat, C.Lon, C.Id);
 			const double Food = GatherableAt(C.Lat, C.Lon) / std::max(1.0, Eco->PlantCover(C.Lat, C.Lon) * Settings.GatherableKg);
-			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id) > 0;
+			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id, 1) > 0;
 			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
@@ -1374,6 +1430,10 @@ private:
 		{
 			// Only camps in the same or a neighbouring one-degree square can be within 15 km.
 			Near.clear();
+			if (Camps[a].Members.empty() || Camps[a].Members.size() >= static_cast<size_t>(Settings.SplitSize) * 3 / 4)
+			{
+				continue;
+			}
 			for (int r = GridRow(Camps[a].Lat) - 1; r <= GridRow(Camps[a].Lat) + 1; ++r)
 			{
 				for (int c = GridCol(Camps[a].Lon) - 1; c <= GridCol(Camps[a].Lon) + 1; ++c)
@@ -2079,6 +2139,8 @@ private:
 	{
 		const std::vector<Skill>& List = AllSkills();
 		const int Count = static_cast<int>(List.size());
+		std::array<double, 64> TierOdds{};
+		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1);
 		for (Npc& P : Npcs)
 		{
 			if (P.AgeYears() < 5.0)
@@ -2094,7 +2156,7 @@ private:
 			{
 				if (CanDiscover(P.Skills, k))
 				{
-					Odds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1) * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
+					Odds[k] = TierOdds[k] * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
 					Total += Odds[k];
 				}
 			}
@@ -2499,7 +2561,9 @@ private:
 				Called = LandName(Camps[CampSlot(Who->Camp)], Region);
 				PlaceNames[Region] = Called;
 			}
-			const std::string Where = std::string(RegionNames[Region]) + (Called.empty() ? "" : ", which they call " + Called);
+			char At[48];
+			std::snprintf(At, sizeof(At), " (near %.0f, %.0f)", Lat, Lon);
+			const std::string Where = std::string(RegionNames[Region]) + (Called.empty() ? "" : ", which they call " + Called) + At;
 			AddEvent("First NPC sets foot in " + Where);
 			if (Who) Remember(*Who, "was the first to set foot in " + Where);
 		}
