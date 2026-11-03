@@ -204,6 +204,7 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 	O << Chart("Bands and languages", YearsAgo, {Col("bands"), Col("languages")}, {"bands", "languages"});
 	O << Chart("Skills and inventions known", YearsAgo, {Col("skills_known"), Col("inventions")}, {"skills", "inventions"});
 	O << Chart("Beliefs and religions (beliefs held by 10+ bands)", YearsAgo, {Col("beliefs"), Col("religions")}, {"beliefs", "religions"});
+	O << Chart("Personality (average): kindness when sharing and curiosity", YearsAgo, {Col("kindness"), Col("curiosity")}, {"kindness", "curiosity"});
 	O << Chart("Brain size (hidden neurons)", YearsAgo, {Col("average_brain"), Col("biggest_brain")}, {"average", "biggest"});
 	O << Chart("Sea level compared with today (m)", YearsAgo, {Col("sea_level_m")}, {"sea level"});
 	O << Chart("Plant cover (share of best)", YearsAgo, {Col("plant_cover")}, {"plants"});

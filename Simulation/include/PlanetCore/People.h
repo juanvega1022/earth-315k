@@ -76,6 +76,7 @@ struct Genome
 	float LearningRate = 0.05f; // How strongly a good or bad day changes later choices.
 	float Curiosity = 0.6f;     // How often it tries something other than its favourite choice.
 	float Imitation = 0.1f;     // How often it copies a successful camp mate.
+	float Kindness = 0.5f;      // Personality: how much of what it carries it gives when it shares.
 
 	int Hidden() const { return static_cast<int>(B1.size()); }
 
@@ -89,6 +90,7 @@ struct Genome
 		Ar.Io(LearningRate);
 		Ar.Io(Curiosity);
 		Ar.Io(Imitation);
+		if (Ar.Version >= 6) Ar.Io(Kindness);
 	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
@@ -168,6 +170,7 @@ struct Npc
 	float RefugeLat = 0.0f;
 	float RefugeLon = 0.0f;
 	float RefugeWater = 0.0f; // How wet it was, fading slowly as the memory grows old.
+	float Grief = 0.0f;       // Sorrow for someone they loved who died; it weighs on them and fades.
 
 	float TrustIn(uint32_t Other) const
 	{
@@ -234,6 +237,7 @@ struct Npc
 		Ar.Io(Skills), Ar.Io(Pleasure), Ar.Io(RewardBaseline), Ar.Io(Wellbeing), Ar.Io(BandSize), Ar.Io(Alive);
 		if (Ar.Version >= 4) Ar.Io(Name), Ar.Io(BondWith), Ar.Io(Trust), Ar.Io(Leads);
 		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
+		if (Ar.Version >= 6) Ar.Io(Grief);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -497,6 +501,7 @@ public:
 		if (Ar.Version >= 3) Ar.Io(BeliefLog), Ar.Io(Shunned), Ar.Io(ReligionYear);
 		if (Ar.Version >= 4) Ar.Io(KnownNames), Ar.Io(FirstLeader);
 		if (Ar.Version >= 5) Ar.Io(AnyRefuge);
+		if (Ar.Version >= 6) Ar.Io(AnyGrief);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -714,6 +719,19 @@ public:
 		for (const Npc& P : Npcs) Most = std::max(Most, P.BrainSize());
 		return Most;
 	}
+	// Average personality: how kind (share of food given when sharing) and how curious people are.
+	double AverageKindness() const
+	{
+		double Sum = 0.0;
+		for (const Npc& P : Npcs) Sum += P.Genes ? P.Genes->Kindness : 0.5f;
+		return Npcs.empty() ? 0.0 : Sum / static_cast<double>(Npcs.size());
+	}
+	double AverageCuriosity() const
+	{
+		double Sum = 0.0;
+		for (const Npc& P : Npcs) Sum += P.Genes ? P.Genes->Curiosity : 0.6f;
+		return Npcs.empty() ? 0.0 : Sum / static_cast<double>(Npcs.size());
+	}
 	double AverageBrain() const
 	{
 		double Sum = 0.0;
@@ -830,7 +848,7 @@ public:
 		Eco->RefreshIndex();
 		RegrowGatherable();
 		IndexCamps();
-		SenseCamps();
+		SenseCamps(1);
 
 		// Decide first, so everyone acts on the same picture of the day, then act.
 		std::vector<int> Chosen(Npcs.size(), -1);
@@ -927,7 +945,7 @@ public:
 		Eco->RefreshIndex();
 		RegrowGatherable(Days);
 		IndexCamps();
-		SenseCamps();
+		SenseCamps(Days);
 		for (Camp& C : Camps)
 		{
 			C.BestWater = static_cast<float>(BestWaterNear(C.Lat, C.Lon));
@@ -1123,6 +1141,7 @@ private:
 	std::unordered_map<uint32_t, uint16_t> KnownNames;
 	uint32_t FirstLeader = 0;
 	bool AnyRefuge = false;
+	bool AnyGrief = false;
 
 	// Camps by one-degree square, so finding nearby camps doesn't look at every camp.
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
@@ -1284,6 +1303,7 @@ private:
 		G.LearningRate = std::clamp(G.LearningRate * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.001f, 0.5f);
 		G.Curiosity = std::clamp(G.Curiosity * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.1f, 2.0f);
 		G.Imitation = std::clamp(G.Imitation * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.0f, 0.5f);
+		G.Kindness = std::clamp(G.Kindness + static_cast<float>(Dice.Gaussian() * 0.05), 0.05f, 0.95f);
 		return G;
 	}
 
@@ -1302,6 +1322,7 @@ private:
 		if (Dice.Chance(0.5)) G.LearningRate = Rest.LearningRate;
 		if (Dice.Chance(0.5)) G.Curiosity = Rest.Curiosity;
 		if (Dice.Chance(0.5)) G.Imitation = Rest.Imitation;
+		if (Dice.Chance(0.5)) G.Kindness = Rest.Kindness;
 		return Mutate(G, 0.15f);
 	}
 
@@ -1425,7 +1446,7 @@ private:
 	}
 
 	// Reads what each camp can see and knows today.
-	void SenseCamps()
+	void SenseCamps(int Days)
 	{
 		for (Camp& C : Camps)
 		{
@@ -1439,7 +1460,7 @@ private:
 			AddBeliefEffects(C);
 		}
 		WeighReputations();
-		RememberPlaces();
+		RememberPlaces(Days);
 		for (Camp& C : Camps)
 		{
 			C.Nearby = 0;
@@ -1922,7 +1943,7 @@ private:
 			}
 			if (Hungriest >= 0 && P.CarriedKg > 0.5f)
 			{
-				const float Give = P.CarriedKg * 0.5f;
+				const float Give = P.CarriedKg * P.Genes->Kindness;
 				P.CarriedKg -= Give;
 				Npcs[Hungriest].CarriedKg = std::min(10.0f, Npcs[Hungriest].CarriedKg + Give);
 				P.SocialNeed = std::max(0.0f, P.SocialNeed - 0.3f);
@@ -2717,15 +2738,18 @@ private:
 
 	// Everyone keeps the best-watered place they have lived in mind; the memory fades slowly, and
 	// children on growing up take their mother's if it is better than their own.
-	void RememberPlaces()
+	void RememberPlaces(int Days)
 	{
+		const float Fade = static_cast<float>(std::pow(0.9999, Days)); // Places: half forgotten in about 20 years.
+		const float Heal = static_cast<float>(std::pow(0.99, Days));   // Grief: half gone in about 70 days.
 		for (const Camp& C : Camps)
 		{
 			const float W = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
 			for (int i : C.Members)
 			{
 				Npc& P = Npcs[static_cast<size_t>(i)];
-				P.RefugeWater *= 0.999f;
+				P.RefugeWater *= Fade;
+				P.Grief *= Heal;
 				if (W > P.RefugeWater)
 				{
 					P.RefugeWater = W;
@@ -3172,7 +3196,7 @@ private:
 		const float Hunger = 1.0f - P.Energy;
 		const float Thirst = 1.0f - P.Water;
 		// Food in hand counts too: it is tomorrow's meal, which lets effort that pays off later be learned.
-		return -(Hunger * Hunger + Thirst * Thirst + 0.5f * P.Fatigue * P.Fatigue + 0.5f * P.Fear + 0.3f * P.Loneliness) +
+		return -(Hunger * Hunger + Thirst * Thirst + 0.5f * P.Fatigue * P.Fatigue + 0.5f * P.Fear + 0.3f * P.Loneliness + 0.3f * P.Grief) +
 			(P.Health - 1.0f) + 0.04f * std::min(P.CarriedKg, 10.0f);
 	}
 
@@ -3393,7 +3417,24 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
-		if (!Camps.empty()) Camps[CampSlot(P.Camp)].DeathsLately += 1;
+		if (!Camps.empty())
+		{
+			Camp& C = Camps[CampSlot(P.Camp)];
+			C.DeathsLately += 1;
+			// Those who loved them grieve.
+			for (int i : C.Members)
+			{
+				Npc& Q = Npcs[static_cast<size_t>(i)];
+				const float Love = Q.TrustIn(P.Id);
+				if (&Q == &P || Love < 0.3f) continue;
+				Q.Grief = std::max(Q.Grief, Love);
+				if (!AnyGrief)
+				{
+					AnyGrief = true;
+					AddEvent(PersonName(Q.Name) + " grieves for " + PersonName(P.Name) + ": the first sorrow anyone feels for someone they loved");
+				}
+			}
+		}
 		auto Story = Notables.find(P.Id);
 		if (Story != Notables.end())
 		{

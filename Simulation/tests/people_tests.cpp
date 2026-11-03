@@ -450,6 +450,10 @@ static void TestTrust()
 	}
 	EXPECT(Named > 0 && Bonded > 0 && Remember > 0);
 	EXPECT(LoveDad > 0); // Fathers help feed their young children.
+	bool Grieved = false;
+	for (const auto& E : Folk.Firsts()) Grieved = Grieved || E.Text.find(" grieves for ") != std::string::npos;
+	EXPECT(Grieved); // Someone has lost a person they loved.
+	EXPECT(Folk.AverageKindness() > 0.0 && Folk.AverageKindness() < 1.0);
 	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
 }
 
