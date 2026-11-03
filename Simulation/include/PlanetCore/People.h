@@ -2527,7 +2527,11 @@ private:
 		const std::vector<Skill>& List = AllSkills();
 		const int Count = static_cast<int>(List.size());
 		std::array<double, 64> TierOdds{};
-		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(10.0, List[k].Tier - 1);
+		// Each tier deeper is 20 times rarer: run 3 reached farming 270,000 years too early at 10.
+		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(20.0, List[k].Tier - 1);
+		// Planting needs a warm, steady climate: in an ice age, seasons swing too hard to bet on a crop.
+		constexpr int kPlanting = 25;
+		if (Eco->IceCover() > 0.15) TierOdds[kPlanting] = 0.0;
 		for (Npc& P : Npcs)
 		{
 			if (P.AgeYears() < 5.0)

@@ -15,7 +15,7 @@
 #include <vector>
 
 // Changes whenever the simulation changes in a way that affects results.
-inline const char* kSimVersion = "2026.11.03 milestone 2";
+inline const char* kSimVersion = "2026.11.03 milestone 3 (pace tuned)";
 
 inline std::string NowText()
 {
