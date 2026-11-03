@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "5.4",
+	"EngineAssociation": "5.8",
 	"Category": "",
 	"Description": "Earth 315k: a simulation of Earth starting 315,000 years ago.",
 	"Modules": [

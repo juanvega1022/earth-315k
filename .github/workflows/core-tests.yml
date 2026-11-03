@@ -1,4 +1,4 @@
-name: Core tests
+name: Simulation tests
 
 on:
   push:
@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run planet core tests
+      - name: Build the simulation and run its tests
         run: |
-          mkdir -p tests/build
-          g++ -std=c++17 -O2 -Wall -Wextra -Wshadow -Werror -I Source/Earth315k/Public tests/core_tests.cpp -o tests/build/core_tests
-          tests/build/core_tests
+          cmake -S Simulation -B Simulation/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build Simulation/build -j
+          ctest --test-dir Simulation/build --output-on-failure
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

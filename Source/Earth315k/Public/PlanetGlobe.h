@@ -10,6 +10,17 @@
 class UProceduralMeshComponent;
 class UMaterialInterface;
 
+/** One built piece of the planet mesh, kept so its colours can be repainted as plants change. */
+struct FPlanetSection
+{
+	TArray<FVector> Vertices;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UVs;
+	TArray<FLinearColor> BaseColors;
+	TArray<FVector2D> LatLon;
+	TArray<bool> CanGrowPlants;
+};
+
 /**
  * The planet. Builds a 3D globe from real elevation data (Content/Data/global.*),
  * plus a higher-detail patch for one region (Content/Data/region.*) where seeded
@@ -77,12 +88,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Planet")
 	FVector2D WorldToLatLon(const FVector& WorldLocation) const;
 
+	/** World position on the ground (or sea surface) at a latitude/longitude, raised by LiftUnits. */
+	FVector SurfacePoint(double Lat, double Lon, double LiftUnits = 0.0) const;
+
+	/** Recolour land by plant cover (0 bare .. 1 lush) from the life simulation. */
+	void TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover);
+
+	/** Builds the planet now if it hasn't been built in this world yet (for example, a copy made for Play). */
+	void EnsureBuilt();
+
+	/** The real elevation data the planet was built from. */
+	const earth::ElevationGrid& GetGlobalGrid() const { return GlobalGrid; }
+
 private:
 	UPROPERTY(VisibleAnywhere, Category = "Planet")
 	TObjectPtr<UProceduralMeshComponent> Mesh;
 
 	earth::ElevationGrid GlobalGrid;
 	earth::ElevationGrid RegionGrid;
+	TArray<FPlanetSection> Sections;
 
 	bool LoadGrid(const FString& Name, earth::ElevationGrid& OutGrid) const;
 };
