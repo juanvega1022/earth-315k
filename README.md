@@ -121,6 +121,10 @@ Add `--save out\world.bin` and the whole world is saved every 1,000 years (`--sa
 
 To change the planet while editing, drag `PlanetGlobe` from the Place Actors panel into a level, then change its settings in the Details panel. The planet rebuilds as you change them.
 
+### Run log and report
+
+Every session of a run adds a line to `runs.txt` next to its outputs: when it started or resumed, the build and save format, the seed and all the arguments, and when it finished or was stopped. Add `--report out\report.html` (with `--csv`) and the run keeps an HTML page up to date at every progress line, with charts of people, bands, languages, skills, inventions, brains, sea level and plants, and a scorecard comparing when the run left Africa, reached each land and invented bows, pottery, farming and writing with when people really did. Open it in any browser while the run goes.
+
 ## Settings worth playing with
 
 | Setting | What it does |
