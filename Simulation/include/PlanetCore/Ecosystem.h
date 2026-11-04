@@ -287,6 +287,19 @@ public:
 		return Table[N - 1][1];
 	}
 
+	// How green the Sahara and Arabia were (0 desert as today .. 1 a full humid period). The
+	// monsoon reached far north whenever the Earth's wobble (precession, about 23,000 years) put
+	// northern summers closest to the Sun: lakes and grassland around 10,000, 55,000, 80,000,
+	// 100,000 and 125,000 years ago and so on, weaker in the ice ages. Only then could people
+	// cross the desert belt between Africa and Asia.
+	static double GreenSaharaThen(double YearsAgoNow)
+	{
+		const double Phase = std::cos(2.0 * 3.14159265358979323846 * (YearsAgoNow - 10000.0) / 23000.0);
+		return Phase > 0.0 ? Phase * Phase : 0.0;
+	}
+
+	double GreenSahara() const { return GreenSaharaThen(YearsAgo()) * (1.0 - 0.5 * IceCover()); }
+
 	bool IsLand(double Lat, double Lon) const { return AltitudeAt(Lat, Lon) > 0.0; }
 
 	// Height above the current sea level in metres, from a fast quarter-degree lookup.
@@ -728,6 +741,7 @@ private:
 	double SeaChange = 0.0;
 	int ClimateStep = 0;
 	int ClimateCount = 0;
+	double GreenBuilt = -1.0; // GreenSaharaThen() when the plants were last rebuilt; not saved.
 	std::vector<int> TouchedCells;
 	bool IndexStale = true;
 	std::vector<Species> SpeciesList;
@@ -797,11 +811,13 @@ private:
 		}
 		ClimateStep = Step;
 		const double Sea = SeaLevelThen(YearsAgo());
-		if (std::abs(Sea - SeaChange) < 1.0)
+		const double Green = GreenSaharaThen(YearsAgo());
+		if (std::abs(Sea - SeaChange) < 1.0 && std::abs(Green - GreenBuilt) < 0.1)
 		{
 			return;
 		}
 		SeaChange = Sea;
+		GreenBuilt = Green;
 		ApplySeaLevel();
 		std::vector<double> Old(Cells.size());
 		for (size_t i = 0; i < Cells.size(); ++i) Old[i] = Cells[i].Capacity;
@@ -840,7 +856,7 @@ private:
 			ClimateThen(Lat, Lon, T, Mm);
 			return Settings.PeakPlantsPerKm2 * Growth(T, Mm);
 		}
-		const double Desert = std::clamp(1.0 - std::abs(AbsLat - 24.0) / 8.0, 0.0, 1.0) * 0.85;
+		const double Desert = std::clamp(1.0 - std::abs(AbsLat - 24.0) / 8.0, 0.0, 1.0) * 0.85 * (1.0 - 0.7 * GreenSahara() * DesertBelt(Lat, Lon));
 		const double Cold = std::clamp((AbsLat - (50.0 - 12.0 * Ice)) / 25.0, 0.0, 1.0) * 0.8;
 		const double High = std::clamp((Height - 2500.0) / 2000.0, 0.0, 1.0);
 		return Settings.PeakPlantsPerKm2 * (1.0 - Desert) * (1.0 - Cold) * (1.0 - High);
@@ -853,7 +869,15 @@ private:
 	{
 		const double Ice = IceCover();
 		TempC = Settings.Temperature->Sample(Lat, Lon) / 10.0 - Ice * (4.0 + 8.0 * std::abs(Lat) / 90.0);
-		RainMm = std::max(0.0, Settings.Rain->Sample(Lat, Lon)) * (1.0 - 0.35 * Ice);
+		RainMm = (std::max(0.0, Settings.Rain->Sample(Lat, Lon)) + 350.0 * GreenSahara() * DesertBelt(Lat, Lon)) * (1.0 - 0.35 * Ice);
+	}
+
+	// 1 across the Sahara and Arabia, fading to 0 at their edges.
+	static double DesertBelt(double Lat, double Lon)
+	{
+		const double NS = std::clamp(std::min(Lat - 10.0, 36.0 - Lat) / 4.0, 0.0, 1.0);
+		const double EW = std::clamp(std::min(Lon + 20.0, 62.0 - Lon) / 4.0, 0.0, 1.0);
+		return NS * EW;
 	}
 
 	// Rivers: rain that falls on land runs downhill from square to square, gathering as it goes,

@@ -440,9 +440,11 @@ struct PeopleSettings
 	// shortcut: off by default until tuned; in tests Neanderthals die out within centuries and
 	// Homo naledi spreads across Africa, neither like the real record.
 	bool OtherHumans = false;
-	// Chance a year that one person of average wits hits on a simple skill on their own; deeper
-	// skills are 4 times rarer per step down the tree.
-	double DiscoveryPerYear = 2e-7; // Per person; tuned so farming takes ~100k+ years, not centuries.
+	// How fast people hit on skills, compared with real history: at 1, a world of about 3,000
+	// people who know what a skill builds on takes about as long to find it as people really did
+	// (Skill::YearsToFind). More people find things sooner, fewer later; the clever and curious
+	// are likelier to be the ones who do.
+	double DiscoveryPace = 1.0;
 	// Tries a year at making something new from materials, per person of average wits and curiosity.
 	double InventionTriesPerYear = 2e-4;
 	// Chance a year that one person of average wits, in a band that can talk, explains something
@@ -1280,7 +1282,8 @@ private:
 
 	bool Livable(double Lat, double Lon) const
 	{
-		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0;
+		// Deep desert with no river or spring is no place to live, only to cross in a wet spell.
+		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
 	}
 
 	int CampSlot(int Id) const
@@ -1683,7 +1686,9 @@ private:
 			// Big camps split, and so do smaller ones once the land around can't feed more; then the
 			// ones who leave go far, looking for land of their own.
 			const int Size = static_cast<int>(Camps[c].Members.size());
-			const bool Full = Size >= 20 && Camps[c].Room < 0.2f;
+			// Crowded bands split from 30: real foraging bands rarely fall below about 25, and smaller ones
+			// keep losing what they know when the few who knew it die.
+			const bool Full = Size >= 30 && Camps[c].Room < 0.2f;
 			// Bands held together by shared beliefs grow bigger before they split.
 			const int SplitAt = static_cast<int>(Settings.SplitSize * (1.0f + 0.5f * Camps[c].Cohesion));
 			if ((Size < SplitAt && !Full) || !Dice.Chance(OverDays(0.01, Days)))
@@ -1710,7 +1715,7 @@ private:
 			bool Placed = false;
 			for (int Try = 0; Try < 8 && !Placed; ++Try)
 			{
-				const double Far = Full ? Dice.Range(100.0, 250.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
+				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
 				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
 				Placed = Livable(New.Lat, New.Lon);
 			}
@@ -2644,12 +2649,21 @@ private:
 	{
 		const std::vector<Skill>& List = AllSkills();
 		const int Count = static_cast<int>(List.size());
+		// Odds a year for one person of average wits and curiosity: a world of kPacePeople finds a
+		// skill in YearsToFind on average. The reference scales with the density setting, so a
+		// denser world isn't also a faster one.
+		constexpr double kPacePeople = 3000.0;
+		const double PacePeople = kPacePeople * Settings.PeoplePerKm2 / 0.0003;
 		std::array<double, 64> TierOdds{};
-		// Each tier deeper is 20 times rarer: run 3 reached farming 270,000 years too early at 10.
-		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPerYear / std::pow(20.0, List[k].Tier - 1);
+		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPace / (List[k].YearsToFind * PacePeople);
 		// Planting needs a warm, steady climate: in an ice age, seasons swing too hard to bet on a crop.
 		constexpr int kPlanting = 25;
 		if (Eco->IceCover() > 0.15) TierOdds[kPlanting] = 0.0;
+		// Wits and curiosity decide who finds things, not how fast the world does: brains grew
+		// across the run, and history's pace already includes what minds could do.
+		double MeanGift = 0.0;
+		for (const Npc& P : Npcs) MeanGift += Smarts(P) * Smarts(P) * P.Genes->Curiosity;
+		MeanGift = Npcs.empty() ? 1.0 : std::max(1e-6, MeanGift / static_cast<double>(Npcs.size()));
 		for (Npc& P : Npcs)
 		{
 			if (P.AgeYears() < 5.0)
@@ -2665,7 +2679,7 @@ private:
 			{
 				if (CanDiscover(P.Skills, k))
 				{
-					Odds[k] = TierOdds[k] * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / 0.6;
+					Odds[k] = TierOdds[k] * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / MeanGift;
 					Total += Odds[k];
 				}
 			}
@@ -3703,7 +3717,7 @@ private:
 	// 0 Africa, 1 Asia, 2 Europe, 3 Australia, 4 the Americas, 5 elsewhere.
 	static int RegionOf(double Lat, double Lon)
 	{
-		if (Lon < -30.0) return 4;
+		if (Lon < -30.0) return Lon > -169.0 ? 4 : 1; // West of the Bering Strait is Siberia, in Asia.
 		if (Lat < -10.0 && Lon > 112.0) return 3;
 		if (Lat < 37.0 && Lon > -20.0 && Lon < 52.0)
 		{

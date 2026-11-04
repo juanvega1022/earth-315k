@@ -42,7 +42,13 @@ struct Skill
 	const char* Name;
 	std::vector<int> Needs;
 	SkillEffects Effects;
-	int Tier = 1; // 1 + the highest tier among what it needs; deeper skills are rarer finds.
+	int Tier = 1; // 1 + the highest tier among what it needs.
+	// When people really first had it (years ago, from the earliest evidence; 315,000 or more for
+	// what Homo sapiens' ancestors already knew), and how long, on average, people who knew what
+	// it builds on took to hit on it. Skills come at about that pace to a world of about 3,000
+	// people (the run's usual number), faster to more people and slower to fewer.
+	double YearsAgo = 315000.0;
+	double YearsToFind = 300.0;
 };
 
 using SkillSet = uint64_t; // One bit per skill.
@@ -60,50 +66,59 @@ inline const std::vector<Skill>& AllSkills()
 		};
 		enum { Forage, Hunt, Predators, Children, Warmth, Travel, Land, Carry, Teaching };
 		std::vector<Skill> L = {
-			{"sharp stone flakes", {}, E({{Forage, 1.1f}, {Hunt, 1.1f}})},                 // 0
-			{"digging sticks", {}, E({{Forage, 1.15f}})},                                   // 1
-			{"keeping fire", {}, E({{Warmth, 0.3f}, {Predators, 0.7f}})},                   // 2
-			{"warning calls", {}, E({{Predators, 0.7f}})},                                  // 3
-			{"healing plants", {}, E({{Children, 0.85f}})},                                 // 4
-			{"carrying bags", {}, E({{Carry, 1.5f}})},                                      // 5
-			{"hand axes", {0}, E({{Hunt, 1.1f}, {Forage, 1.05f}})},                         // 6
-			{"making fire", {2}, E({{Warmth, 0.1f}, {Children, 0.95f}})},                   // 7
-			{"cooking", {2}, E({{Forage, 1.25f}, {Children, 0.9f}})},                       // 8
-			{"hide clothing", {0}, E({{Warmth, 0.3f}})},                                    // 9
-			{"shelters", {1}, E({{Warmth, 0.2f}, {Predators, 0.9f}})},                      // 10
-			{"grinding seeds", {0}, E({{Forage, 1.1f}})},                                   // 11
-			{"wooden spears", {6}, E({{Hunt, 1.3f}})},                                      // 12
-			{"spoken language", {3}, E({{Teaching, 2.0f}})},                                // 13
-			{"snares and traps", {5}, E({{Hunt, 1.2f}})},                                   // 14
-			{"drying and smoking food", {2, 5}, E({{Carry, 1.5f}})},                        // 15
-			{"rafts", {6}, E({{Travel, 2.0f}})},                                            // 16
-			{"fishing", {12}, E({{Forage, 1.15f}})},                                        // 17
-			{"sewn clothing", {9, 0}, E({{Warmth, 0.25f}})},                                // 18
-			{"spear throwers", {12}, E({{Hunt, 1.2f}})},                                    // 19
-			{"art and ornaments", {13}, E({{Teaching, 1.2f}})},                             // 20
-			{"counting", {13}, E({{Teaching, 1.1f}, {Carry, 1.1f}})},                       // 21
-			{"boats", {16}, E({{Travel, 2.0f}})},                                           // 22
-			{"bows and arrows", {19}, E({{Hunt, 1.3f}})},                                   // 23
-			{"dogs", {14, 13}, E({{Hunt, 1.15f}, {Predators, 0.8f}})},                      // 24
-			{"planting", {11, 1}, E({{Land, 2.0f}, {Forage, 1.2f}})},                       // 25
-			{"farming", {25}, E({{Land, 3.0f}, {Forage, 1.3f}})},                           // 26
-			{"herding", {24, 25}, E({{Land, 1.5f}, {Hunt, 1.2f}})},                         // 27
-			{"pottery", {7, 25}, E({{Carry, 1.5f}, {Children, 0.95f}})},                    // 28
-			{"villages", {26}, E({{Warmth, 0.1f}, {Land, 1.3f}})},                          // 29
-			{"weaving", {18, 26}, E({{Warmth, 0.1f}, {Carry, 1.2f}})},                      // 30
-			{"copper working", {28, 7}, E({{Forage, 1.05f}, {Hunt, 1.05f}})},               // 31
-			{"the wheel", {29}, E({{Carry, 2.0f}, {Travel, 1.3f}})},                        // 32
-			{"writing", {29, 21}, E({{Teaching, 2.0f}})},                                   // 33
-			{"bronze", {31}, E({{Forage, 1.1f}, {Hunt, 1.1f}})},                            // 34
-			{"sailing ships", {22, 30}, E({{Travel, 2.0f}})},                               // 35
-			{"irrigation", {26, 21}, E({{Land, 1.5f}})},                                    // 36
-			{"medicine", {33, 4}, E({{Children, 0.7f}})},                                   // 37
-			{"iron", {34}, E({{Forage, 1.1f}, {Hunt, 1.1f}, {Land, 1.2f}})},                // 38
-			{"mathematics", {33}, E({{Teaching, 1.2f}, {Land, 1.1f}})},                     // 39
+			{"sharp stone flakes", {}, E({{Forage, 1.1f}, {Hunt, 1.1f}}), 1, 315000},                 // 0
+			{"digging sticks", {}, E({{Forage, 1.15f}}), 1, 315000},                                   // 1
+			{"keeping fire", {}, E({{Warmth, 0.3f}, {Predators, 0.7f}}), 1, 315000},                   // 2
+			{"warning calls", {}, E({{Predators, 0.7f}}), 1, 315000},                                  // 3
+			{"healing plants", {}, E({{Children, 0.85f}}), 1, 315000},                                 // 4
+			{"carrying bags", {}, E({{Carry, 1.5f}}), 1, 315000},                                      // 5
+			{"hand axes", {0}, E({{Hunt, 1.1f}, {Forage, 1.05f}}), 1, 315000},                         // 6
+			{"making fire", {2}, E({{Warmth, 0.1f}, {Children, 0.95f}}), 1, 315000},                   // 7
+			{"cooking", {2}, E({{Forage, 1.25f}, {Children, 0.9f}}), 1, 315000},                       // 8
+			{"hide clothing", {0}, E({{Warmth, 0.3f}}), 1, 170000},                                    // 9
+			{"shelters", {1}, E({{Warmth, 0.2f}, {Predators, 0.9f}}), 1, 315000},                      // 10
+			{"grinding seeds", {0}, E({{Forage, 1.1f}}), 1, 105000},                                   // 11
+			{"wooden spears", {6}, E({{Hunt, 1.3f}}), 1, 315000},                                      // 12
+			{"spoken language", {3}, E({{Teaching, 2.0f}}), 1, 300000},                                // 13
+			{"snares and traps", {5}, E({{Hunt, 1.2f}}), 1, 70000},                                   // 14
+			{"drying and smoking food", {2, 5}, E({{Carry, 1.5f}}), 1, 40000},                        // 15
+			{"rafts", {6}, E({{Travel, 2.0f}}), 1, 70000},                                            // 16
+			{"fishing", {12}, E({{Forage, 1.15f}}), 1, 100000},                                        // 17
+			{"sewn clothing", {9, 0}, E({{Warmth, 0.25f}}), 1, 45000},                                // 18
+			{"spear throwers", {12}, E({{Hunt, 1.2f}}), 1, 70000},                                    // 19
+			{"art and ornaments", {13}, E({{Teaching, 1.2f}}), 1, 100000},                             // 20
+			{"counting", {13}, E({{Teaching, 1.1f}, {Carry, 1.1f}}), 1, 44000},                       // 21
+			{"boats", {16}, E({{Travel, 2.0f}}), 1, 50000},                                           // 22
+			{"bows and arrows", {19}, E({{Hunt, 1.3f}}), 1, 64000},                                   // 23
+			{"dogs", {14, 13}, E({{Hunt, 1.15f}, {Predators, 0.8f}}), 1, 25000},                      // 24
+			{"planting", {11, 1}, E({{Land, 2.0f}, {Forage, 1.2f}}), 1, 11500},                       // 25
+			{"farming", {25}, E({{Land, 3.0f}, {Forage, 1.3f}}), 1, 10500},                           // 26
+			{"herding", {24, 25}, E({{Land, 1.5f}, {Hunt, 1.2f}}), 1, 10000},                         // 27
+			{"pottery", {8, 15}, E({{Carry, 1.5f}, {Children, 0.95f}}), 1, 20000},                    // 28
+			{"villages", {26}, E({{Warmth, 0.1f}, {Land, 1.3f}}), 1, 9500},                          // 29
+			{"weaving", {18, 26}, E({{Warmth, 0.1f}, {Carry, 1.2f}}), 1, 9000},                      // 30
+			{"copper working", {28, 7}, E({{Forage, 1.05f}, {Hunt, 1.05f}}), 1, 7500},               // 31
+			{"the wheel", {29}, E({{Carry, 2.0f}, {Travel, 1.3f}}), 1, 5500},                        // 32
+			{"writing", {29, 21}, E({{Teaching, 2.0f}}), 1, 5200},                                   // 33
+			{"bronze", {31}, E({{Forage, 1.1f}, {Hunt, 1.1f}}), 1, 5300},                            // 34
+			{"sailing ships", {22, 30}, E({{Travel, 2.0f}}), 1, 5000},                               // 35
+			{"irrigation", {26, 21}, E({{Land, 1.5f}}), 1, 7500},                                    // 36
+			{"medicine", {33, 4}, E({{Children, 0.7f}}), 1, 4000},                                   // 37
+			{"iron", {34}, E({{Forage, 1.1f}, {Hunt, 1.1f}, {Land, 1.2f}}), 1, 3200},                // 38
+			{"mathematics", {33}, E({{Teaching, 1.2f}, {Land, 1.1f}}), 1, 4000},                     // 39
 		};
 		for (Skill& S : L)
 		{
-			for (int N : S.Needs) S.Tier = S.Tier > L[N].Tier + 1 ? S.Tier : L[N].Tier + 1;
+			double Since = 315000.0; // When what it builds on was first known.
+			for (int N : S.Needs)
+			{
+				S.Tier = S.Tier > L[N].Tier + 1 ? S.Tier : L[N].Tier + 1;
+				Since = Since < L[N].YearsAgo ? Since : L[N].YearsAgo;
+			}
+			// Planting waits for a warm, steady climate (see People::LearnSkills), so it is timed
+			// from the end of the last ice age, not from when seeds were first ground.
+			if (S.Name[0] == 'p' && S.Name[1] == 'l') Since = 13000.0;
+			S.YearsToFind = Since - S.YearsAgo > S.YearsToFind ? Since - S.YearsAgo : S.YearsToFind;
 		}
 		return L;
 	}();
