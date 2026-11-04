@@ -15,7 +15,7 @@
 #include <vector>
 
 // Changes whenever the simulation changes in a way that affects results.
-inline const char* kSimVersion = "2026.11.03 living world";
+inline const char* kSimVersion = "2026.11.04 history pace";
 
 inline std::string NowText()
 {
@@ -50,8 +50,10 @@ struct Milestone
 inline const std::vector<Milestone>& RealMilestones()
 {
 	static const std::vector<Milestone> List = {
-		{"Leave Africa for Asia", "First NPC sets foot in Asia", 65000, "about 70,000 to 50,000 years ago"},
-		{"Reach Europe", "First NPC sets foot in Europe", 45000, "about 47,000 to 43,000 years ago"},
+		// The first footsteps, not the lasting spread: Misliya Cave (Israel) holds a jaw ~185,000 years
+		// old, though people only spread across Asia for good 70,000 to 50,000 years ago.
+		{"Leave Africa for Asia", "First NPC sets foot in Asia", 185000, "about 194,000 to 177,000 years ago (Misliya Cave, Israel); for good 70,000 to 50,000"},
+		{"Reach Europe", "First NPC sets foot in Europe", 45000, "about 47,000 to 43,000 years ago (a skull in Greece may be 210,000)"},
 		{"Reach Australia", "First NPC sets foot in Australia", 55000, "about 65,000 to 50,000 years ago"},
 		{"Reach the Americas", "First NPC sets foot in the Americas", 16000, "about 20,000 to 15,000 years ago"},
 		{"Bows and arrows", "First discovery of bows and arrows", 64000, "about 70,000 to 60,000 years ago"},

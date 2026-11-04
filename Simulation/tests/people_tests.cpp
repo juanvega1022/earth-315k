@@ -246,7 +246,9 @@ static void TestSkillTree()
 		{
 			EXPECT(N < static_cast<int>(i));
 			EXPECT(L[N].Tier < L[i].Tier);
+			EXPECT(L[i].YearsAgo <= L[N].YearsAgo); // History's order.
 		}
+		EXPECT(L[i].YearsToFind >= 300.0);
 	}
 	EXPECT(earth::CanDiscover(0, 0));
 	EXPECT(!earth::CanDiscover(0, 26)); // Farming needs planting first.
@@ -273,7 +275,7 @@ static void TestSkillsSpread()
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 5);
 	earth::PeopleSettings Settings;
-	Settings.DiscoveryPerYear = 0.05;
+	Settings.DiscoveryPace = 1e6;
 	earth::People Folk(&Eco, 5, Settings);
 	for (int i = 0; i < 365 * 5; ++i)
 	{
@@ -405,7 +407,7 @@ static void TestBeliefs()
 	EcoSettings.Threads = 1;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8, EcoSettings);
 	earth::PeopleSettings Settings;
-	Settings.DiscoveryPerYear = 0.2;
+	Settings.DiscoveryPace = 4e6;
 	Settings.BeliefTriesPerYear = 0.05;
 	Settings.Threads = 1; // The same world on every machine.
 	earth::People Folk(&Eco, 8, Settings);
@@ -478,7 +480,7 @@ static void TestStores()
 	EcoSettings.Threads = 1;
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
 	earth::PeopleSettings Settings;
-	Settings.DiscoveryPerYear = 0.05; // Skills come within years, so drying is soon known.
+	Settings.DiscoveryPace = 1e8; // Skills come within years, so drying is soon known.
 	Settings.Threads = 1;             // The same world on every machine.
 	earth::People Folk(&Eco, 6, Settings);
 	bool Stored = false, Toolmaker = false;
@@ -506,7 +508,7 @@ static void TestHerdsAndCrops()
 	EcoSettings.IceAges = false; // Nobody plants in an ice age.
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
 	earth::PeopleSettings Settings;
-	Settings.DiscoveryPerYear = 1e5; // Every skill within years.
+	Settings.DiscoveryPace = 1e12; // Every skill within years.
 	Settings.Threads = 1;
 	Settings.StartLat = 35.0;
 	Settings.StartLon = 46.0;
