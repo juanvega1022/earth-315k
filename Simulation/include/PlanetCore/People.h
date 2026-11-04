@@ -1238,6 +1238,7 @@ private:
 	bool RestartIfGone()
 	{
 		if (Settings.OtherHumans && !OthersStarted && !Npcs.empty()) StartOthers();
+		else if (OthersStarted) BringBackOthers();
 		if (std::any_of(Npcs.begin(), Npcs.end(), [](const Npc& P) { return P.Kind == 0; }))
 		{
 			return true;
@@ -1284,6 +1285,15 @@ private:
 	{
 		// Deep desert with no river or spring is no place to live, only to cross in a wet spell.
 		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
+	}
+
+	// Livable, and within where the band's kind of human could live.
+	bool LivableFor(uint8_t Kind, double Lat, double Lon) const
+	{
+		const std::vector<RangeBox>& R = OtherKinds()[Kind].Range;
+		bool In = R.empty();
+		for (const RangeBox& B : R) In = In || B.Contains(Lat, Lon);
+		return In && Livable(Lat, Lon);
 	}
 
 	int CampSlot(int Id) const
@@ -1483,7 +1493,7 @@ private:
 					}
 				}
 			}
-			Capacity *= C.Effects.Land;
+			Capacity *= C.Effects.Land * OtherKinds()[C.Kind].Numbers;
 			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
 		}
 	}
@@ -1659,7 +1669,7 @@ private:
 			double NewLon = C.Lon + DLon * Step;
 			if (NewLon > 180.0) NewLon -= 360.0;
 			if (NewLon < -180.0) NewLon += 360.0;
-			if (Livable(NewLat, NewLon))
+			if (LivableFor(C.Kind, NewLat, NewLon))
 			{
 				GridRemove(static_cast<int>(Slot));
 				C.Lat = NewLat;
@@ -1717,7 +1727,7 @@ private:
 			{
 				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
 				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
-				Placed = Livable(New.Lat, New.Lon);
+				Placed = LivableFor(New.Kind, New.Lat, New.Lon);
 			}
 			if (!Placed)
 			{
@@ -3597,12 +3607,31 @@ private:
 	void StartOthers()
 	{
 		OthersStarted = true;
-		const double Ago = Eco->YearsAgo();
-		const Genome Base = InstinctGenome();
 		for (size_t k = 1; k < OtherKinds().size(); ++k)
+			if (StartKind(k)) AddEvent(std::string(OtherKinds()[k].Plural) + " live here too, in their own lands");
+	}
+
+	// The real kinds lived on for many thousands of years in places the run is too coarse to hold
+	// them through hard times, so until their real last date one that dies out comes back from a
+	// refuge; after it, whether they last is up to them.
+	// shortcut: stands in for refuges the grid can't see; drop it if the run's density is raised.
+	void BringBackOthers()
+	{
+		uint32_t Alive = 0;
+		for (const Npc& P : Npcs) Alive |= 1u << P.Kind;
+		for (size_t k = 1; k < OtherKinds().size(); ++k)
+			if (!(Alive >> k & 1u) && StartKind(k))
+				AddEvent(std::string("A hidden group of ") + OtherKinds()[k].Plural + " comes back from a refuge");
+	}
+
+	// A few bands of one other kind in its real homes; false if it was gone by now or nowhere fits.
+	bool StartKind(size_t k)
+	{
+		const HomininKind& K = OtherKinds()[k];
+		if (Eco->YearsAgo() < K.LastYearsAgo) return false;
+		const Genome Base = InstinctGenome();
+		bool Any = false;
 		{
-			const HomininKind& K = OtherKinds()[k];
-			if (Ago < K.LastYearsAgo) continue;
 			for (const auto& [Lat, Lon] : K.Homes)
 			{
 				if (!Livable(Lat, Lon)) continue;
@@ -3636,9 +3665,10 @@ private:
 					P.Lon = Lon + P.OffsetLon;
 					Npcs.push_back(P);
 				}
+				Any = true;
 			}
-			AddEvent(std::string(K.Plural) + " live here too, in their own lands");
 		}
+		return Any;
 		IndexCamps();
 	}
 
