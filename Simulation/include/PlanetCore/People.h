@@ -532,6 +532,7 @@ public:
 		if (Ar.Version >= 7) Ar.Io(AnyStore), Ar.Io(AnyToolmaker);
 		if (Ar.Version >= 8) Ar.Io(OthersStarted), Ar.Io(AnyMixedChild), Ar.Io(MetKinds);
 		if (Ar.Version >= 9) Ar.Io(EverKept), Ar.Io(EverSown);
+		if (Ar.Version >= 10) Ar.Io(Findable);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1168,6 +1169,9 @@ private:
 	int LanguageYear = 0;
 	SkillSet KnownNow = 0;  // Skills someone alive knows.
 	SkillSet EverKnown = 0; // Skills anyone has ever known.
+	// The year each skill first became findable (all it builds on known somewhere); -1 not yet.
+	// An older save starts the wait afresh for those already findable.
+	std::vector<double> Findable;
 	// Every invention ever made, keyed by InventionId: where, when and by whom it was first made.
 	std::unordered_map<uint32_t, InventionRecord> InventionLog;
 	// Every belief ever held; a belief's id is its place in this list plus one.
@@ -2660,6 +2664,26 @@ private:
 	static double Craft(const Npc& P) { return std::clamp(0.85 + 0.15 * Smarts(P), 0.6, 1.6); }
 	static double Smarts(const Npc& P) { return static_cast<double>(P.BrainSize()) / kBrainHidden; }
 
+	// When each skill became findable, read back from the firsts: the latest first discovery of
+	// what it builds on (year 0 for what was known from the start); -1 if something is still unknown.
+	std::vector<double> FindableFromFirsts() const
+	{
+		const std::vector<Skill>& List = AllSkills();
+		std::vector<double> Found(List.size(), 0.0);
+		for (size_t k = 0; k < List.size(); ++k)
+		{
+			if (!Knows(EverKnown, static_cast<int>(k))) Found[k] = -1.0;
+			const std::string Text = "First discovery of " + std::string(List[k].Name);
+			for (const auto& F : Events)
+				if (F.Text == Text) { Found[k] = F.Year; break; }
+		}
+		std::vector<double> Out(List.size(), 0.0);
+		for (size_t k = 0; k < List.size(); ++k)
+			for (int N : List[k].Needs)
+				Out[k] = Found[static_cast<size_t>(N)] < 0.0 || Out[k] < 0.0 ? -1.0 : std::max(Out[k], Found[static_cast<size_t>(N)]);
+		return Out;
+	}
+
 	// Over Days days, each person may hit on a skill they have what it takes for, and picks up
 	// skills others in camp know. Young children are too small to learn them.
 	void LearnSkills(int Days)
@@ -2669,10 +2693,26 @@ private:
 		// Odds a year for one person of average wits and curiosity: a world of kPacePeople finds a
 		// skill in YearsToFind on average. The reference scales with the density setting, so a
 		// denser world isn't also a faster one.
+		// Beyond that many people the world finds things no faster: the real pace already counts
+		// everyone alive then, and a run that grows past the reference would race ahead of history.
 		constexpr double kPacePeople = 3000.0;
-		const double PacePeople = kPacePeople * Settings.PeoplePerKm2 / 0.0003;
+		const double PacePeople = std::max(kPacePeople * Settings.PeoplePerKm2 / 0.0003, static_cast<double>(Npcs.size()));
+		// The chance grows with time since a skill became findable (a Weibull wait of shape 3 with
+		// mean YearsToFind), so a first find long before its time is rare, and so is one long overdue.
+		const double Now = Eco->Years();
+		if (Findable.empty()) Findable = FindableFromFirsts(); // A new run, or a save from before they were kept.
+		Findable.resize(static_cast<size_t>(Count), -1.0);
 		std::array<double, 64> TierOdds{};
-		for (int k = 0; k < Count; ++k) TierOdds[k] = Settings.DiscoveryPace / (List[k].YearsToFind * PacePeople);
+		for (int k = 0; k < Count; ++k)
+		{
+			const auto& Needs = List[k].Needs;
+			if (Findable[k] < 0.0 && std::all_of(Needs.begin(), Needs.end(), [&](int N) { return Knows(EverKnown, N); })) Findable[k] = Now;
+			if (Findable[k] < 0.0) continue;
+			const double Scale = List[k].YearsToFind / (0.893 * Settings.DiscoveryPace); // The mean of shape 3 is 0.893 x scale.
+			// Long overdue (past 3 scales, almost never reached) the chance stops growing.
+			const double T = std::min(3.0, (Now - Findable[k]) / Scale + 1.0 / 365.0);
+			TierOdds[k] = 3.0 * T * T / Scale / PacePeople;
+		}
 		// Planting needs a warm, steady climate: in an ice age, seasons swing too hard to bet on a crop.
 		constexpr int kPlanting = 25;
 		if (Eco->IceCover() > 0.15) TierOdds[kPlanting] = 0.0;
