@@ -109,7 +109,7 @@ inline std::vector<Species> DefaultSpecies()
 	// Africa, where the NPCs will start.
 	All.push_back(Make("African elephant", Diet::Plants, {Africa}, 4000, 60, 30, 15, 0.07, 60, false, 0.55f, 0.55f, 0.58f));
 	All.push_back(Make("Plains zebra", Diet::Plants, {EastSouthAfrica}, 300, 400, 30, 25, 0.20, 20, false, 0.95f, 0.95f, 0.95f));
-	All.push_back(Make("Wildebeest", Diet::Plants, {{-30, 5, 15, 40}}, 200, 800, 30, 30, 0.30, 18, false, 0.40f, 0.33f, 0.25f));
+	All.push_back(Make("Wildebeest", Diet::Plants, {{-30, 5, 15, 40}}, 200, 300, 60, 30, 0.30, 18, false, 0.40f, 0.33f, 0.25f));
 	All.push_back(Make("Hippopotamus", Diet::Plants, {{-30, 15, -17, 40}}, 1500, 40, 20, 8, 0.10, 40, false, 0.50f, 0.40f, 0.45f));
 	All.push_back(Hunter(Make("Lion", Diet::Meat, {Africa, {15, 37, -10, 50}}, 190, 8, 12, 20, 0.30, 15, false, 0.85f, 0.65f, 0.25f), 100, 1500));
 	All.push_back(Hunter(Make("Spotted hyena", Diet::Meat, {{-34, 20, -17, 50}}, 60, 15, 12, 25, 0.35, 15, false, 0.60f, 0.50f, 0.30f), 50, 400));
@@ -194,6 +194,13 @@ inline std::vector<Species> DefaultSpecies()
 	All.push_back(Kept("Turkey", "Wild turkey", Herding, 8, 20, 3.0, 6, 0.30f, 0.25f, 0.25f));
 	All.push_back(Kept("Llama", "Guanaco", Herding, 130, 20, 0.4, 20, 0.95f, 0.90f, 0.85f));
 	All.push_back(Kept("Domestic reindeer", "Reindeer", Herding, 100, 40, 0.4, 15, 0.80f, 0.78f, 0.70f));
+	// Small, fast-breeding grazers otherwise multiply into tens of millions, strip the grass and
+	// starve the zebra and wildebeest; capped near the densities found where they are common.
+	const std::pair<const char*, double> Densest[] = {{"Warthog", 2.0}, {"Wild boar", 2.0}, {"Gazelle", 2.0}, {"Saiga", 2.0},
+		{"Mouflon", 1.0}, {"Wild goat", 1.0}, {"Reindeer", 1.0}, {"Red kangaroo", 2.0}, {"Guanaco", 1.0}};
+	for (Species& S : All)
+		for (const auto& [Name, Max] : Densest)
+			if (S.Name == Name) S.MaxPerKm2 = Max;
 	return All;
 }
 

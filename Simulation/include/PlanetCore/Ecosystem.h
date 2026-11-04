@@ -1468,6 +1468,11 @@ private:
 		const double Crowding = std::max(1.0, 2.0 * static_cast<double>(Before) / Settings.MaxGroups);
 		std::vector<AnimalGroup> Splits;
 		std::vector<double> Alive(SpeciesList.size(), 0.0);
+		// A kind down to fewer groups than it started with may always split, even with the planet
+		// full, or slots lost to bad luck never come back and it dies out group by group.
+		std::vector<int> GroupsOf(SpeciesList.size(), 0);
+		for (size_t i = 0; i < Before; ++i)
+			if (AnimalGroups[i].Count >= 1.0) ++GroupsOf[AnimalGroups[i].SpeciesIndex];
 		size_t Kept = 0;
 		for (size_t i = 0; i < Before; ++i)
 		{
@@ -1482,8 +1487,11 @@ private:
 			// must fit under the cap. As the planet fills up, groups grow larger before
 			// splitting, so the cap is approached gently.
 			const size_t Remaining = Before - i;
-			if (G.Count > S.GroupSize * 2.0 * Crowding * Crowding && Kept + Splits.size() + Remaining + 1 <= static_cast<size_t>(Settings.MaxGroups))
+			const bool Few = GroupsOf[G.SpeciesIndex] < S.StartGroups;
+			if (Few ? G.Count > S.GroupSize * 2.0
+					: G.Count > S.GroupSize * 2.0 * Crowding * Crowding && Kept + Splits.size() + Remaining + 1 <= static_cast<size_t>(Settings.MaxGroups))
 			{
+				++GroupsOf[G.SpeciesIndex];
 				G.Count *= 0.5;
 				G.Hunted *= 0.5;
 				AnimalGroup B = G;

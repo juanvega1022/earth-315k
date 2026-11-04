@@ -1182,6 +1182,7 @@ private:
 	bool AnyStore = false;
 	bool AnyToolmaker = false;
 	bool OthersStarted = false;
+	std::vector<double> LastReturn; // When each other kind last came back from a refuge; not saved.
 	bool AnyNpcChild = false; // Not saved: a resumed run already had its first child.
 	bool AnyMixedChild = false;
 	uint32_t MetKinds = 0;
@@ -3626,9 +3627,16 @@ private:
 	{
 		uint32_t Alive = 0;
 		for (const Npc& P : Npcs) Alive |= 1u << P.Kind;
+		// At most once in 1,000 years each: a home too poor to hold them would otherwise refill and
+		// empty again every step.
+		const double Now = Eco->Years();
+		LastReturn.resize(OtherKinds().size(), -1.0e9);
 		for (size_t k = 1; k < OtherKinds().size(); ++k)
-			if (!(Alive >> k & 1u) && StartKind(k))
-				AddEvent(std::string("A hidden group of ") + OtherKinds()[k].Plural + " comes back from a refuge");
+		{
+			if ((Alive >> k & 1u) || Now - LastReturn[k] < 1000.0) continue;
+			LastReturn[k] = Now;
+			if (StartKind(k)) AddEvent(std::string("A hidden group of ") + OtherKinds()[k].Plural + " comes back from a refuge");
+		}
 	}
 
 	// A few bands of one other kind in its real homes; false if it was gone by now or nowhere fits.
