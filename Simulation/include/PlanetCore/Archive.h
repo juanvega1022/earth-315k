@@ -19,7 +19,7 @@
 namespace earth
 {
 
-inline constexpr uint32_t kSaveVersion = 9; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders. 5: remembered places. 6: grief and kindness. 7: stored food. 8: other kinds of human. 9: kept herds and crops.
+inline constexpr uint32_t kSaveVersion = 10; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders. 5: remembered places. 6: grief and kindness. 7: stored food. 8: other kinds of human. 9: kept herds and crops. 10: when each skill became findable.
 
 class Archive
 {
