@@ -519,6 +519,7 @@ public:
 	{
 		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Dice), Ar.Io(NextId), Ar.Io(NextCampId), Ar.Io(HighestGeneration), Ar.Io(Births), Ar.Io(Deaths), Ar.Io(Kills), Ar.Io(Causes);
+		AnyNpcChild = Births > 0;
 		Ar.Io(Regions), Ar.Io(SpeciesHunted), Ar.Io(NextPopulationMark), Ar.Io(NextBandMark), Ar.Io(NextGenerationMark), Ar.Io(NextAgeMark);
 		Ar.Io(AnyHunt), Ar.Io(AnyShare), Ar.Io(AnyDeathBy), Ar.Io(Arrivals), Ar.Io(HallOfFame);
 		Ar.Io(Notables), Ar.Io(PlaceNames), Ar.Io(RecordBrain), Ar.Io(NextLanguageMark), Ar.Io(LanguageYear), Ar.Io(KnownNow), Ar.Io(EverKnown);
@@ -783,6 +784,8 @@ public:
 	}
 	// How many bands have started from scratch (1 = the first band is still going).
 	int BandsStarted() const { return Arrivals; }
+	// No new band arrives when everyone is gone (the run has passed today).
+	void StopNewBands() { Settings.NewBandWhenGone = false; }
 
 	// NPCs are kept in the order they were born, so ids only go up along the list.
 	const Npc* Find(uint32_t Id) const
@@ -1179,6 +1182,7 @@ private:
 	bool AnyStore = false;
 	bool AnyToolmaker = false;
 	bool OthersStarted = false;
+	bool AnyNpcChild = false; // Not saved: a resumed run already had its first child.
 	bool AnyMixedChild = false;
 	uint32_t MetKinds = 0;
 	std::vector<bool> EverKept; // Per species: anyone has kept a herd of it.
@@ -1238,6 +1242,7 @@ private:
 	bool RestartIfGone()
 	{
 		if (Settings.OtherHumans && !OthersStarted && !Npcs.empty()) StartOthers();
+		else if (OthersStarted) BringBackOthers();
 		if (std::any_of(Npcs.begin(), Npcs.end(), [](const Npc& P) { return P.Kind == 0; }))
 		{
 			return true;
@@ -1284,6 +1289,15 @@ private:
 	{
 		// Deep desert with no river or spring is no place to live, only to cross in a wet spell.
 		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
+	}
+
+	// Livable, and within where the band's kind of human could live.
+	bool LivableFor(uint8_t Kind, double Lat, double Lon) const
+	{
+		const std::vector<RangeBox>& R = OtherKinds()[Kind].Range;
+		bool In = R.empty();
+		for (const RangeBox& B : R) In = In || B.Contains(Lat, Lon);
+		return In && Livable(Lat, Lon);
 	}
 
 	int CampSlot(int Id) const
@@ -1483,7 +1497,7 @@ private:
 					}
 				}
 			}
-			Capacity *= C.Effects.Land;
+			Capacity *= C.Effects.Land * OtherKinds()[C.Kind].Numbers;
 			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
 		}
 	}
@@ -1659,7 +1673,7 @@ private:
 			double NewLon = C.Lon + DLon * Step;
 			if (NewLon > 180.0) NewLon -= 360.0;
 			if (NewLon < -180.0) NewLon += 360.0;
-			if (Livable(NewLat, NewLon))
+			if (LivableFor(C.Kind, NewLat, NewLon))
 			{
 				GridRemove(static_cast<int>(Slot));
 				C.Lat = NewLat;
@@ -1717,7 +1731,7 @@ private:
 			{
 				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
 				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
-				Placed = Livable(New.Lat, New.Lon);
+				Placed = LivableFor(New.Kind, New.Lat, New.Lon);
 			}
 			if (!Placed)
 			{
@@ -1950,7 +1964,7 @@ private:
 					P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.02f);
 					P.Pleasure += 0.3f; // The thrill of a kill.
 					++Kills;
-					NoteHunt(Kind, Party);
+					NoteHunt(Kind, Party, P.Kind);
 				}
 			}
 			if (Dice.Chance(0.0001 * std::min(MaxMass, 2000.0) / 250.0))
@@ -2002,7 +2016,7 @@ private:
 				P.SocialNeed = std::max(0.0f, P.SocialNeed - 0.3f);
 				Npcs[Hungriest].Feel(P.Id, 0.2f);
 				P.Feel(Npcs[Hungriest].Id, 0.05f);
-				if (!AnyShare)
+				if (!AnyShare && P.Kind == 0)
 				{
 					AnyShare = true;
 					AddEvent("First NPC shares food with a hungry camp mate");
@@ -2106,7 +2120,7 @@ private:
 					Meat[c] += Eco->GetSpecies()[k].BodyMassKg * 0.5 * Killed[k];
 					Landed[c] += Killed[k];
 					Kills += Killed[k];
-					NoteHunt(static_cast<int>(k), Party);
+					NoteHunt(static_cast<int>(k), Party, Camps[c].Kind);
 				}
 			}
 		}
@@ -2280,8 +2294,10 @@ private:
 		});
 	}
 
-	void NoteHunt(int Kind, int Party)
+	// The firsts are the NPCs' own: hunts by the other kinds of human don't count.
+	void NoteHunt(int Kind, int Party, uint8_t HunterKind)
 	{
+		if (HunterKind != 0) return;
 		SpeciesHunted.resize(Eco->GetSpecies().size(), false); // Grows when a newer build adds kinds.
 		if (SpeciesHunted[Kind] || Eco->GetSpecies()[Kind].TameSkill >= 0) // Killing a kept animal isn't a hunt.
 		{
@@ -3515,8 +3531,9 @@ private:
 				}
 				Born.push_back(Baby);
 				++Births;
-				if (Births == 1)
+				if (!AnyNpcChild && Baby.Kind == 0)
 				{
+					AnyNpcChild = true;
 					AddEvent("First child born");
 				}
 			}
@@ -3597,12 +3614,31 @@ private:
 	void StartOthers()
 	{
 		OthersStarted = true;
-		const double Ago = Eco->YearsAgo();
-		const Genome Base = InstinctGenome();
 		for (size_t k = 1; k < OtherKinds().size(); ++k)
+			if (StartKind(k)) AddEvent(std::string(OtherKinds()[k].Plural) + " live here too, in their own lands");
+	}
+
+	// The real kinds lived on for many thousands of years in places the run is too coarse to hold
+	// them through hard times, so until their real last date one that dies out comes back from a
+	// refuge; after it, whether they last is up to them.
+	// shortcut: stands in for refuges the grid can't see; drop it if the run's density is raised.
+	void BringBackOthers()
+	{
+		uint32_t Alive = 0;
+		for (const Npc& P : Npcs) Alive |= 1u << P.Kind;
+		for (size_t k = 1; k < OtherKinds().size(); ++k)
+			if (!(Alive >> k & 1u) && StartKind(k))
+				AddEvent(std::string("A hidden group of ") + OtherKinds()[k].Plural + " comes back from a refuge");
+	}
+
+	// A few bands of one other kind in its real homes; false if it was gone by now or nowhere fits.
+	bool StartKind(size_t k)
+	{
+		const HomininKind& K = OtherKinds()[k];
+		if (Eco->YearsAgo() < K.LastYearsAgo) return false;
+		const Genome Base = InstinctGenome();
+		bool Any = false;
 		{
-			const HomininKind& K = OtherKinds()[k];
-			if (Ago < K.LastYearsAgo) continue;
 			for (const auto& [Lat, Lon] : K.Homes)
 			{
 				if (!Livable(Lat, Lon)) continue;
@@ -3636,9 +3672,10 @@ private:
 					P.Lon = Lon + P.OffsetLon;
 					Npcs.push_back(P);
 				}
+				Any = true;
 			}
-			AddEvent(std::string(K.Plural) + " live here too, in their own lands");
 		}
+		return Any;
 		IndexCamps();
 	}
 
@@ -3707,7 +3744,7 @@ private:
 			Story->second.Death = Line;
 		}
 		Causes[Cause] += 1;
-		if (FirstDeath[Cause] && !AnyDeathBy[Cause])
+		if (FirstDeath[Cause] && !AnyDeathBy[Cause] && P.Kind == 0)
 		{
 			AnyDeathBy[Cause] = true;
 			AddEvent(FirstDeath[Cause]);
@@ -3762,13 +3799,13 @@ private:
 
 	void CheckFirsts()
 	{
-		const int Count = static_cast<int>(Npcs.size());
+		const int Count = AliveOfKind(0);
 		while (Count >= NextPopulationMark)
 		{
 			AddEvent("The people number " + std::to_string(NextPopulationMark));
 			NextPopulationMark = NextPopulationMark < 100 ? 100 : (NextPopulationMark < 250 ? 250 : (NextPopulationMark < 500 ? 500 : NextPopulationMark * 2));
 		}
-		const int BandsNow = static_cast<int>(Camps.size());
+		const int BandsNow = static_cast<int>(std::count_if(Camps.begin(), Camps.end(), [](const Camp& C) { return C.Kind == 0 && !C.Members.empty(); }));
 		while (BandsNow >= NextBandMark)
 		{
 			AddEvent(NextBandMark == 2 ? "The people split into two separate bands" : std::to_string(NextBandMark) + " separate bands");
@@ -3785,7 +3822,7 @@ private:
 		}
 		for (const Npc& P : Npcs)
 		{
-			if (P.AgeYears() >= NextAgeMark)
+			if (P.Kind == 0 && P.AgeYears() >= NextAgeMark)
 			{
 				AddEvent("First NPC to live to " + std::to_string(NextAgeMark));
 				NextAgeMark += 10;
