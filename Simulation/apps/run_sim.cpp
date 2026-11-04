@@ -16,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <vector>
 
 // Saves the brain of the oldest NPC, who has had the longest to learn, and the biggest brain.
 static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string& Path)
@@ -42,6 +43,28 @@ static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string&
 static volatile std::sig_atomic_t StopAsked = 0;
 static void AskToStop(int) { StopAsked = 1; }
 
+// "12000 years ago", "today", or "5000 years from now".
+static std::string When(double YearsAgo)
+{
+	const long long N = std::llround(YearsAgo);
+	return N > 0 ? std::to_string(N) + " years ago" : N == 0 ? std::string("today") : std::to_string(-N) + " years from now";
+}
+
+// out/stories.txt -> out/stories_today.txt
+static std::string TodayName(const std::string& Path)
+{
+	const size_t Slash = Path.find_last_of("/\\");
+	const size_t Dot = Path.find_last_of('.');
+	const size_t At = Dot != std::string::npos && (Slash == std::string::npos || Dot > Slash) ? Dot : Path.size();
+	return Path.substr(0, At) + "_today" + Path.substr(At);
+}
+
+static void CopyFile(const std::string& From, const std::string& To)
+{
+	std::ifstream In(From, std::ios::binary);
+	if (In) std::ofstream(To, std::ios::binary) << In.rdbuf();
+}
+
 static bool FileExists(const std::string& Path)
 {
 	if (std::FILE* F = std::fopen(Path.c_str(), "rb"))
@@ -50,6 +73,20 @@ static bool FileExists(const std::string& Path)
 		return true;
 	}
 	return false;
+}
+
+// The key moments of the run so far, oldest first: the world's events and the people's firsts,
+// leaving out the many small ones (each new invention and each first hunt of a kind).
+static void WriteHistory(const std::string& Path, const earth::Ecosystem& Eco, const earth::People& Folk)
+{
+	std::vector<std::pair<double, std::string>> Lines;
+	for (const auto& E : Eco.Events()) Lines.emplace_back(E.Year, E.Text);
+	for (const auto& F : Folk.Firsts())
+		if (F.Text.rfind("First invention of", 0) != 0 && F.Text.find(" hunted (party of") == std::string::npos) Lines.emplace_back(F.Year, F.Text);
+	std::stable_sort(Lines.begin(), Lines.end(), [](const auto& A, const auto& B) { return A.first < B.first; });
+	std::ofstream O(Path);
+	O << "The history of the world, from " << When(Eco.YearsAgo() + Eco.Years()) << " to " << When(Eco.YearsAgo()) << "\n\n";
+	for (const auto& [Year, Text] : Lines) O << "Year " << static_cast<long long>(Year) << " (" << When(Eco.YearsAgo() + Eco.Years() - Year) << "): " << Text << "\n";
 }
 
 int main(int Argc, char** Argv)
@@ -111,6 +148,8 @@ int main(int Argc, char** Argv)
 			std::printf("  --report F      write an HTML report with charts and a scorecard against real history (needs --csv)\n");
 			std::printf("  --atlas F       keep a map of languages, beliefs and people over time in F (an HTML page) and F.js\n");
 			std::printf("  --other-humans  add Neanderthals, Denisovans and other kinds of human in their real homes (experimental)\n");
+			std::printf("  A run can go past today into the future (say --years 1000000000). As it reaches today it keeps a copy\n");
+			std::printf("  of every output, named ..._today; after that it ends early if every species dies out\n");
 			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
 			return 1;
 		}
@@ -217,7 +256,9 @@ int main(int Argc, char** Argv)
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
-	const int TotalYears = static_cast<int>(Years);
+	// Life on Earth ends in about a billion years, when the brightening Sun boils the oceans away.
+	const int PlanetDies = static_cast<int>(Eco.YearsAgo() + Eco.Years() + 1.0e9);
+	const int TotalYears = static_cast<int>(std::min(Years, static_cast<double>(PlanetDies)));
 	for (int Y = FirstYear > 0 ? FirstYear + 1 : 0; Y <= TotalYears; ++Y)
 	{
 		for (int D = 0; Y > 0 && D < 365;)
@@ -243,10 +284,11 @@ int main(int Argc, char** Argv)
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
 		const int Every = std::min(1000, TotalYears >= 100 ? TotalYears / 10 : 10);
-		if (Y % Every == 0 || Y == TotalYears)
+		const bool Today = Eco.YearsAgo() <= 0.0 && Eco.YearsAgo() + 1.0 > 0.0;
+		if (Y % Every == 0 || Y == TotalYears || Today)
 		{
-			std::printf("Year %6d (%d years ago): %8.0f animals in %5zu groups, %2d species, plants %3.0f%%, %d people in %d bands\n", Y,
-				static_cast<int>(Eco.YearsAgo()), Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
+			std::printf("Year %6d (%s): %8.0f animals in %5zu groups, %2d species, plants %3.0f%%, %d people in %d bands\n", Y,
+				When(Eco.YearsAgo()).c_str(), Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
 				Folk.Alive(), Folk.BandCount());
 			std::printf("            Sea level %+.0f m from today, ice age strength %.0f%%\n", Eco.SeaLevelChange(), Eco.IceCover() * 100.0);
 			if (WithPeople)
@@ -263,7 +305,7 @@ int main(int Argc, char** Argv)
 			}
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{
-				std::ofstream(LanguagesPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago\n\n" << Folk.LanguagesText();
+				std::ofstream(LanguagesPath) << "Year " << Y << ", " << When(Eco.YearsAgo()) << "\n\n" << Folk.LanguagesText();
 			}
 			Report(Y);
 			if (!AtlasPath.empty() && WithPeople)
@@ -274,20 +316,31 @@ int main(int Argc, char** Argv)
 			}
 			if (!BeliefsPath.empty())
 			{
-				std::ofstream(BeliefsPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago: what the people believe\n\n" << Folk.BeliefsText();
+				std::ofstream(BeliefsPath) << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": what the people believe\n\n" << Folk.BeliefsText();
 			}
 			if (!InventionsPath.empty())
 			{
-				std::ofstream(InventionsPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago: things made from materials, oldest first\n\n" << Folk.InventionsText();
+				std::ofstream(InventionsPath) << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": things made from materials, oldest first\n\n" << Folk.InventionsText();
 			}
 			if (!StoriesPath.empty())
 			{
-				std::ofstream(StoriesPath) << "Year " << Y << ", " << static_cast<int>(Eco.YearsAgo()) << " years ago: the people who made a difference\n\n" << Folk.StoriesText();
+				std::ofstream(StoriesPath) << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the people who made a difference\n\n" << Folk.StoriesText();
 			}
 			if (!BrainPath.empty() && Folk.Alive() > 0)
 			{
 				SaveBrain(Folk, BrainPath);
 			}
+		}
+		if (Today)
+		{
+			// Keep the world as it stands today, before the run goes on into the future.
+			for (const std::string* P : {&ReportPath, &LanguagesPath, &BeliefsPath, &InventionsPath, &StoriesPath, &BrainPath, &CsvPath, &AtlasPath})
+				if (!P->empty()) CopyFile(*P, TodayName(*P));
+			if (!AtlasPath.empty()) CopyFile(AtlasJs, TodayName(AtlasPath) + ".js");
+			if (!SavePath.empty()) earth::SaveWorld(TodayName(SavePath), Eco, Folk);
+			if (!FirstOutput.empty()) WriteHistory(FolderOf(FirstOutput) + "history_today.txt", Eco, Folk);
+			std::printf("  Today: the world has reached the present. A copy of every output is kept, named ..._today\n");
+			if (TotalYears > Y) std::printf("  The run carries on into the future\n");
 		}
 		for (; EventsShown < Eco.Events().size(); ++EventsShown)
 		{
@@ -301,6 +354,19 @@ int main(int Argc, char** Argv)
 		if (Y > FirstYear && (Y % SaveEvery == 0 || Y == TotalYears || Stopping))
 		{
 			Save(Y);
+		}
+		// From today on, people who die out stay gone, and a world with nothing alive ends.
+		if (Eco.YearsAgo() < 0.0) Folk.StopNewBands();
+		const bool AllDead = Eco.YearsAgo() < 0.0 && Eco.SpeciesAliveCount() == 0 && Folk.Alive() == 0;
+		if (AllDead || (Y == PlanetDies && Y == TotalYears))
+		{
+			std::printf(AllDead ? "Year %d (%s): the last species has died out. Nothing is left alive on Earth.\n"
+			                    : "Year %d (%s): the Sun has grown so bright that the oceans boil away. The Earth can no longer hold life.\n",
+				Y, When(Eco.YearsAgo()).c_str());
+			Save(Y);
+			Report(Y);
+			AppendRunLog(RunLog, std::string("Ended      at year ") + std::to_string(Y) + (AllDead ? ": every species died out" : ": the planet died"));
+			break;
 		}
 		std::fflush(stdout);
 		if (Stopping)

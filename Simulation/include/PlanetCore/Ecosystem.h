@@ -275,7 +275,15 @@ public:
 			{160000, -90}, {190000, -60}, {200000, -50}, {215000, -15}, {230000, -60}, {243000, -10},
 			{260000, -110}, {285000, -90}, {300000, -60}, {315000, -30}, {330000, 0}};
 		const int N = static_cast<int>(sizeof(Table) / sizeof(Table[0]));
-		if (YearsAgoNow <= 0.0) return 0.0;
+		// The future: today's warm spell is expected to last unusually long (a weak wobble of the
+		// Earth's orbit), so the next ice age starts some 50,000 years from now; after that the
+		// last 120,000-year cycle repeats, from its warm peak 125,000 years ago down to today.
+		// shortcut: a repeat of the past cycle, not an orbital model; ignores the warming people cause.
+		if (YearsAgoNow <= 0.0)
+		{
+			const double Ahead = -YearsAgoNow - 50000.0;
+			return Ahead <= 0.0 ? 0.0 : SeaLevelThen(125000.0 - std::fmod(Ahead, 120000.0));
+		}
 		for (int i = 1; i < N; ++i)
 		{
 			if (YearsAgoNow <= Table[i][0])

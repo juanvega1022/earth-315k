@@ -519,6 +519,7 @@ public:
 	{
 		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Dice), Ar.Io(NextId), Ar.Io(NextCampId), Ar.Io(HighestGeneration), Ar.Io(Births), Ar.Io(Deaths), Ar.Io(Kills), Ar.Io(Causes);
+		AnyNpcChild = Births > 0;
 		Ar.Io(Regions), Ar.Io(SpeciesHunted), Ar.Io(NextPopulationMark), Ar.Io(NextBandMark), Ar.Io(NextGenerationMark), Ar.Io(NextAgeMark);
 		Ar.Io(AnyHunt), Ar.Io(AnyShare), Ar.Io(AnyDeathBy), Ar.Io(Arrivals), Ar.Io(HallOfFame);
 		Ar.Io(Notables), Ar.Io(PlaceNames), Ar.Io(RecordBrain), Ar.Io(NextLanguageMark), Ar.Io(LanguageYear), Ar.Io(KnownNow), Ar.Io(EverKnown);
@@ -783,6 +784,8 @@ public:
 	}
 	// How many bands have started from scratch (1 = the first band is still going).
 	int BandsStarted() const { return Arrivals; }
+	// No new band arrives when everyone is gone (the run has passed today).
+	void StopNewBands() { Settings.NewBandWhenGone = false; }
 
 	// NPCs are kept in the order they were born, so ids only go up along the list.
 	const Npc* Find(uint32_t Id) const
@@ -1179,6 +1182,7 @@ private:
 	bool AnyStore = false;
 	bool AnyToolmaker = false;
 	bool OthersStarted = false;
+	bool AnyNpcChild = false; // Not saved: a resumed run already had its first child.
 	bool AnyMixedChild = false;
 	uint32_t MetKinds = 0;
 	std::vector<bool> EverKept; // Per species: anyone has kept a herd of it.
@@ -1960,7 +1964,7 @@ private:
 					P.HuntSkill = std::min(1.0f, P.HuntSkill + 0.02f);
 					P.Pleasure += 0.3f; // The thrill of a kill.
 					++Kills;
-					NoteHunt(Kind, Party);
+					NoteHunt(Kind, Party, P.Kind);
 				}
 			}
 			if (Dice.Chance(0.0001 * std::min(MaxMass, 2000.0) / 250.0))
@@ -2012,7 +2016,7 @@ private:
 				P.SocialNeed = std::max(0.0f, P.SocialNeed - 0.3f);
 				Npcs[Hungriest].Feel(P.Id, 0.2f);
 				P.Feel(Npcs[Hungriest].Id, 0.05f);
-				if (!AnyShare)
+				if (!AnyShare && P.Kind == 0)
 				{
 					AnyShare = true;
 					AddEvent("First NPC shares food with a hungry camp mate");
@@ -2116,7 +2120,7 @@ private:
 					Meat[c] += Eco->GetSpecies()[k].BodyMassKg * 0.5 * Killed[k];
 					Landed[c] += Killed[k];
 					Kills += Killed[k];
-					NoteHunt(static_cast<int>(k), Party);
+					NoteHunt(static_cast<int>(k), Party, Camps[c].Kind);
 				}
 			}
 		}
@@ -2290,8 +2294,10 @@ private:
 		});
 	}
 
-	void NoteHunt(int Kind, int Party)
+	// The firsts are the NPCs' own: hunts by the other kinds of human don't count.
+	void NoteHunt(int Kind, int Party, uint8_t HunterKind)
 	{
+		if (HunterKind != 0) return;
 		SpeciesHunted.resize(Eco->GetSpecies().size(), false); // Grows when a newer build adds kinds.
 		if (SpeciesHunted[Kind] || Eco->GetSpecies()[Kind].TameSkill >= 0) // Killing a kept animal isn't a hunt.
 		{
@@ -3525,8 +3531,9 @@ private:
 				}
 				Born.push_back(Baby);
 				++Births;
-				if (Births == 1)
+				if (!AnyNpcChild && Baby.Kind == 0)
 				{
+					AnyNpcChild = true;
 					AddEvent("First child born");
 				}
 			}
@@ -3737,7 +3744,7 @@ private:
 			Story->second.Death = Line;
 		}
 		Causes[Cause] += 1;
-		if (FirstDeath[Cause] && !AnyDeathBy[Cause])
+		if (FirstDeath[Cause] && !AnyDeathBy[Cause] && P.Kind == 0)
 		{
 			AnyDeathBy[Cause] = true;
 			AddEvent(FirstDeath[Cause]);
@@ -3792,13 +3799,13 @@ private:
 
 	void CheckFirsts()
 	{
-		const int Count = static_cast<int>(Npcs.size());
+		const int Count = AliveOfKind(0);
 		while (Count >= NextPopulationMark)
 		{
 			AddEvent("The people number " + std::to_string(NextPopulationMark));
 			NextPopulationMark = NextPopulationMark < 100 ? 100 : (NextPopulationMark < 250 ? 250 : (NextPopulationMark < 500 ? 500 : NextPopulationMark * 2));
 		}
-		const int BandsNow = static_cast<int>(Camps.size());
+		const int BandsNow = static_cast<int>(std::count_if(Camps.begin(), Camps.end(), [](const Camp& C) { return C.Kind == 0 && !C.Members.empty(); }));
 		while (BandsNow >= NextBandMark)
 		{
 			AddEvent(NextBandMark == 2 ? "The people split into two separate bands" : std::to_string(NextBandMark) + " separate bands");
@@ -3815,7 +3822,7 @@ private:
 		}
 		for (const Npc& P : Npcs)
 		{
-			if (P.AgeYears() >= NextAgeMark)
+			if (P.Kind == 0 && P.AgeYears() >= NextAgeMark)
 			{
 				AddEvent("First NPC to live to " + std::to_string(NextAgeMark));
 				NextAgeMark += 10;
