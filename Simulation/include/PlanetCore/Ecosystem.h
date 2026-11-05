@@ -221,6 +221,8 @@ public:
 
 	double Day() const { return DayNumber; }
 	double Years() const { return DayNumber / kDaysPerYear; }
+	// Moves the planet clock on without stepping life; the climate catches up on the next step.
+	void SkipYears(double N) { DayNumber += N * kDaysPerYear; }
 	int DayOfYear() const { return static_cast<int>(std::fmod(DayNumber, kDaysPerYear)); }
 	const std::vector<Species>& GetSpecies() const { return SpeciesList; }
 	const std::vector<AnimalGroup>& Groups() const { return AnimalGroups; }

@@ -259,6 +259,8 @@ int main(int Argc, char** Argv)
 	// Life on Earth ends in about a billion years, when the brightening Sun boils the oceans away.
 	const int PlanetDies = static_cast<int>(Eco.YearsAgo() + Eco.Years() + 1.0e9);
 	const int TotalYears = static_cast<int>(std::min(Years, static_cast<double>(PlanetDies)));
+	// Years actually lived; the same as the year until deep time starts skipping, and it keeps outputs and saves at a steady pace.
+	int Lived = FirstYear > 0 ? FirstYear + 1 : 0;
 	for (int Y = FirstYear > 0 ? FirstYear + 1 : 0; Y <= TotalYears; ++Y)
 	{
 		for (int D = 0; Y > 0 && D < 365;)
@@ -285,7 +287,7 @@ int main(int Argc, char** Argv)
 		// At least every 1,000 years, so long runs can be followed while they go.
 		const int Every = std::min(1000, TotalYears >= 100 ? TotalYears / 10 : 10);
 		const bool Today = Eco.YearsAgo() <= 0.0 && Eco.YearsAgo() + 1.0 > 0.0;
-		if (Y % Every == 0 || Y == TotalYears || Today)
+		if (Lived % Every == 0 || Y == TotalYears || Today)
 		{
 			std::printf("Year %6d (%s): %8.0f animals in %5zu groups, %2d species, plants %3.0f%%, %d people in %d bands\n", Y,
 				When(Eco.YearsAgo()).c_str(), Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
@@ -351,7 +353,7 @@ int main(int Argc, char** Argv)
 			std::printf("  Year %.1f: %s\n", Folk.Firsts()[FirstsShown].Year, Folk.Firsts()[FirstsShown].Text.c_str());
 		}
 		const bool Stopping = StopAsked || (!SavePath.empty() && FileExists(StopFile));
-		if (Y > FirstYear && (Y % SaveEvery == 0 || Y == TotalYears || Stopping))
+		if (Y > FirstYear && (Lived % SaveEvery == 0 || Y == TotalYears || Stopping))
 		{
 			Save(Y);
 		}
@@ -376,6 +378,17 @@ int main(int Argc, char** Argv)
 			Report(Y);
 			AppendRunLog(RunLog, "Stopped    at year " + std::to_string(Y) + ", saved to " + SavePath);
 			return 0;
+		}
+		++Lived;
+		// Deep time: from 10,000 years ahead, each lived year stands for more planet years (1 more per
+		// 10,000 years ahead), so a billion years takes days, not years.
+		// shortcut: skipped years are not lived (no growth, births or deaths), and past 20 million years ahead an
+		// ice-age cycle passes in about 60 lived years; upgrade to a coarse long-step model if deep time matters.
+		const int Skip = std::min({2000, static_cast<int>(-Eco.YearsAgo() / 10000.0), TotalYears - Y - 1});
+		if (Skip > 0)
+		{
+			Eco.SkipYears(Skip);
+			Y += Skip;
 		}
 	}
 
