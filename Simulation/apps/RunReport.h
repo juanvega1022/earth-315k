@@ -4,6 +4,7 @@
 #pragma once
 
 #include "PlanetCore/Ecosystem.h"
+#include "PlanetCore/Hominins.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -123,7 +124,7 @@ inline std::string Chart(const std::string& Title, const std::vector<double>& Ye
 
 // Rebuilds the report from the CSV the run writes. Returns false if the CSV can't be read.
 inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath, double StartYearsAgo, int YearNow,
-	const std::vector<earth::EcoEvent>& Firsts, const std::string& Label)
+	const std::vector<earth::EcoEvent>& Firsts, const std::string& Label, const std::vector<earth::EcoEvent>& WorldEvents = {})
 {
 	std::ifstream In(CsvPath);
 	std::string Line;
@@ -156,6 +157,7 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 
 	std::ostringstream O;
 	O << "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+	  << "<meta http-equiv=\"refresh\" content=\"120\">"
 	  << "<title>Earth 315k run report</title><style>"
 	  << ":root{--bg:#fbfaf7;--fg:#1d1c1a;--muted:#6b6862;--line:#d9d5cc;--a:#2f6fbf;--b:#c0602a;--c:#3e8e5a}"
 	  << "@media (prefers-color-scheme:dark){:root{--bg:#171614;--fg:#ecebe7;--muted:#a19d95;--line:#3a3833;--a:#7aaef0;--b:#f0a070;--c:#7cc896}}"
@@ -167,9 +169,45 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 	  << ".legend i{display:inline-block;width:12px;height:3px;margin-right:6px;vertical-align:middle}.k0{background:var(--a)}.k1{background:var(--b)}.k2{background:var(--c)}"
 	  << "table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}"
 	  << "th{color:var(--muted);font-weight:500}.early{color:var(--b)}.close{color:var(--c)}"
+	  << ".now{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}.now div{border:1px solid var(--line);border-radius:8px;padding:8px 10px}"
+	  << ".now b{display:block;font-size:20px;font-weight:600}.now span{color:var(--muted);font-size:13px}td.y{white-space:nowrap;color:var(--muted)}"
 	  << "</style></head><body>";
 	O << "<h1>Earth 315k run report</h1><p class=\"sub\">" << Label << ". Year " << Thousands(YearNow) << ", which is "
-	  << Thousands(StartYearsAgo - YearNow) << " years ago. Updated " << NowText() << ".</p>";
+	  << Thousands(StartYearsAgo - YearNow) << " years ago. Updated " << NowText() << "; the page reloads itself every 2 minutes.</p>";
+
+	// Right now, from the run's latest line.
+	if (!Rows.empty())
+	{
+		const std::vector<double>& Last = Rows.back();
+		auto At = [&](const std::string& Name)
+		{
+			for (size_t c = 0; c < Head.size() && c < Last.size(); ++c)
+				if (Head[c] == Name || Head[c] == "\"" + Name + "\"") return Last[c];
+			return 0.0;
+		};
+		double Others = 0.0;
+		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Others += At(earth::OtherKinds()[k].Plural);
+		int Species = 0;
+		for (const earth::Species& S : earth::DefaultSpecies())
+			if (S.TameSkill < 0 && At(S.Name) >= 1.0) ++Species;
+		const double Done = std::clamp(YearNow / std::max(1.0, StartYearsAgo), 0.0, 9.99);
+		auto Box = [&](const std::string& Value, const std::string& What) { O << "<div><b>" << Value << "</b><span>" << What << "</span></div>"; };
+		O << "<h2>Right now</h2><div class=\"now\">";
+		Box(Thousands(YearNow), "year (" + std::to_string(static_cast<int>(Done * 100.0)) + "% of the way to today)");
+		Box(Thousands(At("people") - Others), "of our people");
+		for (size_t k = 1; k < earth::OtherKinds().size(); ++k)
+			if (At(earth::OtherKinds()[k].Plural) >= 1.0) Box(Thousands(At(earth::OtherKinds()[k].Plural)), earth::OtherKinds()[k].Plural);
+		Box(Thousands(At("bands")), "bands");
+		Box(Thousands(At("languages")), "languages");
+		Box(Thousands(At("skills_known")), "skills known");
+		Box(Thousands(At("inventions")), "inventions known");
+		Box(Thousands(At("beliefs")), "beliefs");
+		Box(Thousands(At("religions")), "religions");
+		Box(Thousands(At("average_brain")), "neurons in an average brain");
+		Box(std::to_string(Species), "wild animal species alive");
+		Box(Thousands(At("sea_level_m")) + " m", "sea level against today");
+		O << "</div>";
+	}
 
 	// How the run's firsts compare with real history.
 	O << "<h2>Scorecard against real history</h2><table><tr><th>Milestone</th><th>Real</th><th>This run</th></tr>";
@@ -202,7 +240,16 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 	O << "</table>";
 
 	O << "<h2>How the run went</h2>";
-	O << Chart("People", YearsAgo, {Col("people")}, {"people"});
+	{
+		// Our people, and the two biggest other kinds.
+		std::vector<double> Ours = Col("people");
+		for (size_t k = 1; k < earth::OtherKinds().size(); ++k)
+		{
+			const std::vector<double> K = Col((std::string("\"") + earth::OtherKinds()[k].Plural + "\"").c_str());
+			for (size_t i = 0; i < Ours.size() && i < K.size(); ++i) Ours[i] -= K[i];
+		}
+		O << Chart("People", YearsAgo, {Ours, Col("\"Neanderthals\""), Col("\"Denisovans\"")}, {"our people", "Neanderthals", "Denisovans"});
+	}
 	O << Chart("Bands and languages", YearsAgo, {Col("bands"), Col("languages")}, {"bands", "languages"});
 	O << Chart("Skills and inventions known", YearsAgo, {Col("skills_known"), Col("inventions")}, {"skills", "inventions"});
 	O << Chart("Beliefs and religions (beliefs held by 50+ bands)", YearsAgo, {Col("beliefs"), Col("religions")}, {"beliefs", "religions"});
@@ -210,6 +257,25 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 	O << Chart("Brain size (hidden neurons)", YearsAgo, {Col("average_brain"), Col("biggest_brain")}, {"average", "biggest"});
 	O << Chart("Sea level compared with today (m)", YearsAgo, {Col("sea_level_m")}, {"sea level"});
 	O << Chart("Plant cover (share of best)", YearsAgo, {Col("plant_cover")}, {"plants"});
+	// The key moments, newest first: the world's events and the people's firsts, leaving out the
+	// many small ones (each new invention and each first hunt of a kind).
+	{
+		std::vector<const earth::EcoEvent*> Key;
+		for (const auto& E : WorldEvents) Key.push_back(&E);
+		for (const auto& E : Firsts)
+			if (E.Text.rfind("First invention of", 0) != 0 && E.Text.find(" hunted (party of") == std::string::npos &&
+				E.Text.rfind("A hidden group of", 0) != 0)
+				Key.push_back(&E);
+		std::stable_sort(Key.begin(), Key.end(), [](const earth::EcoEvent* A, const earth::EcoEvent* B) { return A->Year > B->Year; });
+		O << "<h2>What happened, newest first</h2><table>";
+		for (size_t i = 0; i < Key.size() && i < 400; ++i)
+		{
+			O << "<tr><td class=\"y\">" << Thousands(StartYearsAgo - Key[i]->Year) << " years ago</td><td>";
+			for (char Ch : Key[i]->Text) O << (Ch == '<' ? std::string("&lt;") : Ch == '&' ? std::string("&amp;") : std::string(1, Ch));
+			O << "</td></tr>";
+		}
+		O << "</table>";
+	}
 	O << "</body></html>\n";
 	std::ofstream Out(HtmlPath + ".tmp");
 	Out << O.str();

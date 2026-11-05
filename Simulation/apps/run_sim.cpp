@@ -215,7 +215,7 @@ int main(int Argc, char** Argv)
 		if (!ReportPath.empty() && !CsvPath.empty())
 		{
 			Csv.flush();
-			WriteReport(ReportPath, CsvPath, Eco.YearsAgo() + Eco.Years(), Y, Folk.Firsts(), Label);
+			WriteReport(ReportPath, CsvPath, Eco.YearsAgo() + Eco.Years(), Y, Folk.Firsts(), Label, Eco.Events());
 		}
 	};
 	if (!SavePath.empty())
