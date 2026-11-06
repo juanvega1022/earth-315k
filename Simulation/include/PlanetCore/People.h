@@ -489,6 +489,7 @@ public:
 	long long HuntsWon() const { return Kills; }
 	// Skills someone alive knows, and how many people know each.
 	int SkillsKnown() const { return static_cast<int>(std::bitset<64>(KnownNow).count()); }
+	SkillSet EverKnownSkills() const { return EverKnown; }
 	// Groups of camps that can understand each other, counted greedily.
 	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
 
@@ -2708,7 +2709,11 @@ private:
 			const auto& Needs = List[k].Needs;
 			if (Findable[k] < 0.0 && std::all_of(Needs.begin(), Needs.end(), [&](int N) { return Knows(EverKnown, N); })) Findable[k] = Now;
 			if (Findable[k] < 0.0) continue;
-			const double Scale = List[k].YearsToFind / (0.893 * Settings.DiscoveryPace); // The mean of shape 3 is 0.893 x scale.
+			// Something once known and lost comes back sooner than it was first found: someone half
+			// remembers it, or finds the old work.
+			constexpr double kRefindYears = 2000.0;
+			const double Wait = Knows(EverKnown, k) && !Knows(KnownNow, k) ? std::min(List[k].YearsToFind, kRefindYears) : List[k].YearsToFind;
+			const double Scale = Wait / (0.893 * Settings.DiscoveryPace); // The mean of shape 3 is 0.893 x scale.
 			// Long overdue (past 3 scales, almost never reached) the chance stops growing.
 			const double T = std::min(3.0, (Now - Findable[k]) / Scale + 1.0 / 365.0);
 			TierOdds[k] = 3.0 * T * T / Scale / PacePeople;
@@ -3427,9 +3432,13 @@ private:
 			if (Knows(Lost, k))
 			{
 				AddEvent(std::string(AllSkills()[k].Name) + " is forgotten: nobody alive knows it");
+				// The wait to find it again starts now (see LearnSkills).
+				if (static_cast<size_t>(k) < Findable.size()) Findable[static_cast<size_t>(k)] = Eco->Years();
 			}
 		}
 		KnownNow = Now;
+		// What other kinds of human were born knowing counts as known too, or what builds on it never becomes findable.
+		EverKnown |= Now;
 	}
 
 	// Energy a day beyond the basics: a bigger brain costs more (a smaller one saves a little), and
