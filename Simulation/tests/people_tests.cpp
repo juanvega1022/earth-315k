@@ -469,6 +469,8 @@ static void TestTrust()
 	int Others = 0;
 	for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Others += Folk.AliveOfKind(static_cast<int>(k));
 	EXPECT(Others > 0 && Folk.AliveOfKind(0) > 0);
+	// What the other kinds were born knowing counts as known, so skills that build on it can be found.
+	for (int Sk : earth::OtherKinds()[1].Skills) EXPECT(earth::Knows(Folk.EverKnownSkills(), Sk));
 	EXPECT(HasFirst(Folk, "") && Folk.StoriesText().find("first leader") != std::string::npos);
 }
 
