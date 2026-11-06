@@ -1297,6 +1297,17 @@ private:
 		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
 	}
 
+	// How much room a kind's land gives it. In the 5,000 years before another kind's real end date
+	// its land runs short, so it dies out close to when the real ones did.
+	// shortcut: a timed decline, not competition or climate; replace if those are ever modelled well enough to do it.
+	float NumbersNow(uint8_t Kind) const
+	{
+		const HomininKind& K = OtherKinds()[Kind];
+		if (Kind == 0) return K.Numbers;
+		const double Past = K.LastYearsAgo + 5000.0 - Eco->YearsAgo();
+		return K.Numbers * static_cast<float>(std::clamp(1.0 - Past / 5000.0, 0.0, 1.0));
+	}
+
 	// Livable, and within where the band's kind of human could live.
 	bool LivableFor(uint8_t Kind, double Lat, double Lon) const
 	{
@@ -1503,7 +1514,7 @@ private:
 					}
 				}
 			}
-			Capacity *= C.Effects.Land * OtherKinds()[C.Kind].Numbers;
+			Capacity *= C.Effects.Land * NumbersNow(C.Kind);
 			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
 		}
 	}
