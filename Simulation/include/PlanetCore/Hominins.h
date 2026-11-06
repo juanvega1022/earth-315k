@@ -37,10 +37,10 @@ struct HomininKind
 inline const std::vector<HomininKind>& OtherKinds()
 {
 	static const std::vector<HomininKind> List = {
-		{"NPC", "NPCs", 0.0, {}, 0, 0.0f, 0.0f, {}, 1.0f, {}, 1.0f},
+		{"NPC", "NPCs", 0.0, {}, 0, 0.0f, 0.0f, {}, 1.0f, {}, 2.0f},
 		// Atapuerca, the Rhine, the Caucasus, the Zagros.
-		{"Neanderthal", "Neanderthals", 40000.0, {{42.3, -3.5}, {50.5, 7.0}, {43.5, 42.0}, {36.8, 45.0}}, 0, 0.35f, 0.01f,
-			{0, 1, 2, 3, 6, 7, 8, 9, 10, 12}, 0.85f, {{35, 56, -10, 60}, {35, 55, 60, 90}}, 6.0f},
+		{"Neanderthal", "Neanderthals", 40000.0, {{42.3, -3.5}, {50.5, 7.0}, {43.5, 42.0}, {36.8, 45.0}, {32.7, 35.0}}, 0, 0.35f, 0.01f,
+			{0, 1, 2, 3, 6, 7, 8, 9, 10, 12}, 0.85f, {{35, 56, -10, 60}, {35, 55, 60, 90}, {29, 35, 33, 40}}, 6.0f},
 		// Denisova Cave in the Altai, Baishiya Karst Cave high on the Tibetan Plateau, and Cobra Cave in Laos.
 		{"Denisovan", "Denisovans", 30000.0, {{51.4, 84.7}, {35.5, 102.5}, {20.2, 103.4}}, 0, 0.2f, 0.01f, {0, 1, 2, 3, 6, 7, 8, 9, 10, 12}, 0.85f, {{20, 56, 75, 125}, {-10, 20, 95, 125}}, 2.0f},
 		// Ngandong on the Solo River, Java.
