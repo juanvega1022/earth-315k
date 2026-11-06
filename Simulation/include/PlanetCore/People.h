@@ -3642,6 +3642,11 @@ private:
 		for (uint16_t& W : First.Words) W = static_cast<uint16_t>(Dice.Next());
 		Camps.push_back(First);
 
+		// A band starting later than the run's usual start knows what people really knew by then.
+		SkillSet Known = 0;
+		for (size_t k = 0; k < AllSkills().size(); ++k)
+			if (AllSkills()[k].YearsAgo > Eco->YearsAgo() + 1.0) Known |= SkillSet(1) << k;
+		EverKnown |= Known;
 		const Genome Base = InstinctGenome();
 		for (int i = 0; i < Settings.StartCount; ++i)
 		{
@@ -3660,6 +3665,7 @@ private:
 			}
 			P.FitBrain();
 			P.Camp = First.Id;
+			P.Skills = Known;
 			P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
 			P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
 			P.OffsetLon = static_cast<float>(Dice.Range(-0.04, 0.04));
