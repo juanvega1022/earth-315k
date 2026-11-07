@@ -985,7 +985,7 @@ public:
 		SenseCamps(Days);
 		for (Camp& C : Camps)
 		{
-			C.BestWater = static_cast<float>(BestWaterNear(C.Lat, C.Lon));
+			C.BestWater = static_cast<float>(std::max(BestWaterNear(C.Lat, C.Lon), WaterFor(C, C.Lat, C.Lon)));
 			FindForage(C);
 		}
 
@@ -1433,6 +1433,14 @@ private:
 		return ShoreSquare[static_cast<size_t>(GridKey(std::clamp(GridRow(Lat), 0, 179), GridCol(Lon)))] ? kShoreCover : 0.0;
 	}
 	static bool Fishes(const Camp& C) { return Knows(C.Known, kFishing); }
+	// Bands that live off the sea also know its shore springs, where fresh groundwater seeps out even on desert coasts.
+	// shortcut: every shore square has springs for a fishing band; use real spring sites if coasts need to be finer.
+	static constexpr double kShoreWater = 0.5;
+	double WaterFor(const Camp& C, double Lat, double Lon) const
+	{
+		const double W = Eco->WaterAt(Lat, Lon);
+		return Fishes(C) && ShoreFood(Lat, Lon) > 0.0 ? std::max(W, kShoreWater) : W;
+	}
 
 	static int64_t GridKey(int Row, int Col) { return static_cast<int64_t>(Row) * 360 + ((Col % 360) + 360) % 360; }
 	static int GridRow(double Lat) { return static_cast<int>(std::floor(Lat + 90.0)); }
@@ -1586,7 +1594,7 @@ private:
 			C.SeenDanger = static_cast<float>(std::clamp(Eco->PredatorsNear(C.Lat, C.Lon) / 40.0, 0.0, 1.0));
 			C.SeenFood = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon, Fishes(C)) / Settings.GatherableKg, 0.0, 1.0));
 			C.SeenGame = static_cast<float>(std::clamp(Eco->GameNear(C.Lat, C.Lon, 1000.0) / 2000.0, 0.0, 1.0));
-			C.SeenWater = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
+			C.SeenWater = static_cast<float>(WaterFor(C, C.Lat, C.Lon));
 			C.SeenSeason = static_cast<float>(Eco->GrowingSeason(C.Lat));
 		}
 	}
@@ -1602,7 +1610,7 @@ private:
 		}
 		const double Crowd = 0.1 * CampsNear(Lat, Lon, 50.0, SelfId, 4);
 		const double Food = GatherableAt(Lat, Lon, Fishes(Self)) / Settings.GatherableKg;
-		const double Water = Eco->WaterAt(Lat, Lon);
+		const double Water = WaterFor(Self, Lat, Lon);
 		const double Game = std::clamp(Eco->GameNear(Lat, Lon, 1000.0) / 2000.0, 0.0, 1.0);
 		const double Danger = std::clamp(Eco->PredatorsNear(Lat, Lon) / 40.0, 0.0, 1.0);
 		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger - Crowd;
@@ -1649,7 +1657,7 @@ private:
 			const double Here = PlaceScore(C.Lat, C.Lon, C);
 			const double Food = GatherableAt(C.Lat, C.Lon, Fishes(C)) / std::max(1.0, (Eco->PlantCover(C.Lat, C.Lon) + (Fishes(C) ? ShoreFood(C.Lat, C.Lon) : 0.0)) * Settings.GatherableKg);
 			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id, 1) > 0;
-			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
+			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
 				continue;
@@ -1657,7 +1665,7 @@ private:
 			double TargetLat = C.Lat;
 			double TargetLon = C.Lon;
 			const Npc* Elder = nullptr;
-			if (Eco->WaterAt(C.Lat, C.Lon) < 0.3 || Food < 0.4)
+			if (WaterFor(C, C.Lat, C.Lon) < 0.3 || Food < 0.4)
 			{
 				// In hard times the band asks its oldest: where was there water before?
 				for (int i : C.Members)
@@ -2019,7 +2027,7 @@ private:
 		case Action::Drink:
 		{
 			// Drink at camp, or walk to the wettest place within reach.
-			double Best = Eco->WaterAt(C.Lat, C.Lon);
+			double Best = WaterFor(C, C.Lat, C.Lon);
 			for (int d = 0; d < 6 && Best < 0.5; ++d)
 			{
 				double La = 0.0;
