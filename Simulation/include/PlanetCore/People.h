@@ -1294,10 +1294,12 @@ private:
 		if (OutLon < -180.0) OutLon += 360.0;
 	}
 
-	bool Livable(double Lat, double Lon) const
+	bool Livable(double Lat, double Lon, bool Fisher = false) const
 	{
-		// Deep desert with no river or spring is no place to live, only to cross in a wet spell.
-		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
+		// Deep desert with no river or spring is no place to live, only to cross in a wet spell,
+		// except on the shore for a band that knows its springs.
+		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 &&
+			(Eco->WaterAt(Lat, Lon) >= 0.1 || (Fisher && ShoreFood(Lat, Lon) > 0.0));
 	}
 
 	// How much room a kind's land gives it. In the 5,000 years before another kind's real end date
@@ -1312,12 +1314,12 @@ private:
 	}
 
 	// Livable, and within where the band's kind of human could live.
-	bool LivableFor(uint8_t Kind, double Lat, double Lon) const
+	bool LivableFor(uint8_t Kind, double Lat, double Lon, bool Fisher = false) const
 	{
 		const std::vector<RangeBox>& R = OtherKinds()[Kind].Range;
 		bool In = R.empty();
 		for (const RangeBox& B : R) In = In || B.Contains(Lat, Lon);
-		return In && Livable(Lat, Lon);
+		return In && Livable(Lat, Lon, Fisher);
 	}
 
 	int CampSlot(int Id) const
@@ -1497,6 +1499,7 @@ private:
 			{
 				double Cover = 0.0;
 				int Lands = 0;
+				int Shores = 0; // Land a fishing band can live on, desert shore included.
 				int Seas = 0;
 				for (int k = 0; k < 16; ++k)
 				{
@@ -1505,13 +1508,14 @@ private:
 					const bool Ok = Livable(Lat, Lon);
 					Cover += Ok ? Eco->BestCover(Lat, Lon) / 16.0 : 0.0;
 					Lands += Ok;
+					Shores += Ok || (Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Lat < 80.0 && Lat > -60.0);
 					Seas += !Eco->IsLand(Lat, Lon);
 				}
 				const double AreaKm2 = kKmPerDegree * kKmPerDegree * std::cos((r - 89.5) * kPi / 180.0);
 				const size_t Sq = static_cast<size_t>(r) * 360 + c;
 				SquareCapacity[Sq] = static_cast<float>(Cover * AreaKm2 * Settings.PeoplePerKm2);
-				ShoreSquare[Sq] = Lands > 0 && Seas > 0;
-				ShoreCapacity[Sq] = ShoreSquare[Sq] ? static_cast<float>(kShoreCover * Lands / 16.0 * AreaKm2 * Settings.PeoplePerKm2) : 0.0f;
+				ShoreSquare[Sq] = Shores > 0 && Seas > 0;
+				ShoreCapacity[Sq] = ShoreSquare[Sq] ? static_cast<float>(kShoreCover * Shores / 16.0 * AreaKm2 * Settings.PeoplePerKm2) : 0.0f;
 			}
 		}
 	}
@@ -1604,7 +1608,7 @@ private:
 	double PlaceScore(double Lat, double Lon, const Camp& Self) const
 	{
 		const int SelfId = Self.Id;
-		if (!Livable(Lat, Lon))
+		if (!Livable(Lat, Lon, Fishes(Self)))
 		{
 			return -1.0;
 		}
@@ -1724,7 +1728,7 @@ private:
 			double NewLon = C.Lon + DLon * Step;
 			if (NewLon > 180.0) NewLon -= 360.0;
 			if (NewLon < -180.0) NewLon += 360.0;
-			if (LivableFor(C.Kind, NewLat, NewLon))
+			if (LivableFor(C.Kind, NewLat, NewLon, Fishes(C)))
 			{
 				GridRemove(static_cast<int>(Slot));
 				C.Lat = NewLat;
@@ -1782,7 +1786,7 @@ private:
 			{
 				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
 				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
-				Placed = LivableFor(New.Kind, New.Lat, New.Lon);
+				Placed = LivableFor(New.Kind, New.Lat, New.Lon, Fishes(Camps[c]));
 			}
 			if (!Placed)
 			{
