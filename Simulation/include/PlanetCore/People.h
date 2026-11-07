@@ -2484,7 +2484,7 @@ private:
 		}
 		P.Energy -= ExtraBurn(P);
 		P.Water -= 0.3f;
-		if (Eco->WaterAt(P.Lat, P.Lon) > 0.4)
+		if (WaterFor(Camps[CampSlot(P.Camp)], P.Lat, P.Lon) > 0.4)
 		{
 			P.Water += 0.25f; // Streams and pools along the way.
 		}
@@ -2582,7 +2582,7 @@ private:
 		}
 
 		// Water: streams along the way cover some of it; the rest means walking to water.
-		const float Loss = Eco->WaterAt(P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
+		const float Loss = WaterFor(Camps[CampSlot(P.Camp)], P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
 		const float DrinkShare = std::min(1.0f, Loss / std::max(0.01f, 1.5f * BestWater));
 		float ThirstyDays = 0.0f;
 		if (DrinkShare < 0.6f)
