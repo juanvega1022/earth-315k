@@ -985,7 +985,7 @@ public:
 		SenseCamps(Days);
 		for (Camp& C : Camps)
 		{
-			C.BestWater = static_cast<float>(BestWaterNear(C.Lat, C.Lon));
+			C.BestWater = static_cast<float>(std::max(BestWaterNear(C.Lat, C.Lon), WaterFor(C, C.Lat, C.Lon)));
 			FindForage(C);
 		}
 
@@ -1198,6 +1198,9 @@ private:
 	std::unordered_map<int64_t, std::vector<int>> CampGrid;
 	// People each one-degree square can feed, from its plant cover at the best time of year.
 	std::vector<float> SquareCapacity;
+	// Squares on the sea shore, and the people their shellfish and fish feed on top, for bands that fish.
+	std::vector<uint8_t> ShoreSquare;
+	std::vector<float> ShoreCapacity;
 	int LandClimate = -1;
 
 	// Gatherable plant food people have used up, per quarter-degree square.
@@ -1291,10 +1294,12 @@ private:
 		if (OutLon < -180.0) OutLon += 360.0;
 	}
 
-	bool Livable(double Lat, double Lon) const
+	bool Livable(double Lat, double Lon, bool Fisher = false) const
 	{
-		// Deep desert with no river or spring is no place to live, only to cross in a wet spell.
-		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Eco->WaterAt(Lat, Lon) >= 0.1;
+		// Deep desert with no river or spring is no place to live, only to cross in a wet spell,
+		// except on the shore for a band that knows its springs.
+		return Lat < 80.0 && Lat > -60.0 && Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 &&
+			(Eco->WaterAt(Lat, Lon) >= 0.1 || (Fisher && ShoreFood(Lat, Lon) > 0.0));
 	}
 
 	// How much room a kind's land gives it. In the 5,000 years before another kind's real end date
@@ -1309,12 +1314,12 @@ private:
 	}
 
 	// Livable, and within where the band's kind of human could live.
-	bool LivableFor(uint8_t Kind, double Lat, double Lon) const
+	bool LivableFor(uint8_t Kind, double Lat, double Lon, bool Fisher = false) const
 	{
 		const std::vector<RangeBox>& R = OtherKinds()[Kind].Range;
 		bool In = R.empty();
 		for (const RangeBox& B : R) In = In || B.Contains(Lat, Lon);
-		return In && Livable(Lat, Lon);
+		return In && Livable(Lat, Lon, Fisher);
 	}
 
 	int CampSlot(int Id) const
@@ -1412,11 +1417,31 @@ private:
 		}
 	}
 
-	double GatherableAt(double Lat, double Lon) const
+	// Plant food left at a spot, plus shellfish and fish on a shore for a band that fishes.
+	double GatherableAt(double Lat, double Lon, bool Shore = false) const
 	{
-		const double Full = Eco->PlantCover(Lat, Lon) * Settings.GatherableKg;
+		const double Full = (Eco->PlantCover(Lat, Lon) + (Shore ? ShoreFood(Lat, Lon) : 0.0)) * Settings.GatherableKg;
 		auto It = Gathered.find(KeyOf(Lat, Lon));
 		return std::max(0.0, Full - (It == Gathered.end() ? 0.0 : It->second));
+	}
+
+	// The shore counts as this much plant cover (shellfish and fish were the food that let people live along dry coasts).
+	// shortcut: a whole one-degree square counts as shore if any part of it is sea; use a finer coast mask if coasts matter more.
+	static constexpr double kShoreCover = 0.3;
+	static constexpr int kFishing = 17;
+	double ShoreFood(double Lat, double Lon) const
+	{
+		if (ShoreSquare.empty()) return 0.0;
+		return ShoreSquare[static_cast<size_t>(GridKey(std::clamp(GridRow(Lat), 0, 179), GridCol(Lon)))] ? kShoreCover : 0.0;
+	}
+	static bool Fishes(const Camp& C) { return Knows(C.Known, kFishing); }
+	// Bands that live off the sea also know its shore springs, where fresh groundwater seeps out even on desert coasts.
+	// shortcut: every shore square has springs for a fishing band; use real spring sites if coasts need to be finer.
+	static constexpr double kShoreWater = 0.5;
+	double WaterFor(const Camp& C, double Lat, double Lon) const
+	{
+		const double W = Eco->WaterAt(Lat, Lon);
+		return Fishes(C) && ShoreFood(Lat, Lon) > 0.0 ? std::max(W, kShoreWater) : W;
 	}
 
 	static int64_t GridKey(int Row, int Col) { return static_cast<int64_t>(Row) * 360 + ((Col % 360) + 360) % 360; }
@@ -1466,19 +1491,33 @@ private:
 	void MeasureLand()
 	{
 		SquareCapacity.assign(180 * 360, 0.0f);
+		ShoreSquare.assign(180 * 360, 0);
+		ShoreCapacity.assign(180 * 360, 0.0f);
 		for (int r = 0; r < 180; ++r)
 		{
 			for (int c = 0; c < 360; ++c)
 			{
 				double Cover = 0.0;
+				int Lands = 0;
+				int Shores = 0; // Land a fishing band can live on, desert shore included.
+				int Seas = 0;
 				for (int k = 0; k < 16; ++k)
 				{
 					const double Lat = r - 90.0 + (k / 4 + 0.5) / 4.0;
 					const double Lon = c - 180.0 + (k % 4 + 0.5) / 4.0;
-					Cover += Livable(Lat, Lon) ? Eco->BestCover(Lat, Lon) / 16.0 : 0.0;
+					const bool Ok = Livable(Lat, Lon);
+					Cover += Ok ? Eco->BestCover(Lat, Lon) / 16.0 : 0.0;
+					Lands += Ok;
+					Shores += Ok || (Eco->IsLand(Lat, Lon) && Eco->AltitudeAt(Lat, Lon) < 4000.0 && Lat < 80.0 && Lat > -60.0);
+					Seas += !Eco->IsLand(Lat, Lon);
 				}
 				const double AreaKm2 = kKmPerDegree * kKmPerDegree * std::cos((r - 89.5) * kPi / 180.0);
-				SquareCapacity[static_cast<size_t>(r) * 360 + c] = static_cast<float>(Cover * AreaKm2 * Settings.PeoplePerKm2);
+				const size_t Sq = static_cast<size_t>(r) * 360 + c;
+				SquareCapacity[Sq] = static_cast<float>(Cover * AreaKm2 * Settings.PeoplePerKm2);
+				ShoreSquare[Sq] = Shores > 0 && Seas > 0;
+				// Shellfish beds and fish feed far more people per km of coast than the land behind it does, as
+				// many as the best grassland over the whole square, which lets a band string out along a dry shore.
+				ShoreCapacity[Sq] = ShoreSquare[Sq] ? static_cast<float>(AreaKm2 * Settings.PeoplePerKm2) : 0.0f;
 			}
 		}
 	}
@@ -1503,7 +1542,7 @@ private:
 				for (int c = C0 - 2; c <= C0 + 2; ++c)
 				{
 					const int Col = ((c % 360) + 360) % 360;
-					Capacity += SquareCapacity[static_cast<size_t>(r) * 360 + Col];
+					Capacity += SquareCapacity[static_cast<size_t>(r) * 360 + Col] + (Fishes(C) ? ShoreCapacity[static_cast<size_t>(r) * 360 + Col] : 0.0f);
 					auto It = CampGrid.find(GridKey(r, Col));
 					if (It != CampGrid.end())
 					{
@@ -1559,24 +1598,25 @@ private:
 		for (Camp& C : Camps)
 		{
 			C.SeenDanger = static_cast<float>(std::clamp(Eco->PredatorsNear(C.Lat, C.Lon) / 40.0, 0.0, 1.0));
-			C.SeenFood = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon) / Settings.GatherableKg, 0.0, 1.0));
+			C.SeenFood = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon, Fishes(C)) / Settings.GatherableKg, 0.0, 1.0));
 			C.SeenGame = static_cast<float>(std::clamp(Eco->GameNear(C.Lat, C.Lon, 1000.0) / 2000.0, 0.0, 1.0));
-			C.SeenWater = static_cast<float>(Eco->WaterAt(C.Lat, C.Lon));
+			C.SeenWater = static_cast<float>(WaterFor(C, C.Lat, C.Lon));
 			C.SeenSeason = static_cast<float>(Eco->GrowingSeason(C.Lat));
 		}
 	}
 
 	// How good a place looks for camp SelfId: food to gather, water and game, minus danger and
 	// minus other camps already there (bands keep their own range, so they spread out).
-	double PlaceScore(double Lat, double Lon, int SelfId) const
+	double PlaceScore(double Lat, double Lon, const Camp& Self) const
 	{
-		if (!Livable(Lat, Lon))
+		const int SelfId = Self.Id;
+		if (!Livable(Lat, Lon, Fishes(Self)))
 		{
 			return -1.0;
 		}
 		const double Crowd = 0.1 * CampsNear(Lat, Lon, 50.0, SelfId, 4);
-		const double Food = GatherableAt(Lat, Lon) / Settings.GatherableKg;
-		const double Water = Eco->WaterAt(Lat, Lon);
+		const double Food = GatherableAt(Lat, Lon, Fishes(Self)) / Settings.GatherableKg;
+		const double Water = WaterFor(Self, Lat, Lon);
 		const double Game = std::clamp(Eco->GameNear(Lat, Lon, 1000.0) / 2000.0, 0.0, 1.0);
 		const double Danger = std::clamp(Eco->PredatorsNear(Lat, Lon) / 40.0, 0.0, 1.0);
 		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger - Crowd;
@@ -1620,10 +1660,10 @@ private:
 			Camp& C = Camps[Slot];
 			C.ScoutScore *= Days == 1 ? 0.995 : std::pow(0.995, Days); // Old news gets less trustworthy.
 			C.DaysHere += Days;
-			const double Here = PlaceScore(C.Lat, C.Lon, C.Id);
-			const double Food = GatherableAt(C.Lat, C.Lon) / std::max(1.0, Eco->PlantCover(C.Lat, C.Lon) * Settings.GatherableKg);
+			const double Here = PlaceScore(C.Lat, C.Lon, C);
+			const double Food = GatherableAt(C.Lat, C.Lon, Fishes(C)) / std::max(1.0, (Eco->PlantCover(C.Lat, C.Lon) + (Fishes(C) ? ShoreFood(C.Lat, C.Lon) : 0.0)) * Settings.GatherableKg);
 			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id, 1) > 0;
-			const bool Stressed = Food < 0.4 || Eco->WaterAt(C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
+			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
 				continue;
@@ -1631,7 +1671,7 @@ private:
 			double TargetLat = C.Lat;
 			double TargetLon = C.Lon;
 			const Npc* Elder = nullptr;
-			if (Eco->WaterAt(C.Lat, C.Lon) < 0.3 || Food < 0.4)
+			if (WaterFor(C, C.Lat, C.Lon) < 0.3 || Food < 0.4)
 			{
 				// In hard times the band asks its oldest: where was there water before?
 				for (int i : C.Members)
@@ -1640,7 +1680,7 @@ private:
 					if (P.RefugeWater > 0.0f && P.AgeYears() >= 25.0 && (!Elder || P.AgeDays > Elder->AgeDays)) Elder = &P;
 				}
 				if (Elder && (DistanceKm(C.Lat, C.Lon, Elder->RefugeLat, Elder->RefugeLon) > 1500.0 ||
-					PlaceScore(Elder->RefugeLat, Elder->RefugeLon, C.Id) < Here + 0.05)) Elder = nullptr;
+					PlaceScore(Elder->RefugeLat, Elder->RefugeLon, C) < Here + 0.05)) Elder = nullptr;
 			}
 			if (Elder)
 			{
@@ -1668,7 +1708,7 @@ private:
 					double La = 0.0;
 					double Lo = 0.0;
 					Offset(C.Lat, C.Lon, (d + Dice.Uniform()) * kPi / 4.0, 25.0, La, Lo);
-					const double S = PlaceScore(La, Lo, C.Id);
+					const double S = PlaceScore(La, Lo, C);
 					if (S > Best)
 					{
 						Best = S;
@@ -1690,7 +1730,7 @@ private:
 			double NewLon = C.Lon + DLon * Step;
 			if (NewLon > 180.0) NewLon -= 360.0;
 			if (NewLon < -180.0) NewLon += 360.0;
-			if (LivableFor(C.Kind, NewLat, NewLon))
+			if (LivableFor(C.Kind, NewLat, NewLon, Fishes(C)))
 			{
 				GridRemove(static_cast<int>(Slot));
 				C.Lat = NewLat;
@@ -1748,7 +1788,7 @@ private:
 			{
 				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
 				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
-				Placed = LivableFor(New.Kind, New.Lat, New.Lon);
+				Placed = LivableFor(New.Kind, New.Lat, New.Lon, Fishes(Camps[c]));
 			}
 			if (!Placed)
 			{
@@ -1941,13 +1981,13 @@ private:
 			// Gather in the camp's square or one next to it, whichever has the most left.
 			double BestLat = C.Lat;
 			double BestLon = C.Lon;
-			double Best = GatherableAt(C.Lat, C.Lon);
+			double Best = GatherableAt(C.Lat, C.Lon, Fishes(C));
 			for (int d = 0; d < 4; ++d)
 			{
 				double La = 0.0;
 				double Lo = 0.0;
 				Offset(C.Lat, C.Lon, d * kPi / 2.0 + Dice.Range(-0.4, 0.4), 20.0, La, Lo);
-				const double Avail = Eco->IsLand(La, Lo) ? GatherableAt(La, Lo) * 0.8 : 0.0; // Farther is more work.
+				const double Avail = Eco->IsLand(La, Lo) ? GatherableAt(La, Lo, Fishes(C)) * 0.8 : 0.0; // Farther is more work.
 				if (Avail > Best)
 				{
 					Best = Avail;
@@ -1993,7 +2033,7 @@ private:
 		case Action::Drink:
 		{
 			// Drink at camp, or walk to the wettest place within reach.
-			double Best = Eco->WaterAt(C.Lat, C.Lon);
+			double Best = WaterFor(C, C.Lat, C.Lon);
 			for (int d = 0; d < 6 && Best < 0.5; ++d)
 			{
 				double La = 0.0;
@@ -2049,7 +2089,7 @@ private:
 			double Lo = 0.0;
 			// Rafts and boats let scouts reach land across the water.
 			Offset(C.Lat, C.Lon, P.Heading, Dice.Range(30.0, 60.0) * C.Effects.Travel, La, Lo);
-			const double Score = PlaceScore(La, Lo, C.Id);
+			const double Score = PlaceScore(La, Lo, C);
 			if (Score < 0.0)
 			{
 				P.Heading += static_cast<float>(kPi * Dice.Range(0.5, 1.5));
@@ -2444,7 +2484,7 @@ private:
 		}
 		P.Energy -= ExtraBurn(P);
 		P.Water -= 0.3f;
-		if (Eco->WaterAt(P.Lat, P.Lon) > 0.4)
+		if (WaterFor(Camps[CampSlot(P.Camp)], P.Lat, P.Lon) > 0.4)
 		{
 			P.Water += 0.25f; // Streams and pools along the way.
 		}
@@ -2472,14 +2512,14 @@ private:
 	void FindForage(Camp& C)
 	{
 		C.ForageSquares[0] = KeyOf(C.Lat, C.Lon);
-		double Total = GatherableAt(C.Lat, C.Lon);
+		double Total = GatherableAt(C.Lat, C.Lon, Fishes(C));
 		for (int d = 0; d < 4; ++d)
 		{
 			double La = 0.0;
 			double Lo = 0.0;
 			Offset(C.Lat, C.Lon, d * kPi / 2.0, 28.0, La, Lo);
 			C.ForageSquares[d + 1] = KeyOf(La, Lo);
-			Total += Eco->IsLand(La, Lo) ? GatherableAt(La, Lo) * 0.8 : 0.0; // Farther is more work.
+			Total += Eco->IsLand(La, Lo) ? GatherableAt(La, Lo, Fishes(C)) * 0.8 : 0.0; // Farther is more work.
 		}
 		C.ForageKg = static_cast<float>(Total / 5.0);
 	}
@@ -2542,7 +2582,7 @@ private:
 		}
 
 		// Water: streams along the way cover some of it; the rest means walking to water.
-		const float Loss = Eco->WaterAt(P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
+		const float Loss = WaterFor(Camps[CampSlot(P.Camp)], P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
 		const float DrinkShare = std::min(1.0f, Loss / std::max(0.01f, 1.5f * BestWater));
 		float ThirstyDays = 0.0f;
 		if (DrinkShare < 0.6f)
@@ -3642,6 +3682,11 @@ private:
 		for (uint16_t& W : First.Words) W = static_cast<uint16_t>(Dice.Next());
 		Camps.push_back(First);
 
+		// A band starting later than the run's usual start knows what people really knew by then.
+		SkillSet Known = 0;
+		for (size_t k = 0; k < AllSkills().size(); ++k)
+			if (AllSkills()[k].YearsAgo > Eco->YearsAgo() + 1.0) Known |= SkillSet(1) << k;
+		EverKnown |= Known;
 		const Genome Base = InstinctGenome();
 		for (int i = 0; i < Settings.StartCount; ++i)
 		{
@@ -3660,6 +3705,7 @@ private:
 			}
 			P.FitBrain();
 			P.Camp = First.Id;
+			P.Skills = Known;
 			P.Heading = static_cast<float>(Dice.Range(0.0, 6.283185307179586));
 			P.OffsetLat = static_cast<float>(Dice.Range(-0.04, 0.04));
 			P.OffsetLon = static_cast<float>(Dice.Range(-0.04, 0.04));
