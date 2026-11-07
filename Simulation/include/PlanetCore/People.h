@@ -1515,7 +1515,9 @@ private:
 				const size_t Sq = static_cast<size_t>(r) * 360 + c;
 				SquareCapacity[Sq] = static_cast<float>(Cover * AreaKm2 * Settings.PeoplePerKm2);
 				ShoreSquare[Sq] = Shores > 0 && Seas > 0;
-				ShoreCapacity[Sq] = ShoreSquare[Sq] ? static_cast<float>(kShoreCover * Shores / 16.0 * AreaKm2 * Settings.PeoplePerKm2) : 0.0f;
+				// Shellfish beds and fish feed far more people per km of coast than the land behind it does, as
+				// many as the best grassland over the whole square, which lets a band string out along a dry shore.
+				ShoreCapacity[Sq] = ShoreSquare[Sq] ? static_cast<float>(AreaKm2 * Settings.PeoplePerKm2) : 0.0f;
 			}
 		}
 	}
