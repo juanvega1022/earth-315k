@@ -66,6 +66,16 @@ static bool HasFirst(const earth::People& Folk, const std::string& Start)
 	return false;
 }
 
+static void TestRegions()
+{
+	// Shores either side of the Mediterranean, and the Levant, land in the right place.
+	struct Place { double Lat, Lon; int Region; };
+	const Place Places[] = {{37.05, 10.9, 0}, {36.8, 3.0, 0}, {35.8, -5.8, 0}, {31.2, 29.9, 0}, {32.8, 13.2, 0},
+		{36.7, -4.4, 2}, {37.0, 15.0, 2}, {35.9, 14.4, 2}, {35.3, 25.0, 2}, {48.8, 2.3, 2},
+		{36.9, 30.7, 1}, {35.1, 33.4, 1}, {31.5, 34.4, 1}, {14.0, 43.0, 1}, {41.0, 29.0, 1}};
+	for (const Place& P : Places) EXPECT(earth::People::RegionOf(P.Lat, P.Lon) == P.Region);
+}
+
 static void TestStart()
 {
 	World W(1);
@@ -553,6 +563,7 @@ int main()
 	TestSkillTree();
 	TestBrainResize();
 	TestSkillsSpread();
+	TestRegions();
 	TestStart();
 	TestDeterministic();
 	TestBandLives();
