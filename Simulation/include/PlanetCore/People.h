@@ -469,6 +469,28 @@ public:
 
 	// ---- Queries ----------------------------------------------------------------------------
 
+	// Which land a place is in: 0 Africa, 1 Asia, 2 Europe, 3 Australia, 4 the Americas, 5 elsewhere.
+	static int RegionOf(double Lat, double Lon)
+	{
+		if (Lon < -30.0) return Lon > -169.0 ? 4 : 1; // West of the Bering Strait is Siberia, in Asia.
+		if (Lat < -10.0 && Lon > 112.0) return 3;
+		if (Lat < 37.5 && Lon > -20.0 && Lon < 52.0)
+		{
+			if (Lat < 12.0) return 0;
+			// Southern Europe's shores reach below Africa's northern tip: Spain, Sicily and Malta, Greece and Crete.
+			if ((Lon > -10.0 && Lon < -1.5 && Lat > 36.0) || (Lon >= 12.0 && Lon < 16.0 && Lat > 35.7) ||
+				(Lon >= 19.0 && Lon < 27.0 && Lat > 34.7))
+				return 2;
+			if (Lat >= 31.7 && Lon >= 26.0) return 1; // Anatolia, Cyprus and the Levant: Africa's shore is all south of here.
+			// The Red Sea and Sinai separate Africa from Arabia and the Levant.
+			const double Edge = Lat < 29.0 ? 43.0 - (Lat - 13.0) * 9.0 / 16.0 : 32.5;
+			return Lon < Edge ? 0 : 1;
+		}
+		if (Lat >= 36.0 && Lon > -12.0 && Lon < 40.0 && !(Lat < 42.0 && Lon > 26.0)) return 2;
+		if (Lon >= 26.0) return 1;
+		return 5;
+	}
+
 	const std::vector<Npc>& All() const { return Npcs; }
 	const std::vector<Camp>& AllCamps() const { return Camps; }
 	const std::vector<BeliefRecord>& AllBeliefs() const { return BeliefLog; }
@@ -3866,22 +3888,6 @@ private:
 	}
 
 	// 0 Africa, 1 Asia, 2 Europe, 3 Australia, 4 the Americas, 5 elsewhere.
-	static int RegionOf(double Lat, double Lon)
-	{
-		if (Lon < -30.0) return Lon > -169.0 ? 4 : 1; // West of the Bering Strait is Siberia, in Asia.
-		if (Lat < -10.0 && Lon > 112.0) return 3;
-		if (Lat < 37.0 && Lon > -20.0 && Lon < 52.0)
-		{
-			if (Lat < 12.0) return 0;
-			// The Red Sea and Sinai separate Africa from Arabia and the Levant.
-			const double Edge = Lat < 29.0 ? 43.0 - (Lat - 13.0) * 9.0 / 16.0 : 32.5;
-			return Lon < Edge ? 0 : 1;
-		}
-		if (Lat >= 36.0 && Lon > -12.0 && Lon < 40.0 && !(Lat < 42.0 && Lon > 26.0)) return 2;
-		if (Lon >= 26.0) return 1;
-		return 5;
-	}
-
 	// A band names a land in its own speech: a new word built from its words for sun and plant.
 	static std::string LandName(const Camp& C, int Region)
 	{
