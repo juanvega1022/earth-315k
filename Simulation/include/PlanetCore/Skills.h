@@ -106,6 +106,31 @@ inline const std::vector<Skill>& AllSkills()
 			{"medicine", {33, 4}, E({{Children, 0.7f}}), 1, 4000},                                   // 37
 			{"iron", {34}, E({{Forage, 1.1f}, {Hunt, 1.1f}, {Land, 1.2f}}), 1, 3200},                // 38
 			{"mathematics", {33}, E({{Teaching, 1.2f}, {Land, 1.1f}}), 1, 4000},                     // 39
+			// After the Iron Age: cities, then the medieval, industrial and modern eras.
+			{"cities", {29, 36}, E({{Land, 1.2f}, {Teaching, 1.1f}}), 1, 3500},                    // 40
+			{"laws", {33, 40}, E({{Predators, 0.9f}, {Children, 0.95f}}), 1, 3400},                // 41
+			{"money", {40, 21}, E({{Carry, 1.2f}}), 1, 2600},                                      // 42
+			{"roads", {40, 32}, E({{Travel, 1.3f}}), 1, 2300},                                     // 43
+			{"astronomy", {39, 33}, E({{Travel, 1.1f}, {Teaching, 1.1f}}), 1, 2500},               // 44
+			{"paper", {33, 30}, E({{Teaching, 1.2f}}), 1, 2100},                                   // 45
+			{"water mills", {32, 26}, E({{Forage, 1.2f}}), 1, 2000},                               // 46
+			{"compass", {38, 35, 44}, E({{Travel, 1.3f}}), 1, 1000},                               // 47
+			{"gunpowder", {44, 38}, E({{Hunt, 1.2f}, {Predators, 0.8f}}), 1, 1100},                // 48
+			{"universities", {45, 44}, E({{Teaching, 1.3f}}), 1, 930},                             // 49
+			{"printing", {45, 38}, E({{Teaching, 1.5f}}), 1, 575},                                 // 50
+			{"steam engines", {38, 39, 50}, E({{Carry, 1.3f}, {Forage, 1.1f}}), 1, 290},           // 51
+			{"factories", {51, 30}, E({{Forage, 1.1f}, {Carry, 1.2f}}), 1, 250},                   // 52
+			{"railways", {51, 43}, E({{Travel, 1.5f}, {Carry, 1.3f}}), 1, 200},                    // 53
+			{"vaccines", {37, 49}, E({{Children, 0.6f}}), 1, 225},                                 // 54
+			{"electricity", {39, 49, 38}, E({{Teaching, 1.1f}}), 1, 180},                          // 55
+			{"telegraph", {55}, E({{Teaching, 1.2f}}), 1, 175},                                    // 56
+			{"engines", {51, 52}, E({{Travel, 1.3f}, {Forage, 1.1f}}), 1, 140},                    // 57
+			{"fertilizers", {52, 26}, E({{Land, 1.4f}}), 1, 110},                                  // 58
+			{"flight", {57}, E({{Travel, 1.5f}}), 1, 120},                                         // 59
+			{"antibiotics", {54}, E({{Children, 0.6f}}), 1, 95},                                   // 60
+			{"radio", {56}, E({{Teaching, 1.2f}}), 1, 120},                                        // 61
+			{"computers", {55, 39, 61}, E({{Teaching, 1.5f}}), 1, 80},                             // 62
+			{"the internet", {62}, E({{Teaching, 1.5f}}), 1, 50},                                  // 63
 		};
 		for (Skill& S : L)
 		{
@@ -118,7 +143,9 @@ inline const std::vector<Skill>& AllSkills()
 			// Planting waits for a warm, steady climate (see People::LearnSkills), so it is timed
 			// from the end of the last ice age, not from when seeds were first ground.
 			if (S.Name[0] == 'p' && S.Name[1] == 'l') Since = 13000.0;
-			S.YearsToFind = Since - S.YearsAgo > S.YearsToFind ? Since - S.YearsAgo : S.YearsToFind;
+			// Recent steps came within decades of each other, so the shortest wait is shorter for them.
+			const double Shortest = S.YearsAgo < S.YearsToFind ? S.YearsAgo : S.YearsToFind;
+			S.YearsToFind = Since - S.YearsAgo > Shortest ? Since - S.YearsAgo : Shortest;
 		}
 		return L;
 	}();
