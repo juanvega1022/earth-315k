@@ -116,9 +116,9 @@ inline const std::vector<Skill>& AllSkills()
 			{"water mills", {32, 26}, E({{Forage, 1.2f}}), 1, 2000},                               // 46
 			{"compass", {38, 35, 44}, E({{Travel, 1.3f}}), 1, 1000},                               // 47
 			{"gunpowder", {44, 38}, E({{Hunt, 1.2f}, {Predators, 0.8f}}), 1, 1100},                // 48
-			{"universities", {45, 44}, E({{Teaching, 1.3f}}), 1, 930},                             // 49
+			{"universities", {45, 44, 40}, E({{Teaching, 1.3f}}), 1, 930},                             // 49
 			{"printing", {45, 38}, E({{Teaching, 1.5f}}), 1, 575},                                 // 50
-			{"steam engines", {38, 39, 50}, E({{Carry, 1.3f}, {Forage, 1.1f}}), 1, 290},           // 51
+			{"steam engines", {38, 39, 50, 42}, E({{Carry, 1.3f}, {Forage, 1.1f}}), 1, 290},           // 51
 			{"factories", {51, 30}, E({{Forage, 1.1f}, {Carry, 1.2f}}), 1, 250},                   // 52
 			{"railways", {51, 43}, E({{Travel, 1.5f}, {Carry, 1.3f}}), 1, 200},                    // 53
 			{"vaccines", {37, 49}, E({{Children, 0.6f}}), 1, 225},                                 // 54
