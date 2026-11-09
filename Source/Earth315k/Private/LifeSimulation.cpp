@@ -3,7 +3,9 @@
 #include "PlanetGlobe.h"
 
 #include "Camera/PlayerCameraManager.h"
+#include "Components/DirectionalLightComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/DirectionalLight.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -250,6 +252,70 @@ int32 ALifeSimulation::StepDaysForSpeed() const
 	return FMath::Clamp(static_cast<int32>(DaysPerSecond / 60.f), 1, 10);
 }
 
+// The sun stands over the point where it is noon, as far north or south as the tilt and the
+// season put it; the moon trails it by its phase. When the world runs faster than a few days a
+// second, days would flicker, so the sun stays over the camera and only the season moves.
+void ALifeSimulation::UpdateSky(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	if (!World || !Globe || !Life)
+	{
+		return;
+	}
+	if (!SunLight)
+	{
+		for (TActorIterator<ADirectionalLight> It(World); It; ++It)
+		{
+			SunLight = *It;
+			break;
+		}
+		if (!SunLight) return;
+		SunLight->GetRootComponent()->SetMobility(EComponentMobility::Movable);
+		MoonLight = World->SpawnActor<ADirectionalLight>(FVector::ZeroVector, FRotator::ZeroRotator);
+		if (MoonLight)
+		{
+			MoonLight->GetRootComponent()->SetMobility(EComponentMobility::Movable);
+			MoonLight->GetLightComponent()->SetIntensity(SunLight->GetLightComponent()->Intensity * 0.03f);
+			MoonLight->GetLightComponent()->SetLightColor(FLinearColor(0.75f, 0.8f, 1.f));
+		}
+		MoonBall = NewObject<UStaticMeshComponent>(this);
+		MoonBall->SetStaticMesh(MarkerMesh);
+		MoonBall->SetMobility(EComponentMobility::Movable);
+		MoonBall->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		MoonBall->RegisterComponent();
+	}
+	if (!bPaused && !bJumping) SkyClock += DeltaSeconds * DaysPerSecond;
+	const double Day = Life->Day();
+	const double Ahead = -Life->YearsAgo();
+	const double Season = earth::sky::kTau * (Life->DayOfYear() - 80) / earth::Ecosystem::kDaysPerYear;
+	const double SunLat = earth::sky::Tilt(Ahead) * std::sin(Season);
+	double SunLon = -360.0 * (SkyClock - std::floor(SkyClock)) + 180.0;
+	APlayerController* Player = World->GetFirstPlayerController();
+	if (DaysPerSecond > 3.f && Player && Player->PlayerCameraManager)
+	{
+		SunLon = Globe->WorldToLatLon(Player->PlayerCameraManager->GetCameraLocation()).Y + 30.0;
+	}
+	const FVector Centre = Globe->GetActorLocation();
+	const auto From = [&](double Lat, double Lon) { return (Centre - Globe->SurfacePoint(Lat, Lon)).Rotation(); };
+	SunLight->SetActorRotation(From(SunLat, SunLon));
+	// The moon is about 5 degrees off the sun's path and as far behind the sun as its phase.
+	const double Age = earth::sky::MoonAge(Day);
+	const double MoonLon = SunLon - 360.0 * Age / earth::sky::kLunarMonth;
+	const double MoonLat = (earth::sky::Tilt(Ahead) + 5.1 * std::sin(earth::sky::kTau * Day / 27.21)) * std::sin(Season + earth::sky::kTau * Age / earth::sky::kLunarMonth);
+	if (MoonLight)
+	{
+		MoonLight->SetActorRotation(From(MoonLat, MoonLon));
+		MoonLight->GetLightComponent()->SetIntensity(SunLight->GetLightComponent()->Intensity * 0.03f * static_cast<float>(earth::sky::MoonLight(Day)));
+	}
+	if (MoonBall)
+	{
+		// Not to scale: the real moon is 60 Earth radii away, far out of sight of the camera.
+		const FVector Up = Globe->SurfacePoint(MoonLat, MoonLon) - Centre;
+		MoonBall->SetWorldLocation(Centre + Up * 4.0);
+		MoonBall->SetWorldScale3D(FVector(Up.Size() * 0.27 / 50.0));
+	}
+}
+
 void ALifeSimulation::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -275,6 +341,7 @@ void ALifeSimulation::Tick(float DeltaSeconds)
 	CheckFollowed();
 	SampleHistory();
 	MoveCamera(DeltaSeconds);
+	UpdateSky(DeltaSeconds);
 
 	SinceDraw += DeltaSeconds;
 	if (SinceDraw >= kDrawSeconds)

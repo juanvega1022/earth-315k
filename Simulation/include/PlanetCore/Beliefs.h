@@ -21,10 +21,13 @@ namespace earth
 inline const std::vector<const char*>& BeliefSubjects()
 {
 	static const std::vector<const char*> List = {"the dead", "the sun", "the night sky", "water", "fire", "the land",
-		"the beasts that hunt us", "the animals we hunt", "the sea", "the cold", "children"};
+		"the beasts that hunt us", "the animals we hunt", "the sea", "the cold", "children", "the moon", "the stars"};
 	return List;
 }
 inline int SubjectCount() { return static_cast<int>(BeliefSubjects().size()); }
+inline constexpr int kMoonSubject = 11, kStarsSubject = 12;
+// Subjects before the moon and the stars came in (save version 11): materials then started here.
+inline constexpr int kOldSubjectCount = 11;
 
 inline const std::vector<const char*>& BeliefClaims()
 {
@@ -71,9 +74,13 @@ inline const std::vector<Practice>& BeliefPractices()
 		{"they will not leave their sacred place", .20f, Travel, .80f, -1, -1, -1, false},
 		{"they carve sacred signs", .20f, Teaching, 1.05f, -1, -1, 13, false},
 		{"they sacrifice the first animal of each hunt", .25f, Carry, .97f, -1, -1, -1, false},
+		// The first calendar: counting moons tells them when the herds and the fruit will come back.
+		{"they count the days by the moon", .15f, Forage, 1.04f, -1, -1, -1, false},
 	};
 	return List;
 }
+
+inline constexpr int kMoonPractice = 11; // Only for beliefs about the moon.
 
 inline std::string SubjectName(int S)
 {

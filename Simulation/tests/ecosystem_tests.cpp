@@ -265,8 +265,49 @@ static void TestClimateAndRivers()
 	EXPECT(E.WaterAt(10.0, -19.5) >= E.RiverAt(10.0, -19.5));
 }
 
+// The orbit gives ice ages of about 100,000 years in the future; the Sun ends them and then life.
+static void TestSky()
+{
+	namespace sky = earth::sky;
+	EXPECT(std::abs(sky::Eccentricity(0.0) - 0.0167) < 0.006);
+	EXPECT(std::abs(sky::Tilt(0.0) - 23.44) < 0.1);
+	EXPECT(sky::NorthernSummerSun(-11000.0) > sky::NorthernSummerSun(0.0) + 30.0); // The warm early Holocene.
+	sky::IceSheets Ice;
+	int Maxima = 0;
+	bool Deep = false;
+	for (double T = 50000.0; T < 1050000.0; T += 1000.0)
+	{
+		Ice.Advance(T, 1000.0);
+		if (Ice.Volume > 0.7 && !Deep) ++Maxima;
+		Deep = Ice.Volume > 0.7 ? true : (Ice.Volume < 0.1 ? false : Deep);
+	}
+	EXPECT(Maxima >= 6 && Maxima <= 16); // About one deep ice age every 100,000 years.
+	EXPECT(std::abs(sky::SunWarming(1.1e8) - 2.2) < 0.3);
+	EXPECT(sky::IceAgeStrength(0.0) == 1.0 && sky::IceAgeStrength(2.0e8) == 0.0);
+	EXPECT(sky::PlantAir(1.0e8) == 1.0 && sky::PlantAir(9.6e8) == 0.0);
+	EXPECT(sky::MoonLight(sky::kLunarMonth / 2.0) > 0.99 && sky::MoonLight(0.0) < 0.01);
+}
+
+// A blast clears the animals around it and brings a winter that holds the plants down, then lifts.
+static void TestDisaster()
+{
+	earth::ElevationGrid G = MakePlanet();
+	earth::EcosystemSettings Settings;
+	Settings.StartYearsAgo = 0.0;
+	earth::Ecosystem E(&G, {Grazer()}, 1, Settings);
+	E.Strike("test", 10.0, 20.0, 0.9, 1.0, 1500.0, 0.0);
+	EXPECT(E.LastBlast().Count == 1);
+	EXPECT(E.DisasterWinter() > 0.85);
+	for (const auto& Gr : E.Groups())
+		EXPECT(std::hypot(Gr.Lat - 10.0, Gr.Lon - 20.0) > 12.0 || Gr.Count == 0.0);
+	for (int i = 0; i < 13; ++i) E.Step(30);
+	EXPECT(E.DisasterWinter() == 0.0);
+}
+
 int main()
 {
+	TestSky();
+	TestDisaster();
 	TestClimateAndRivers();
 	TestDeterministic();
 	TestStayOnLandAndInRange();

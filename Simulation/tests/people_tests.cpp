@@ -410,6 +410,8 @@ static void TestSaveAndResume()
 static void TestBeliefs()
 {
 	EXPECT(earth::BeliefGloss(1, 2, 2) == "The sun is where we came from; they dance through the night");
+	EXPECT(earth::BeliefGloss(earth::kMoonSubject, 0, earth::kMoonPractice) == "The moon is alive and watches us; they count the days by the moon");
+	EXPECT(earth::BeliefGloss(earth::kStarsSubject, 2, 2) == "The stars are where we came from; they dance through the night");
 	EXPECT(earth::BeliefGloss(0, 0, 0) == "The dead are alive and watch us; they bury their dead with gifts");
 	EXPECT(earth::SubjectName(earth::SubjectCount()) == earth::AllMaterials()[0].Name);
 	earth::ElevationGrid Grid = MakePlanet();
