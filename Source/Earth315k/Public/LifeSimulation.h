@@ -12,6 +12,7 @@
 #include "LifeSimulation.generated.h"
 
 class APlanetGlobe;
+class ADirectionalLight;
 class FLifeRunner;
 class FRunnableThread;
 class UInstancedStaticMeshComponent;
@@ -153,6 +154,16 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> MarkerMesh;
+
+	// The sun and moon over the globe: a moving sun light, a faint moon light and the moon itself.
+	UPROPERTY()
+	TObjectPtr<ADirectionalLight> SunLight;
+	UPROPERTY()
+	TObjectPtr<ADirectionalLight> MoonLight;
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> MoonBall;
+	double SkyClock = 0.0; // Days, for the time of day; runs with the world when slow enough to watch.
+	void UpdateSky(float DeltaSeconds);
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> MarkerMaterial;

@@ -11,12 +11,14 @@
 #include "ElevationGrid.h"
 #include "Parallel.h"
 #include "Random.h"
+#include "Sky.h"
 #include "Species.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <queue>
 #include <string>
@@ -277,15 +279,8 @@ public:
 			{160000, -90}, {190000, -60}, {200000, -50}, {215000, -15}, {230000, -60}, {243000, -10},
 			{260000, -110}, {285000, -90}, {300000, -60}, {315000, -30}, {330000, 0}};
 		const int N = static_cast<int>(sizeof(Table) / sizeof(Table[0]));
-		// The future: today's warm spell is expected to last unusually long (a weak wobble of the
-		// Earth's orbit), so the next ice age starts some 50,000 years from now; after that the
-		// last 120,000-year cycle repeats, from its warm peak 125,000 years ago down to today.
-		// shortcut: a repeat of the past cycle, not an orbital model; ignores the warming people cause.
-		if (YearsAgoNow <= 0.0)
-		{
-			const double Ahead = -YearsAgoNow - 50000.0;
-			return Ahead <= 0.0 ? 0.0 : SeaLevelThen(125000.0 - std::fmod(Ahead, 120000.0));
-		}
+		// The future follows the orbit instead (FutureSeaLevel).
+		if (YearsAgoNow <= 0.0) return 0.0;
 		for (int i = 1; i < N; ++i)
 		{
 			if (YearsAgoNow <= Table[i][0])
@@ -309,6 +304,24 @@ public:
 	}
 
 	double GreenSahara() const { return GreenSaharaThen(YearsAgo()) * (1.0 - 0.5 * IceCover()); }
+
+	// How much warmer than today the brightening Sun has made the world, in degrees C.
+	double Warming() const { return sky::SunWarming(-YearsAgo()); }
+	// 0 normal .. 1 no plant growth at all: the winter after an eruption or an impact.
+	double DisasterWinter() const { return WinterEnd > Years() ? WinterStrength * (WinterEnd - Years()) / std::max(0.1, WinterYears) : 0.0; }
+	// The latest blast from an eruption or impact: where, how far it killed, and how many there have been.
+	struct Blast
+	{
+		double Lat = 0.0, Lon = 0.0, RadiusKm = 0.0;
+		int Count = 0;
+
+		template <class A>
+		void Serialize(A& Ar)
+		{
+			Ar.Io(Lat), Ar.Io(Lon), Ar.Io(RadiusKm), Ar.Io(Count);
+		}
+	};
+	const Blast& LastBlast() const { return LatestBlast; }
 
 	bool IsLand(double Lat, double Lon) const { return AltitudeAt(Lat, Lon) > 0.0; }
 
@@ -690,6 +703,13 @@ public:
 		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Random), Ar.Io(NextGroupId), Ar.Io(Cells), Ar.Io(AnimalGroups), Ar.Io(SpeciesAlive), Ar.Io(EventLog), Ar.Io(DayNumber);
 		Ar.Io(SeaChange), Ar.Io(ClimateStep), Ar.Io(ClimateCount), Ar.Io(Settings.StartYearsAgo), Ar.Io(Settings.IceAges);
+		if (Ar.Version >= 11) Ar.Io(Sheets.Volume), Ar.Io(Sheets.Melting), Ar.Io(IceYearsAgo), Ar.Io(WinterStrength), Ar.Io(WinterYears), Ar.Io(WinterEnd), Ar.Io(LatestBlast);
+		else if (Ar.IsReading())
+		{
+			// An older save: the ice the sea level shows now, and the sky's clock starts here.
+			Sheets.Volume = std::clamp(-SeaChange / 125.0, 0.0, 1.0);
+			IceYearsAgo = Settings.StartYearsAgo - DayNumber / kDaysPerYear;
+		}
 		if (Ar.IsReading())
 		{
 			if (!Ground.empty()) ApplySeaLevel();
@@ -724,6 +744,30 @@ public:
 		return std::clamp(std::min(Warmth, Wet) / 0.8, 0.0, 1.0); // The wettest rainforests are the best there is.
 	}
 
+	// A blast kills everything within RadiusKm and a share of all animals everywhere, and the
+	// dust and ash bring a winter that fades over Lasts years.
+	void Strike(const std::string& What, double Lat, double Lon, double Winter, double Lasts, double RadiusKm, double WorldKill)
+	{
+		EventLog.push_back({Years(), What});
+		if (Winter > DisasterWinter())
+		{
+			WinterStrength = Winter;
+			WinterYears = Lasts;
+			WinterEnd = Years() + Lasts;
+		}
+		const double Rad = 3.14159265358979323846 / 180.0;
+		const auto Near = [&](double ALat, double ALon)
+		{
+			const double C = std::sin(ALat * Rad) * std::sin(Lat * Rad) + std::cos(ALat * Rad) * std::cos(Lat * Rad) * std::cos((ALon - Lon) * Rad);
+			return 6371.0 * std::acos(std::clamp(C, -1.0, 1.0)) < RadiusKm;
+		};
+		for (AnimalGroup& G : AnimalGroups) G.Count = Near(G.Lat, G.Lon) ? 0.0 : G.Count * (1.0 - WorldKill);
+		for (size_t i = 0; i < Cells.size(); ++i)
+			if (Near(Cells[i].Lat, -180.0 + (static_cast<double>(i % static_cast<size_t>(Cols)) + 0.5) * Settings.CellDegrees)) Cells[i].Plants = 0.0;
+		LatestBlast = {Lat, Lon, RadiusKm, LatestBlast.Count + 1};
+		IndexStale = true;
+	}
+
 private:
 	std::vector<float> Rivers; // Per quarter-degree square; rebuilt with the plants, never saved.
 
@@ -752,6 +796,13 @@ private:
 	int ClimateStep = 0;
 	int ClimateCount = 0;
 	double GreenBuilt = -1.0; // GreenSaharaThen() when the plants were last rebuilt; not saved.
+	double WarmBuilt = -1.0;  // Warming() and the air's plant limit then; not saved.
+	double AirBuilt = -1.0;
+	sky::IceSheets Sheets;      // The future's ice, from the orbit; the past reads the real record.
+	double IceYearsAgo = 0.0;  // When the sky was last brought up to date.
+	// In planet years, so a winter is as short as it really is when deep time skips ahead.
+	double WinterStrength = 0.0, WinterYears = 0.0, WinterEnd = 0.0;
+	Blast LatestBlast;
 	std::vector<int> TouchedCells;
 	bool IndexStale = true;
 	std::vector<Species> SpeciesList;
@@ -815,19 +866,26 @@ private:
 	void UpdateClimate()
 	{
 		const int Step = static_cast<int>(Years() / 100.0);
-		if (!Settings.IceAges || Step == ClimateStep || Ground.empty())
+		if (Step == ClimateStep || Ground.empty())
 		{
 			return;
 		}
 		ClimateStep = Step;
-		const double Sea = SeaLevelThen(YearsAgo());
+		const double Elapsed = IceYearsAgo - YearsAgo();
+		if (Elapsed > 0.0) Sky(Elapsed);
+		IceYearsAgo = YearsAgo();
+		if (!Settings.IceAges) return;
+		const double Sea = YearsAgo() > 0.0 ? SeaLevelThen(YearsAgo()) : FutureSeaLevel();
 		const double Green = GreenSaharaThen(YearsAgo());
-		if (std::abs(Sea - SeaChange) < 1.0 && std::abs(Green - GreenBuilt) < 0.1)
+		const double Warm = Warming(), Air = sky::PlantAir(-YearsAgo());
+		if (std::abs(Sea - SeaChange) < 1.0 && std::abs(Green - GreenBuilt) < 0.1 && std::abs(Warm - WarmBuilt) < 0.25 && std::abs(Air - AirBuilt) < 0.02)
 		{
 			return;
 		}
 		SeaChange = Sea;
 		GreenBuilt = Green;
+		WarmBuilt = Warm;
+		AirBuilt = Air;
 		ApplySeaLevel();
 		std::vector<double> Old(Cells.size());
 		for (size_t i = 0; i < Cells.size(); ++i) Old[i] = Cells[i].Capacity;
@@ -837,6 +895,45 @@ private:
 			Cells[i].Plants = Old[i] > 0.0 ? std::min(Cells[i].Plants, Cells[i].Capacity) : Cells[i].Capacity * 0.5;
 		}
 		++ClimateCount;
+	}
+
+	// Sea level ahead of today, from the orbit's ice. Today's warm spell lasts unusually long (the
+	// orbit is nearly round), so the next ice age starts some 50,000 years from now; ice ages fade
+	// as the Sun brightens.
+	double FutureSeaLevel()
+	{
+		return -125.0 * Sheets.Volume * sky::IceAgeStrength(-YearsAgo());
+	}
+
+	// Brings the sky up to date over Elapsed years: the ice sheets, and any eruption or impact.
+	void Sky(double Elapsed)
+	{
+		const double Now = -YearsAgo(), From = Now - Elapsed;
+		if (Now > 50000.0) Sheets.Advance(std::max(From, 50000.0), Now - std::max(From, 50000.0));
+		if (From < -sky::kTobaYearsAgo && Now >= -sky::kTobaYearsAgo) Strike("Toba, in Sumatra, erupts: the biggest eruption for a million years", 2.6, 98.8, 0.25, 6.0, 300.0, 0.0);
+		if (Now <= 0.0) return; // The past keeps to what really happened.
+		// shortcut: separate dice from the world's, so the past runs as it did before the sky came in.
+		Rng Dice(BaseSeed ^ (static_cast<uint64_t>(Now) * 0xD1B54A32D192ED03ull));
+		int Kinds = 0, Places = 0;
+		const sky::Disaster* List = sky::Disasters(Kinds);
+		const sky::Caldera* Caldera = sky::Calderas(Places);
+		for (int k = 0; k < Kinds; ++k)
+		{
+			const sky::Disaster& D = List[k];
+			if (!Dice.Chance(1.0 - std::exp(-std::max(0.0, Now - std::max(From, 0.0)) / D.MeanYears))) continue;
+			if (k == 0)
+			{
+				const sky::Caldera& C = Caldera[static_cast<int>(Dice.Uniform() * Places) % Places];
+				Strike(std::string(C.Name) + " erupts: " + D.Name + " darkens the sky", C.Lat, C.Lon, D.Winter, D.WinterYears, D.RadiusKm, D.WorldKill);
+			}
+			else
+			{
+				const double Lat = std::asin(Dice.Range(-1.0, 1.0)) * 180.0 / 3.14159265358979323846, Lon = Dice.Range(-180.0, 180.0);
+				char Where[64];
+				std::snprintf(Where, sizeof(Where), " (%.0f%c, %.0f%c)", std::abs(Lat), Lat >= 0.0 ? 'N' : 'S', std::abs(Lon), Lon >= 0.0 ? 'E' : 'W');
+				Strike(std::string(D.Name) + " strikes " + (IsLand(Lat, Lon) ? "the land" : "the sea") + Where, Lat, Lon, D.Winter, D.WinterYears, D.RadiusKm, D.WorldKill);
+			}
+		}
 	}
 
 	// How much plant food a place can grow, from latitude and altitude. A placeholder
@@ -864,12 +961,13 @@ private:
 		{
 			double T = 0.0, Mm = 0.0;
 			ClimateThen(Lat, Lon, T, Mm);
-			return Settings.PeakPlantsPerKm2 * Growth(T, Mm);
+			// Past about 35 degrees on average, heat starts to wither plants.
+			return Settings.PeakPlantsPerKm2 * Growth(T, Mm) * std::clamp((50.0 - T) / 15.0, 0.0, 1.0) * sky::PlantAir(-YearsAgo());
 		}
 		const double Desert = std::clamp(1.0 - std::abs(AbsLat - 24.0) / 8.0, 0.0, 1.0) * 0.85 * (1.0 - 0.7 * GreenSahara() * DesertBelt(Lat, Lon));
 		const double Cold = std::clamp((AbsLat - (50.0 - 12.0 * Ice)) / 25.0, 0.0, 1.0) * 0.8;
 		const double High = std::clamp((Height - 2500.0) / 2000.0, 0.0, 1.0);
-		return Settings.PeakPlantsPerKm2 * (1.0 - Desert) * (1.0 - Cold) * (1.0 - High);
+		return Settings.PeakPlantsPerKm2 * (1.0 - Desert) * (1.0 - Cold) * (1.0 - High) * sky::PlantAir(-YearsAgo());
 	}
 
 	// The real climate of today, moved back to the time of the run: in an ice age it was colder,
@@ -878,7 +976,7 @@ private:
 	void ClimateThen(double Lat, double Lon, double& TempC, double& RainMm) const
 	{
 		const double Ice = IceCover();
-		TempC = Settings.Temperature->Sample(Lat, Lon) / 10.0 - Ice * (4.0 + 8.0 * std::abs(Lat) / 90.0);
+		TempC = Settings.Temperature->Sample(Lat, Lon) / 10.0 - Ice * (4.0 + 8.0 * std::abs(Lat) / 90.0) + Warming();
 		RainMm = (std::max(0.0, Settings.Rain->Sample(Lat, Lon)) + 350.0 * GreenSahara() * DesertBelt(Lat, Lon)) * (1.0 - 0.35 * Ice);
 	}
 
@@ -1062,6 +1160,7 @@ private:
 
 	void GrowPlants(int Days)
 	{
+		const double Dark = 1.0 - DisasterWinter();
 		for (PlantCell& C : Cells)
 		{
 			if (C.Capacity <= 0.0)
@@ -1070,7 +1169,7 @@ private:
 			}
 			C.EatenPerDay = 0.0;
 			const double Season = GrowingSeason(C.Lat);
-			const double Target = C.Capacity * (0.15 + 0.85 * Season);
+			const double Target = C.Capacity * (0.15 + 0.85 * Season) * Dark;
 			if (C.Plants < Target)
 			{
 				const double Rate = Settings.PlantGrowthPerDay * (0.2 + 0.8 * Season);

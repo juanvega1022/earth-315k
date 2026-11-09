@@ -410,6 +410,8 @@ static void TestSaveAndResume()
 static void TestBeliefs()
 {
 	EXPECT(earth::BeliefGloss(1, 2, 2) == "The sun is where we came from; they dance through the night");
+	EXPECT(earth::BeliefGloss(earth::kMoonSubject, 0, earth::kMoonPractice) == "The moon is alive and watches us; they count the days by the moon");
+	EXPECT(earth::BeliefGloss(earth::kStarsSubject, 2, 2) == "The stars are where we came from; they dance through the night");
 	EXPECT(earth::BeliefGloss(0, 0, 0) == "The dead are alive and watch us; they bury their dead with gifts");
 	EXPECT(earth::SubjectName(earth::SubjectCount()) == earth::AllMaterials()[0].Name);
 	earth::ElevationGrid Grid = MakePlanet();
@@ -526,7 +528,8 @@ static void TestHerdsAndCrops()
 	Settings.StartLon = 46.0;
 	earth::People Folk(&Eco, 6, Settings);
 	bool Wheat = false, Herd = false;
-	for (int i = 0; i < 365 * 100 / 30 && !(Wheat && Herd); ++i)
+	// Up to 300 years: taming a herd waits on a wild one wandering near camp, which can take a while.
+	for (int i = 0; i < 365 * 300 / 30 && !(Wheat && Herd); ++i)
 	{
 		Eco.Step(30);
 		Folk.Step(30);

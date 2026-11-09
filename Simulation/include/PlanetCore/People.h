@@ -415,6 +415,7 @@ struct BeliefRecord
 	{
 		Ar.Io(Id), Ar.Io(Subject), Ar.Io(Claim), Ar.Io(Practice), Ar.Io(Parent), Ar.Io(Year), Ar.Io(Founder), Ar.Io(CampId), Ar.Io(Lat), Ar.Io(Lon);
 		Ar.Io(Word), Ar.Io(Peak), Ar.Io(NextMark), Ar.Io(Origin);
+		if (Ar.IsReading() && Ar.Version < 11 && Subject >= kOldSubjectCount) Subject += SubjectCount() - kOldSubjectCount;
 	}
 };
 
@@ -904,6 +905,8 @@ public:
 			return;
 		}
 		Eco->RefreshIndex();
+		SurviveBlast();
+		WatchSky(1);
 		RegrowGatherable();
 		IndexCamps();
 		SenseCamps(1);
@@ -1002,6 +1005,8 @@ public:
 			Pool = std::make_unique<WorkerPool>(Settings.Threads > 0 ? Settings.Threads - 1 : 0);
 		}
 		Eco->RefreshIndex();
+		SurviveBlast();
+		WatchSky(Days);
 		RegrowGatherable(Days);
 		IndexCamps();
 		SenseCamps(Days);
@@ -1224,6 +1229,44 @@ private:
 	std::vector<uint8_t> ShoreSquare;
 	std::vector<float> ShoreCapacity;
 	int LandClimate = -1;
+	// The latest sign in the sky everyone saw: an eclipse (the moon) or a great comet (the stars),
+	// remembered for a year. Not saved.
+	int OmenDays = 0, OmenSubject = 0;
+	bool SawEclipse = false, SawComet = false;
+
+	// A great comet comes about every 20 years, and a total eclipse crosses some band's land
+	// about every 50 (a band's own sky sees one only every few centuries).
+	void WatchSky(int Days)
+	{
+		OmenDays = std::max(0, OmenDays - Days);
+		// shortcut: separate dice from the people's, so the rest of the run is unchanged by the sky.
+		Rng Sky(static_cast<uint64_t>(Eco->Day()) * 0x94D049BB133111EBull ^ 0x5EEDull);
+		const double PerDay = Days / Ecosystem::kDaysPerYear;
+		if (Sky.Chance(PerDay / 50.0))
+		{
+			OmenDays = 365, OmenSubject = kMoonSubject;
+			if (!SawEclipse) AddEvent("The sun goes dark at midday as the moon passes over it: the first eclipse anyone wonders at");
+			SawEclipse = true;
+		}
+		else if (Sky.Chance(PerDay / 20.0))
+		{
+			OmenDays = 365, OmenSubject = kStarsSubject;
+			if (!SawComet) AddEvent("A great comet hangs in the night sky for weeks: the first anyone wonders at");
+			SawComet = true;
+		}
+	}
+
+	int SeenBlast = -1; // Eco->LastBlast().Count already dealt with; not saved, so a reload skips old blasts.
+
+	// Everyone near an eruption or an impact dies in the blast.
+	void SurviveBlast()
+	{
+		const auto& B = Eco->LastBlast();
+		if (SeenBlast >= 0 && B.Count != SeenBlast)
+			for (Npc& P : Npcs)
+				if (P.Alive && DistanceKm(P.Lat, P.Lon, B.Lat, B.Lon) < B.RadiusKm) Die(P, 4);
+		SeenBlast = B.Count;
+	}
 
 	// Gatherable plant food people have used up, per quarter-degree square.
 	std::unordered_map<int64_t, double> Gathered;
@@ -1454,7 +1497,9 @@ private:
 	double ShoreFood(double Lat, double Lon) const
 	{
 		if (ShoreSquare.empty()) return 0.0;
-		return ShoreSquare[static_cast<size_t>(GridKey(std::clamp(GridRow(Lat), 0, 179), GridCol(Lon)))] ? kShoreCover : 0.0;
+		// The lowest tides, at new and full moon, bare the most shellfish.
+		const double Tide = 1.0 + 0.15 * std::cos(2.0 * sky::kTau * sky::MoonAge(Eco->Day()) / sky::kLunarMonth);
+		return ShoreSquare[static_cast<size_t>(GridKey(std::clamp(GridRow(Lat), 0, 179), GridCol(Lon)))] ? kShoreCover * Tide : 0.0;
 	}
 	static bool Fishes(const Camp& C) { return Knows(C.Known, kFishing); }
 	// Bands that live off the sea also know its shore springs, where fresh groundwater seeps out even on desert coasts.
@@ -2864,10 +2909,10 @@ private:
 	static const std::vector<const char*>& Concepts()
 	{
 		static const std::vector<const char*> List = {"make", "lead", "teach", "find", "arrive", "us", "the dead", "the sea", "the cold",
-			"the land", "beast", "animal"};
+			"the land", "beast", "animal", "the moon", "the stars"};
 		return List;
 	}
-	enum ConceptWord { Make, Lead, Teach, FindIt, Arrive, Us, TheDead, TheSea, TheCold, TheLand, Beast, Animal };
+	enum ConceptWord { Make, Lead, Teach, FindIt, Arrive, Us, TheDead, TheSea, TheCold, TheLand, Beast, Animal, TheMoon, TheStars };
 
 	// The band's word for a concept, coined now if they have none.
 	uint16_t Coin(Camp& C, int K)
@@ -2881,7 +2926,7 @@ private:
 	// The band's word for a belief subject: one of its first words where there is one, else coined.
 	uint16_t SubjectWord(Camp& C, int Subject)
 	{
-		static const int Slots[] = {-TheDead, 12, 13, 0, 4, -TheLand, -Beast, -Animal, -TheSea, -TheCold, 6};
+		static const int Slots[] = {-TheDead, 12, 13, 0, 4, -TheLand, -Beast, -Animal, -TheSea, -TheCold, 6, -TheMoon, -TheStars};
 		if (Subject >= SubjectCount())
 		{
 			const uint16_t* W = WordFor(C, MaterialKey(Subject - SubjectCount()));
@@ -3204,6 +3249,7 @@ private:
 	{
 		const Practice& Pr = BeliefPractices()[static_cast<size_t>(P)];
 		if (Pr.AnimalsOnly && Subject != 6 && Subject != 7) return false;
+		if (P == kMoonPractice && Subject != kMoonSubject) return false;
 		if (Pr.NeedsSkill >= 0 && !Knows(C.Known, Pr.NeedsSkill)) return false;
 		if (Pr.NeedsMaterial >= 0 && !((C.Met >> Pr.NeedsMaterial) & 1u)) return false;
 		if (Pr.NeedsWorking >= 0)
@@ -3235,6 +3281,9 @@ private:
 	int PickSubject(const Camp& C, double DeathShare)
 	{
 		const double R = Dice.Uniform();
+		// Sky omens are blamed first: a sun hidden by ash, the moon eating the sun, a burning star.
+		if (Eco->DisasterWinter() > 0.1 && R < 0.5) return 1;
+		if (OmenDays > 0 && R < 0.5) return OmenSubject;
 		if (DeathShare > 0.05 && R < 0.4) return 0;
 		if (C.SeenDanger > 0.3f && R < 0.6) return 6;
 		if (R < 0.85)
