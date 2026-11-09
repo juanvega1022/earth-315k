@@ -528,7 +528,8 @@ static void TestHerdsAndCrops()
 	Settings.StartLon = 46.0;
 	earth::People Folk(&Eco, 6, Settings);
 	bool Wheat = false, Herd = false;
-	for (int i = 0; i < 365 * 100 / 30 && !(Wheat && Herd); ++i)
+	// Up to 300 years: taming a herd waits on a wild one wandering near camp, which can take a while.
+	for (int i = 0; i < 365 * 300 / 30 && !(Wheat && Herd); ++i)
 	{
 		Eco.Step(30);
 		Folk.Step(30);
