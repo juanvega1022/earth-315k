@@ -2764,13 +2764,18 @@ private:
 	{
 		const std::vector<Skill>& List = AllSkills();
 		const int Count = static_cast<int>(List.size());
-		// Odds a year for one person of average wits and curiosity: a world of kPacePeople finds a
-		// skill in YearsToFind on average. The reference scales with the density setting, so a
-		// denser world isn't also a faster one.
-		// Beyond that many people the world finds things no faster: the real pace already counts
+		// Odds a year for one person of average wits and curiosity: kPacePeople who know what a skill
+		// builds on find it in YearsToFind on average. The reference scales with the density setting,
+		// so a denser world isn't also a faster one.
+		// Beyond that many able people the world finds things no faster: the real pace already counts
 		// everyone alive then, and a run that grows past the reference would race ahead of history.
+		// Only people able to make the find count, so a skill isn't held back by the many who can't.
 		constexpr double kPacePeople = 3000.0;
-		const double PacePeople = std::max(kPacePeople * Settings.PeoplePerKm2 / 0.0003, static_cast<double>(Npcs.size()));
+		const double PaceRef = kPacePeople * Settings.PeoplePerKm2 / 0.0003;
+		std::array<int, 64> Able{};
+		for (const Npc& P : Npcs)
+			if (P.AgeYears() >= 5.0)
+				for (int k = 0; k < Count; ++k) Able[static_cast<size_t>(k)] += CanDiscover(P.Skills, k);
 		// The chance grows with time since a skill became findable (a Weibull wait of shape 3 with
 		// mean YearsToFind), so a first find long before its time is rare, and so is one long overdue.
 		const double Now = Eco->Years();
@@ -2789,7 +2794,7 @@ private:
 			const double Scale = Wait / (0.893 * Settings.DiscoveryPace); // The mean of shape 3 is 0.893 x scale.
 			// Long overdue (past 3 scales, almost never reached) the chance stops growing.
 			const double T = std::min(3.0, (Now - Findable[k]) / Scale + 1.0 / 365.0);
-			TierOdds[k] = 3.0 * T * T / Scale / PacePeople;
+			TierOdds[k] = 3.0 * T * T / Scale / std::max(PaceRef, static_cast<double>(Able[static_cast<size_t>(k)]));
 		}
 		// Planting needs a warm, steady climate: in an ice age, seasons swing too hard to bet on a crop.
 		constexpr int kPlanting = 25;

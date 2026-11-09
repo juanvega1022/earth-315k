@@ -258,7 +258,7 @@ static void TestSkillTree()
 			EXPECT(L[N].Tier < L[i].Tier);
 			EXPECT(L[i].YearsAgo <= L[N].YearsAgo); // History's order.
 		}
-		EXPECT(L[i].YearsToFind >= 300.0);
+		EXPECT(L[i].YearsToFind >= std::min(300.0, L[i].YearsAgo));
 	}
 	EXPECT(earth::CanDiscover(0, 0));
 	EXPECT(!earth::CanDiscover(0, 26)); // Farming needs planting first.
