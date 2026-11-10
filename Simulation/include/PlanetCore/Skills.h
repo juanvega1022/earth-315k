@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <vector>
@@ -51,7 +52,41 @@ struct Skill
 	double YearsToFind = 300.0;
 };
 
-using SkillSet = uint64_t; // One bit per skill.
+inline constexpr int kMaxSkills = 128;
+
+// One bit per skill, room for 128. Saves before version 12 held only the first 64.
+struct SkillSet
+{
+	uint64_t Lo = 0, Hi = 0;
+
+	constexpr SkillSet() = default;
+	constexpr SkillSet(uint64_t Bits) : Lo(Bits) {}
+	constexpr SkillSet(uint64_t L, uint64_t H) : Lo(L), Hi(H) {}
+
+	constexpr bool Test(int K) const { return K < 64 ? (Lo >> K) & 1u : K < 128 && ((Hi >> (K - 64)) & 1u); }
+	int Count() const { return __builtin_popcountll(Lo) + __builtin_popcountll(Hi); }
+	explicit constexpr operator bool() const { return Lo || Hi; }
+
+	friend constexpr SkillSet operator|(SkillSet A, SkillSet B) { return {A.Lo | B.Lo, A.Hi | B.Hi}; }
+	friend constexpr SkillSet operator&(SkillSet A, SkillSet B) { return {A.Lo & B.Lo, A.Hi & B.Hi}; }
+	friend constexpr SkillSet operator~(SkillSet A) { return {~A.Lo, ~A.Hi}; }
+	friend constexpr bool operator==(SkillSet A, SkillSet B) { return A.Lo == B.Lo && A.Hi == B.Hi; }
+	friend constexpr bool operator!=(SkillSet A, SkillSet B) { return !(A == B); }
+	// Only for SkillSet(1) << K: one skill's bit.
+	friend constexpr SkillSet operator<<(SkillSet A, int K)
+	{
+		return K == 0 ? A : K < 64 ? SkillSet{A.Lo << K, (A.Hi << K) | (A.Lo >> (64 - K))} : SkillSet{0, A.Lo << (K - 64)};
+	}
+	SkillSet& operator|=(SkillSet B) { return *this = *this | B; }
+	SkillSet& operator&=(SkillSet B) { return *this = *this & B; }
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Lo);
+		if (Ar.Version >= 12) Ar.Io(Hi);
+	}
+};
 
 inline const std::vector<Skill>& AllSkills()
 {
@@ -131,6 +166,23 @@ inline const std::vector<Skill>& AllSkills()
 			{"radio", {56}, E({{Teaching, 1.2f}}), 1, 120},                                        // 61
 			{"computers", {55, 39, 61}, E({{Teaching, 1.5f}}), 1, 80},                             // 62
 			{"the internet", {62}, E({{Teaching, 1.5f}}), 1, 50},                                  // 63
+			// The space and information age.
+			{"nuclear power", {55, 52}, E({{Forage, 1.1f}, {Land, 1.1f}}), 1, 72},                 // 64
+			{"rockets", {57, 48}, E({{Travel, 1.1f}}), 1, 100},                                    // 65
+			{"satellites", {65, 61}, E({{Teaching, 1.1f}}), 1, 69},                                // 66
+			{"space flight", {66}, E({{Travel, 1.1f}}), 1, 65},                                    // 67
+			{"genetics", {60, 49}, E({{Children, 0.85f}}), 1, 73},                                 // 68
+			{"robots", {62, 52}, E({{Forage, 1.2f}, {Carry, 1.2f}}), 1, 65},                       // 69
+			{"solar power", {55, 49}, E({{Land, 1.1f}}), 1, 72},                                   // 70
+			{"landing on the moon", {67, 62}, E({{Teaching, 1.1f}}), 1, 57},                       // 71
+			{"gene editing", {68, 62}, E({{Children, 0.7f}}), 1, 14},                              // 72
+			{"artificial intelligence", {62, 63, 49}, E({{Teaching, 1.5f}, {Forage, 1.1f}}), 1, 12}, // 73
+			// Beyond today: our own guesses at what may come (negative: years from now).
+			{"fusion power", {64, 62}, E({{Land, 1.3f}, {Forage, 1.2f}}), 1, -30},                 // 74
+			{"settling other worlds", {71, 70}, E({{Travel, 1.2f}, {Land, 1.1f}}), 1, -40},        // 75
+			{"thinking machines", {73}, E({{Teaching, 2.0f}}), 1, -25},                            // 76
+			{"simulated worlds", {76, 62}, E({{Teaching, 1.2f}}), 1, -60},                         // 77
+			{"starships", {75, 74}, E({{Travel, 1.5f}}), 1, -300},                                 // 78
 		};
 		for (Skill& S : L)
 		{
@@ -144,7 +196,7 @@ inline const std::vector<Skill>& AllSkills()
 			// from the end of the last ice age, not from when seeds were first ground.
 			if (S.Name[0] == 'p' && S.Name[1] == 'l') Since = 13000.0;
 			// Recent steps came within decades of each other, so the shortest wait is shorter for them.
-			const double Shortest = S.YearsAgo < S.YearsToFind ? S.YearsAgo : S.YearsToFind;
+			const double Shortest = std::clamp(S.YearsAgo, 10.0, S.YearsToFind);
 			S.YearsToFind = Since - S.YearsAgo > Shortest ? Since - S.YearsAgo : Shortest;
 		}
 		return L;
@@ -152,7 +204,7 @@ inline const std::vector<Skill>& AllSkills()
 	return List;
 }
 
-inline bool Knows(SkillSet Set, int Skill) { return (Set >> Skill) & 1u; }
+inline bool Knows(SkillSet Set, int Skill) { return Set.Test(Skill); }
 
 inline bool CanDiscover(SkillSet Set, int Index)
 {
