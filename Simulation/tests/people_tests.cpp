@@ -249,7 +249,11 @@ static void TestLandLimit()
 static void TestSkillTree()
 {
 	const std::vector<earth::Skill>& L = earth::AllSkills();
-	EXPECT(L.size() <= 64);
+	EXPECT(L.size() <= static_cast<size_t>(earth::kMaxSkills));
+	const earth::SkillSet Far = earth::SkillSet(1) << 70;
+	EXPECT(Far.Test(70) && !Far.Test(6) && Far.Count() == 1);
+	EXPECT((earth::SkillSet(1) << 63).Test(63) && ((earth::SkillSet(1) << 5) | Far).Count() == 2);
+	EXPECT(earth::CanDiscover(~earth::SkillSet(0) & ~(earth::SkillSet(1) << 78), 78));
 	for (size_t i = 0; i < L.size(); ++i)
 	{
 		for (int N : L[i].Needs)

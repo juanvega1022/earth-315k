@@ -511,7 +511,7 @@ public:
 	const std::array<long long, 5>& DeathCauses() const { return Causes; }
 	long long HuntsWon() const { return Kills; }
 	// Skills someone alive knows, and how many people know each.
-	int SkillsKnown() const { return static_cast<int>(std::bitset<64>(KnownNow).count()); }
+	int SkillsKnown() const { return KnownNow.Count(); }
 	SkillSet EverKnownSkills() const { return EverKnown; }
 	// Groups of camps that can understand each other, counted greedily.
 	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
@@ -2817,7 +2817,7 @@ private:
 		// Only people able to make the find count, so a skill isn't held back by the many who can't.
 		constexpr double kPacePeople = 3000.0;
 		const double PaceRef = kPacePeople * Settings.PeoplePerKm2 / 0.0003;
-		std::array<int, 64> Able{};
+		std::array<int, kMaxSkills> Able{};
 		for (const Npc& P : Npcs)
 			if (P.AgeYears() >= 5.0)
 				for (int k = 0; k < Count; ++k) Able[static_cast<size_t>(k)] += CanDiscover(P.Skills, k);
@@ -2826,7 +2826,7 @@ private:
 		const double Now = Eco->Years();
 		if (Findable.empty()) Findable = FindableFromFirsts(); // A new run, or a save from before they were kept.
 		Findable.resize(static_cast<size_t>(Count), -1.0);
-		std::array<double, 64> TierOdds{};
+		std::array<double, kMaxSkills> TierOdds{};
 		for (int k = 0; k < Count; ++k)
 		{
 			const auto& Needs = List[k].Needs;
@@ -2859,7 +2859,7 @@ private:
 			const Camp& C = Camps[CampSlot(P.Camp)];
 			// Something new: rarer the deeper it is, likelier for the curious and the clever.
 			double Total = 0.0;
-			std::array<double, 64> Odds{};
+			std::array<double, kMaxSkills> Odds{};
 			for (int k = 0; k < Count; ++k)
 			{
 				if (CanDiscover(P.Skills, k))
@@ -3929,7 +3929,7 @@ private:
 			static const char* How[5] = {"of old age or illness", "killed by a predator", "of hunger", "of thirst", "of an injury"};
 			char Line[160];
 			std::snprintf(Line, sizeof(Line), "Died in year %.0f, aged %.0f, %s, near %.0f, %.0f, knowing %d skills", Eco->Years(), P.AgeYears(), How[Cause],
-				P.Lat, P.Lon, static_cast<int>(std::bitset<64>(P.Skills).count()));
+				P.Lat, P.Lon, P.Skills.Count());
 			Story->second.Dead = true;
 			Story->second.Death = Line;
 		}
