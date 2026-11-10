@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
@@ -64,7 +65,7 @@ struct SkillSet
 	constexpr SkillSet(uint64_t L, uint64_t H) : Lo(L), Hi(H) {}
 
 	constexpr bool Test(int K) const { return K < 64 ? (Lo >> K) & 1u : K < 128 && ((Hi >> (K - 64)) & 1u); }
-	int Count() const { return __builtin_popcountll(Lo) + __builtin_popcountll(Hi); }
+	int Count() const { return static_cast<int>(std::bitset<64>(Lo).count() + std::bitset<64>(Hi).count()); }
 	explicit constexpr operator bool() const { return Lo || Hi; }
 
 	friend constexpr SkillSet operator|(SkillSet A, SkillSet B) { return {A.Lo | B.Lo, A.Hi | B.Hi}; }
