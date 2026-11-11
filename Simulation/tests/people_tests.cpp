@@ -390,10 +390,15 @@ static void TestSaveAndResume()
 		FolkA.Step(30);
 	}
 	const std::string Path = "people_tests_save.bin";
-	EXPECT(earth::SaveWorld(Path, EcoA, FolkA));
+	earth::space::Colonies SpaceA(7);
+	SpaceA.Advance(0.0, 0.0, {});
+	SpaceA.Advance(5000.0, 1.0e6, ~earth::SkillSet());
+	EXPECT(earth::SaveWorld(Path, EcoA, FolkA, &SpaceA));
 	earth::Ecosystem EcoB(&Grid, earth::DefaultSpecies(), 99);
 	earth::People FolkB(&EcoB, 99, Settings);
-	EXPECT(earth::LoadWorld(Path, EcoB, FolkB));
+	earth::space::Colonies SpaceB(99);
+	EXPECT(earth::LoadWorld(Path, EcoB, FolkB, &SpaceB));
+	EXPECT(SpaceB.Time() == 5000.0 && SpaceB.Count() == SpaceA.Count() && SpaceB.Events().size() == SpaceA.Events().size());
 	std::remove(Path.c_str());
 	for (int i = 0; i < 12; ++i)
 	{
@@ -407,6 +412,31 @@ static void TestSaveAndResume()
 	EXPECT(FolkA.InventionsText() == FolkB.InventionsText());
 	EXPECT(FolkA.LanguagesText() == FolkB.LanguagesText());
 	EXPECT(!earth::LoadWorld("no_such_save.bin", EcoB, FolkB));
+}
+
+// People who know how settle the planets, which last until the Sun swells, and colonies at other
+// stars carry on after Earth and the inner worlds are gone. Without the skills nobody leaves.
+static void TestColonies()
+{
+	namespace space = earth::space;
+	space::Colonies None(3);
+	None.Advance(0.0, 0.0, {});
+	for (double T = 2000.0; T <= 1.0e6; T += 2000.0) None.Advance(T, 1.0e6, earth::SkillSet());
+	EXPECT(None.Count() == 0 && None.Events().empty());
+
+	space::Colonies C(3);
+	C.Advance(0.0, 0.0, {});
+	for (double T = 2000.0; T <= 2.0e6; T += 2000.0) C.Advance(T, 1.0e6, ~earth::SkillSet());
+	EXPECT(C.Count() > 0 && C.Alive() > 1.0e5);
+	bool Mars = false, Star = false;
+	for (const auto& Col : C.All()) Mars = Mars || Col.Where == space::kMars, Star = Star || Col.Where == space::kStar;
+	EXPECT(Mars && Star);
+	// Past the red giant only other stars are livable; Earth sends nobody.
+	for (double T = 4.9e9; T <= 6.0e9; T += 1.0e5) C.Advance(T, 0.0, {});
+	for (const auto& Col : C.All())
+		if (Col.People > 0.0) EXPECT(Col.Where == space::kStar || Col.Where == space::kHabitats);
+	EXPECT(space::Livable(space::kOuterMoons, 5.2e9) > space::Livable(space::kOuterMoons, 1.0e9));
+	EXPECT(space::Livable(space::kMars, 6.0e9) == 0.0 && space::Livable(space::kStar, 1.0e11) > 0.0);
 }
 
 // Bands that can talk come up with beliefs, which spread, and a belief that forbids a material
@@ -558,6 +588,7 @@ static void TestHerdsAndCrops()
 
 int main()
 {
+	TestColonies();
 	TestHerdsAndCrops();
 	TestStores();
 	TestTrust();

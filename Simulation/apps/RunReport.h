@@ -198,6 +198,7 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k)
 			if (At(earth::OtherKinds()[k].Plural) >= 1.0) Box(Thousands(At(earth::OtherKinds()[k].Plural)), earth::OtherKinds()[k].Plural);
 		Box(Thousands(At("bands")), "bands");
+		if (At("offworld_people") >= 1.0) Box(Thousands(At("offworld_people")), "people beyond Earth");
 		Box(Thousands(At("languages")), "languages");
 		Box(Thousands(At("skills_known")), "skills known");
 		Box(Thousands(At("inventions")), "inventions known");
