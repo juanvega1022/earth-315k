@@ -513,6 +513,7 @@ public:
 	// Skills someone alive knows, and how many people know each.
 	int SkillsKnown() const { return KnownNow.Count(); }
 	SkillSet EverKnownSkills() const { return EverKnown; }
+	SkillSet KnownSkills() const { return KnownNow; }
 	// Groups of camps that can understand each other, counted greedily.
 	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
 

@@ -178,18 +178,21 @@ int main(int Argc, char** Argv)
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), Seed, Settings);
 	const auto& Species = Eco.GetSpecies();
 	earth::People Folk(&Eco, Seed, PeopleCfg);
+	earth::space::Colonies Space(Seed);
 	size_t FirstsShown = 0;
 	size_t EventsShown = 0;
+	size_t SpaceShown = 0;
 	int FirstYear = 0;
 	if (!ResumePath.empty())
 	{
-		if (!earth::LoadWorld(ResumePath, Eco, Folk))
+		if (!earth::LoadWorld(ResumePath, Eco, Folk, &Space))
 		{
 			std::printf("Could not read the save %s. It may be missing, damaged or from a newer version.\n", ResumePath.c_str());
 			return 1;
 		}
 		FirstYear = static_cast<int>(std::lround(Eco.Years()));
 		EventsShown = Eco.Events().size();
+		SpaceShown = Space.Events().size();
 		FirstsShown = Folk.Firsts().size() - 1;
 		std::printf("Carrying on from %s at year %d (%d years ago), with %d people.\n", ResumePath.c_str(), FirstYear, static_cast<int>(Eco.YearsAgo()), Folk.Alive());
 	}
@@ -215,7 +218,9 @@ int main(int Argc, char** Argv)
 		if (!ReportPath.empty() && !CsvPath.empty())
 		{
 			Csv.flush();
-			WriteReport(ReportPath, CsvPath, Eco.YearsAgo() + Eco.Years(), Y, Folk.Firsts(), Label, Eco.Events());
+			std::vector<earth::EcoEvent> World = Eco.Events();
+			for (const auto& E : Space.Events()) World.push_back({E.When + Eco.YearsAgo() + Eco.Years(), E.Text});
+			WriteReport(ReportPath, CsvPath, Eco.YearsAgo() + Eco.Years(), Y, Folk.Firsts(), Label, World);
 		}
 	};
 	if (!SavePath.empty())
@@ -230,7 +235,7 @@ int main(int Argc, char** Argv)
 	auto Save = [&](int Y)
 	{
 		if (SavePath.empty()) return;
-		if (earth::SaveWorld(SavePath, Eco, Folk))
+		if (earth::SaveWorld(SavePath, Eco, Folk, &Space))
 		{
 			std::printf("  Saved the world at year %d to %s\n", Y, SavePath.c_str());
 		}
@@ -238,6 +243,12 @@ int main(int Argc, char** Argv)
 		{
 			std::printf("  Could not save the world to %s; the last good save is kept\n", SavePath.c_str());
 		}
+	};
+
+	auto ShowSpace = [&]
+	{
+		for (; SpaceShown < Space.Events().size(); ++SpaceShown)
+			std::printf("  %s: %s\n", When(-Space.Events()[SpaceShown].When).c_str(), Space.Events()[SpaceShown].Text.c_str());
 	};
 
 	const bool Appending = FirstYear > 0 && FileExists(CsvPath);
@@ -252,7 +263,7 @@ int main(int Argc, char** Argv)
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << ",inventions,beliefs,religions,kindness,curiosity";
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
-		Csv << '\n';
+		Csv << ",offworld_people\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -273,6 +284,7 @@ int main(int Argc, char** Argv)
 			}
 			D += Days;
 		}
+		if (Eco.YearsAgo() < 0.0) Space.Advance(-Eco.YearsAgo(), Folk.AliveOfKind(0), Folk.KnownSkills());
 		if (Csv)
 		{
 			Csv << Y << ',' << Eco.AverageLandCover() << ',' << Folk.Alive() << ',' << Folk.BandCount() << ',' << Folk.SkillsKnown() << ','
@@ -281,7 +293,7 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
 				<< Folk.AverageCuriosity();
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
-			Csv << '\n';
+			Csv << ',' << static_cast<long long>(Space.Alive()) << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
@@ -293,6 +305,7 @@ int main(int Argc, char** Argv)
 				When(Eco.YearsAgo()).c_str(), Eco.TotalAnimals(), Eco.Groups().size(), Eco.SpeciesAliveCount(), Eco.AverageLandCover() * 100.0,
 				Folk.Alive(), Folk.BandCount());
 			std::printf("            Sea level %+.0f m from today, ice age strength %.0f%%\n", Eco.SeaLevelChange(), Eco.IceCover() * 100.0);
+			if (Space.Count() > 0) std::printf("            Beyond Earth: %.0f people in %d colonies\n", Space.Alive(), Space.Count());
 			if (WithPeople)
 			{
 				std::printf("            %d skills and %d inventions known, brains of %.1f hidden neurons on average (biggest %d), %d languages, %d beliefs (%d religions)\n",
@@ -339,7 +352,7 @@ int main(int Argc, char** Argv)
 			for (const std::string* P : {&ReportPath, &LanguagesPath, &BeliefsPath, &InventionsPath, &StoriesPath, &BrainPath, &CsvPath, &AtlasPath})
 				if (!P->empty()) CopyFile(*P, TodayName(*P));
 			if (!AtlasPath.empty()) CopyFile(AtlasJs, TodayName(AtlasPath) + ".js");
-			if (!SavePath.empty()) earth::SaveWorld(TodayName(SavePath), Eco, Folk);
+			if (!SavePath.empty()) earth::SaveWorld(TodayName(SavePath), Eco, Folk, &Space);
 			if (!FirstOutput.empty()) WriteHistory(FolderOf(FirstOutput) + "history_today.txt", Eco, Folk);
 			std::printf("  Today: the world has reached the present. A copy of every output is kept, named ..._today\n");
 			if (TotalYears > Y) std::printf("  The run carries on into the future\n");
@@ -352,6 +365,7 @@ int main(int Argc, char** Argv)
 		{
 			std::printf("  Year %.1f: %s\n", Folk.Firsts()[FirstsShown].Year, Folk.Firsts()[FirstsShown].Text.c_str());
 		}
+		ShowSpace();
 		const bool Stopping = StopAsked || (!SavePath.empty() && FileExists(StopFile));
 		if (Y > FirstYear && (Lived % SaveEvery == 0 || Y == TotalYears || Stopping))
 		{
@@ -359,7 +373,16 @@ int main(int Argc, char** Argv)
 		}
 		// From today on, people who die out stay gone, and a world with nothing alive ends.
 		if (Eco.YearsAgo() < 0.0) Folk.StopNewBands();
-		const bool AllDead = Eco.YearsAgo() < 0.0 && Eco.SpeciesAliveCount() == 0 && Folk.Alive() == 0;
+		const bool AllDead = Eco.YearsAgo() < 0.0 && Eco.SpeciesAliveCount() == 0 && Folk.Alive() == 0 && Space.Count() == 0;
+		if (Y == PlanetDies && Y == TotalYears && Space.Count() > 0 && Years > PlanetDies)
+		{
+			std::printf("Year %d (%s): the Sun has grown so bright that the oceans boil away. Life goes on beyond Earth: %.0f people in %d colonies.\n", Y,
+				When(Eco.YearsAgo()).c_str(), Space.Alive(), Space.Count());
+			Save(Y);
+			Report(Y);
+			AppendRunLog(RunLog, "Earth died at year " + std::to_string(Y) + "; the run goes on in the colonies beyond Earth");
+			break;
+		}
 		if (AllDead || (Y == PlanetDies && Y == TotalYears))
 		{
 			std::printf(AllDead ? "Year %d (%s): the last species has died out. Nothing is left alive on Earth.\n"
@@ -390,6 +413,43 @@ int main(int Argc, char** Argv)
 			Eco.SkipYears(Skip);
 			Y += Skip;
 		}
+	}
+
+	// After Earth: only the colonies are left, so time moves in 100,000-year steps until the last one dies
+	// or the red dwarfs they live by start to fade.
+	if (Years > PlanetDies && Space.Count() > 0 && Eco.YearsAgo() <= 1.0 - earth::space::kEarthDies)
+	{
+		const double Start0 = Eco.YearsAgo() + Eco.Years();
+		const double EndT = std::min(Years - Start0, earth::space::kLastStars);
+		double T = std::max(Space.Time(), -Eco.YearsAgo());
+		for (long long Step = 1; T < EndT; ++Step)
+		{
+			T = std::min(EndT, T + 1.0e5);
+			Space.Advance(T, 0.0, {});
+			ShowSpace();
+			const bool Over = Space.Count() == 0;
+			if (Step % 1000 == 0 || Over || T >= EndT)
+				std::printf("Year %.0f (%s): Earth is lifeless; %.0f people in %d colonies beyond Earth\n", T + Start0, When(-T).c_str(), Space.Alive(),
+					Space.Count());
+			const bool Stopping = StopAsked || (!SavePath.empty() && FileExists(StopFile));
+			if (Step % 10000 == 0 || Over || T >= EndT || Stopping) Save(TotalYears);
+			if (Over)
+			{
+				// The run's end, worded so a watcher looking for "0 species" and "0 people in" sees it.
+				std::printf("Year %.0f (%s): 0 species, 0 people in 0 colonies. The last colony beyond Earth has died out.\n", T + Start0, When(-T).c_str());
+				AppendRunLog(RunLog, "Ended      at " + When(-T) + ": the last colony beyond Earth died out");
+				break;
+			}
+			std::fflush(stdout);
+			if (Stopping)
+			{
+				std::remove(StopFile.c_str());
+				std::printf("Stopped at %s. Carry on later with --resume %s\n", When(-T).c_str(), SavePath.c_str());
+				AppendRunLog(RunLog, "Stopped    at " + When(-T) + ", saved to " + SavePath);
+				return 0;
+			}
+		}
+		Report(TotalYears);
 	}
 
 	if (WithPeople)
