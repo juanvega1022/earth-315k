@@ -374,6 +374,41 @@ static void TestInventionsHappen()
 	EXPECT(Folk.LanguagesText().find(" = limestone") != std::string::npos);
 }
 
+// A mind's ideas go through the world's rules: something made from what the band has met can work,
+// a material it never met is refused, and a goal it isn't ready for is refused too.
+static void TestThinkingMinds()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 5);
+	earth::People Folk(&Eco, 5, earth::PeopleSettings{});
+	for (int i = 0; i < 4; ++i)
+	{
+		Eco.Step(30);
+		Folk.Step(30);
+	}
+	std::string Seen;
+	const earth::Thinker Cord = [&](const std::string& Prompt)
+	{
+		Seen = Prompt;
+		return std::string("{\"thought\": \"Grass could hold our things together.\", \"way\": 6, \"material\": \"Grass\", \"material2\": \"\", \"work_toward\": \"\"}");
+	};
+	const std::string Log = Folk.Think(Cord, 1);
+	EXPECT(Folk.Thoughts().Asked == 1 && Folk.Thoughts().Answered == 1);
+	EXPECT(Seen.find("twisted X cord") != std::string::npos && Seen.find("years ago") == std::string::npos);
+	EXPECT(Log.find("cord") != std::string::npos);
+	const earth::Thinker Leak = [](const std::string&)
+	{
+		return std::string("{\"thought\": \"x\", \"way\": \"1\", \"material\": \"steel\", \"work_toward\": \"the internet\"}");
+	};
+	const int Before = Folk.Thoughts().Unknown; // Grass may not have been met yet either.
+	Folk.Think(Leak, 1);
+	EXPECT(Folk.Thoughts().Unknown == Before + 2);
+	const earth::Thinker Silent = [](const std::string&) { return std::string(); };
+	Folk.Think(Silent, 1);
+	EXPECT(Folk.Thoughts().Asked == 3 && Folk.Thoughts().Answered == 2);
+	EXPECT(earth::minds::JsonString("{\"a\": \"x\\\"y\", \"b\": 12}", "a") == "x\"y" && earth::minds::JsonString("{\"b\": 12}", "b") == "12");
+}
+
 // A world saved and loaded carries on exactly as if it had never stopped.
 static void TestSaveAndResume()
 {
@@ -589,6 +624,7 @@ static void TestHerdsAndCrops()
 int main()
 {
 	TestColonies();
+	TestThinkingMinds();
 	TestHerdsAndCrops();
 	TestStores();
 	TestTrust();

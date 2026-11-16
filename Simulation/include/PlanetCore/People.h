@@ -18,6 +18,7 @@
 #include "Beliefs.h"
 #include "Crops.h"
 #include "Inventions.h"
+#include "Minds.h"
 #include "Parallel.h"
 #include "Random.h"
 #include "Skills.h"
@@ -1161,7 +1162,194 @@ public:
 		CheckFirsts();
 	}
 
+	// ---- Thinking minds (see Minds.h) ----------------------------------------------------------
+
+	struct ThoughtCounts
+	{
+		int Asked = 0, Answered = 0, Made = 0, Found = 0, Dreams = 0, Failed = 0, Unknown = 0;
+	};
+	const ThoughtCounts& Thoughts() const { return MindCounts; }
+
+	// The most inventive adult in each of the Budget biggest bands thinks once with a real mind.
+	// The mind sees only what its band knows, in plain words, with no names or dates from our
+	// history; whatever it proposes is checked against the world's own rules: a material it has
+	// never met is refused (and logged, as a possible leak from the model's own knowledge), a way of
+	// working that needs a skill the band lacks is kept as a dream ahead of its time, and the rest
+	// works or doesn't by the materials' properties. Returns one log line per thought.
+	std::string Think(const Thinker& Mind, int Budget)
+	{
+		std::string Log;
+		if (Budget <= 0 || Camps.empty()) return Log;
+		std::vector<size_t> Order(Camps.size());
+		for (size_t c = 0; c < Order.size(); ++c) Order[c] = c;
+		const size_t Top = std::min(Order.size(), static_cast<size_t>(Budget));
+		std::partial_sort(Order.begin(), Order.begin() + static_cast<std::ptrdiff_t>(Top), Order.end(),
+			[&](size_t A, size_t B) { return Camps[A].Members.size() > Camps[B].Members.size(); });
+		const auto& Skills = AllSkills();
+		const auto& Ms = AllMaterials();
+		const auto& Ws = AllWorkings();
+		auto Lower = [](std::string S)
+		{
+			for (char& Ch : S) Ch = static_cast<char>(std::tolower(static_cast<unsigned char>(Ch)));
+			while (!S.empty() && std::isspace(static_cast<unsigned char>(S.back()))) S.pop_back();
+			while (!S.empty() && std::isspace(static_cast<unsigned char>(S.front()))) S.erase(S.begin());
+			return S;
+		};
+		for (size_t t = 0; t < Top; ++t)
+		{
+			Camp& C = Camps[Order[t]];
+			int Who = -1;
+			double Best = -1.0;
+			for (int i : C.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				const double K = Smarts(P) * Smarts(P) * P.Genes->Curiosity;
+				if (P.AgeYears() >= 15.0 && K > Best) Best = K, Who = i;
+			}
+			if (Who < 0) continue;
+			Npc& P = Npcs[static_cast<size_t>(Who)];
+			std::string Known, Toward, Met, Made, Ways;
+			auto Add = [](std::string& To, const std::string& What) { To += (To.empty() ? "" : ", ") + What; };
+			for (size_t k = 0; k < Skills.size(); ++k)
+			{
+				if (Knows(C.Known, static_cast<int>(k))) Add(Known, Skills[k].Name);
+				else if (CanDiscover(C.Known, static_cast<int>(k))) Add(Toward, Skills[k].Name);
+			}
+			for (size_t m = 0; m < Ms.size(); ++m)
+				if ((C.Met >> m) & 1u) Add(Met, Ms[m].Name);
+			for (uint32_t Id : C.Inventions) Add(Made, InventionGloss(Id));
+			for (size_t w = 0; w < Ws.size(); ++w)
+			{
+				std::string G = Ws[w].Gloss;
+				for (const char* Key : {"{A}", "{B}"})
+				{
+					const size_t At = G.find(Key);
+					if (At != std::string::npos) G.replace(At, 3, Key[1] == 'A' ? "X" : "Y");
+				}
+				Ways += "\n" + std::to_string(w + 1) + ". " + G;
+			}
+			const double Lat = std::abs(C.Lat);
+			const char* Where = Lat < 15.0 ? "in hot lands near the middle of the world" : Lat < 35.0 ? "in warm lands" : Lat < 55.0 ? "in lands with cold winters" : "in cold lands with long, dark winters";
+			const std::string Name = PersonName(P.Name);
+			const std::string Prompt = "You are " + Name + ", aged " + std::to_string(static_cast<int>(P.AgeYears())) + ", in a band of " +
+				std::to_string(C.Members.size()) + " people living " + Where + ". " +
+				(C.DeathsLately > 2 ? std::to_string(C.DeathsLately) + " of your people have died lately. " : "") +
+				"Your band has " + std::to_string(static_cast<int>(C.Store)) + " kg of food put by.\n" +
+				"Your band knows how to: " + (Known.empty() ? "nothing beyond what everyone is born knowing" : Known) + ".\n" +
+				"Materials you have come across: " + (Met.empty() ? "none yet" : Met) + ".\n" +
+				"Things your band has made: " + (Made.empty() ? "nothing yet" : Made) + ".\n" +
+				"Ways anyone could try to work materials (X and Y stand for materials):" + Ways + "\n" +
+				"Things your band could work toward learning next: " + (Toward.empty() ? "nothing" : Toward) + ".\n" +
+				"Think as yourself about your band's life and what would help it most. You know only what is written here; "
+				"do not use anything else you know. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
+				"your own voice), \"way\" (the number of one way of working to try), \"material\" (a material you have come across, "
+				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\").";
+			++MindCounts.Asked;
+			const std::string Answer = Mind(Prompt);
+			if (Answer.empty()) continue;
+			++MindCounts.Answered;
+			std::string Thought = minds::JsonString(Answer, "thought");
+			if (Thought.size() > 300) Thought.resize(300);
+			if (MindCounts.Answered == 1 && !Thought.empty())
+				AddEvent(Name + " has the first real thought anyone in the world has had: \"" + Thought + "\"");
+			std::string Line = "Year " + std::to_string(static_cast<long long>(Eco->Years())) + " | " + Name + " (band of " +
+				std::to_string(C.Members.size()) + ") thinks: \"" + Thought + "\"";
+
+			// Something to make: a way of working and the materials for it.
+			auto MaterialNamed = [&](const std::string& Text) -> int
+			{
+				const std::string L = Lower(Text);
+				if (L.empty()) return -1;
+				for (size_t m = 0; m < Ms.size(); ++m)
+					if (L == Ms[m].Name) return static_cast<int>(m);
+				return -2; // Named, but no such material.
+			};
+			const int W = std::atoi(minds::JsonString(Answer, "way").c_str()) - 1;
+			const int A = MaterialNamed(minds::JsonString(Answer, "material"));
+			const int B = MaterialNamed(minds::JsonString(Answer, "material2"));
+			const bool NeedsB = W >= 0 && W < static_cast<int>(Ws.size()) && Ws[static_cast<size_t>(W)].NeedB >= 0;
+			auto Unmet = [&](int M) { return M == -2 || (M >= 0 && !((C.Met >> M) & 1u)); };
+			if (Unmet(A) || (NeedsB && Unmet(B)))
+			{
+				++MindCounts.Unknown;
+				Line += " | REFUSED: names a material the band has never met (" + minds::JsonString(Answer, "material") + ", " +
+					minds::JsonString(Answer, "material2") + ")";
+			}
+			else if (W < 0 || W >= static_cast<int>(Ws.size()) || A < 0)
+			{
+				Line += " | tries nothing";
+			}
+			else
+			{
+				const Working& K = Ws[static_cast<size_t>(W)];
+				const uint32_t Id = InventionId(W, A, NeedsB ? B : -1);
+				const std::string Gloss = InventionGloss(Id);
+				if (K.NeedsSkill >= 0 && !Knows(C.Known, K.NeedsSkill))
+				{
+					++MindCounts.Dreams;
+					Line += " | dreams of " + Gloss + ", which needs " + Skills[static_cast<size_t>(K.NeedsSkill)].Name + " first";
+					Remember(P, "dreamed of " + Gloss + " long before anyone could make it");
+				}
+				else if (InventionStrength(W, A, NeedsB ? B : -1, C.Known) <= 0.0f)
+				{
+					++MindCounts.Failed;
+					Line += " | tries " + Gloss + ": it doesn't work";
+				}
+				else if (HasInvention(C, Id))
+				{
+					Line += " | " + Gloss + ": the band already makes it";
+				}
+				else if (const BeliefRecord* No = Forbids(C, Id))
+				{
+					Shun(C, Id, P, *No);
+					Line += " | " + Gloss + ": forbidden by the band's beliefs";
+				}
+				else
+				{
+					++MindCounts.Made;
+					MakeFirst(C, Id, P);
+					Remember(P, "thought it through and made " + Gloss + (Thought.empty() ? "" : ": \"" + Thought + "\""));
+					Line += " | makes " + Gloss;
+				}
+			}
+
+			// Something to work toward: a skill the band is ready for. A mind set on it finds it far
+			// sooner than chance would, the quicker the less it took real people.
+			const std::string Aim = Lower(minds::JsonString(Answer, "work_toward"));
+			int Goal = -1;
+			for (size_t k = 0; k < Skills.size() && !Aim.empty(); ++k)
+				if (Aim == Lower(Skills[k].Name)) Goal = static_cast<int>(k);
+			constexpr int kPlanting = 25;
+			if (Aim.empty())
+			{
+			}
+			else if (Goal < 0 || !CanDiscover(C.Known, Goal))
+			{
+				++MindCounts.Unknown;
+				Line += " | REFUSED goal \"" + Aim + "\": not something the band is ready for";
+			}
+			else if (Goal == kPlanting && Eco->IceCover() > 0.15)
+			{
+				Line += " | works toward planting, but the seasons swing too hard in this ice age";
+			}
+			else if (Dice.Chance(std::min(0.25, 50.0 / std::max(50.0, static_cast<double>(Skills[static_cast<size_t>(Goal)].YearsToFind)))))
+			{
+				++MindCounts.Found;
+				Discover(P, Goal);
+				Remember(P, "set their mind on " + Aim + " and worked it out");
+				Line += " | works toward " + Aim + " and FINDS it";
+			}
+			else
+			{
+				Line += " | works toward " + Aim + ", not yet";
+			}
+			Log += Line + "\n";
+		}
+		return Log;
+	}
+
 private:
+	ThoughtCounts MindCounts;
 	Ecosystem* Eco;
 	Rng Dice;
 	uint64_t BaseSeed = 0;
