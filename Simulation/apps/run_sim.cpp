@@ -108,6 +108,8 @@ int main(int Argc, char** Argv)
 	int SaveEvery = 1000;
 	bool WithPeople = true;
 	int FastDays = 1;
+	int Minds = 0;
+	std::string MindModel = "llama3.1:8b";
 	earth::PeopleSettings PeopleCfg;
 	earth::EcosystemSettings Settings;
 
@@ -136,9 +138,11 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--save") && HasValue) SavePath = Argv[++i];
 		else if (!std::strcmp(Argv[i], "--save-every") && HasValue) SaveEvery = std::max(1, std::atoi(Argv[++i]));
 		else if (!std::strcmp(Argv[i], "--resume") && HasValue) ResumePath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--minds") && HasValue) Minds = std::max(0, std::atoi(Argv[++i]));
+		else if (!std::strcmp(Argv[i], "--mind-model") && HasValue) MindModel = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans] [--minds N] [--mind-model name]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
@@ -148,6 +152,9 @@ int main(int Argc, char** Argv)
 			std::printf("  --report F      write an HTML report with charts and a scorecard against real history (needs --csv)\n");
 			std::printf("  --atlas F       keep a map of languages, beliefs and people over time in F (an HTML page) and F.js\n");
 			std::printf("  --other-humans  add Neanderthals, Denisovans and other kinds of human in their real homes (experimental)\n");
+			std::printf("  --minds N       each lived year, the most inventive person in the N biggest bands thinks with a real mind:\n");
+			std::printf("                  a local AI model served by Ollama (https://ollama.com), free and offline. Off by default\n");
+			std::printf("  --mind-model M  the Ollama model to think with (default llama3.1:8b); thoughts are kept in minds.txt\n");
 			std::printf("  A run can go past today into the future (say --years 1000000000). As it reaches today it keeps a copy\n");
 			std::printf("  of every output, named ..._today; after that it ends early if every species dies out\n");
 			std::printf("  To stop and save: press Ctrl+C, or create a file named F.stop next to the save\n");
@@ -245,6 +252,9 @@ int main(int Argc, char** Argv)
 		}
 	};
 
+	const std::string MindsLog = (FirstOutput.empty() ? std::string() : FolderOf(FirstOutput)) + "minds.txt";
+	const earth::Thinker Mind = earth::minds::OllamaThinker(MindModel, MindsLog + ".request.json");
+	if (Minds > 0) std::printf("Thinking minds: %d a year, with %s through Ollama; thoughts go to %s\n", Minds, MindModel.c_str(), MindsLog.c_str());
 	auto ShowSpace = [&]
 	{
 		for (; SpaceShown < Space.Events().size(); ++SpaceShown)
@@ -283,6 +293,17 @@ int main(int Argc, char** Argv)
 				Folk.Step(Days);
 			}
 			D += Days;
+		}
+		if (Minds > 0 && WithPeople && Folk.Alive() > 0)
+		{
+			const std::string Thought = Folk.Think(Mind, Minds);
+			if (!Thought.empty()) std::ofstream(MindsLog, std::ios::app) << Thought;
+			if (Folk.Thoughts().Asked >= 3 && Folk.Thoughts().Answered == 0)
+			{
+				std::printf("  No mind answered. Is Ollama running, with the model %s? (ollama pull %s) Thinking minds are off for the rest of this session.\n",
+					MindModel.c_str(), MindModel.c_str());
+				Minds = 0;
+			}
 		}
 		if (Eco.YearsAgo() < 0.0) Space.Advance(-Eco.YearsAgo(), Folk.AliveOfKind(0), Folk.KnownSkills());
 		if (Csv)
