@@ -89,7 +89,7 @@ inline Thinker OllamaThinker(const std::string& Model, const std::string& BodyPa
 		if (std::FILE* F = std::fopen(BodyPath.c_str(), "wb"))
 		{
 			const std::string Body = "{\"model\":\"" + JsonEscape(Model) + "\",\"prompt\":\"" + JsonEscape(Prompt) +
-				"\",\"format\":\"json\",\"stream\":false,\"options\":{\"temperature\":0.8}}";
+				"\",\"format\":\"json\",\"stream\":false,\"options\":{\"temperature\":1.0}}";
 			std::fwrite(Body.data(), 1, Body.size(), F);
 			std::fclose(F);
 		}
