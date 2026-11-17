@@ -403,9 +403,11 @@ static void TestThinkingMinds()
 	const int Before = Folk.Thoughts().Unknown; // Grass may not have been met yet either.
 	Folk.Think(Leak, 1);
 	EXPECT(Folk.Thoughts().Unknown == Before + 2);
+	const earth::Thinker Water = [](const std::string&) { return std::string("{\"thought\": \"x\", \"way\": 1, \"material\": \"Water\"}"); };
+	EXPECT(Folk.Think(Water, 1).find("REFUSED") == std::string::npos); // Everyone has met water.
 	const earth::Thinker Silent = [](const std::string&) { return std::string(); };
 	Folk.Think(Silent, 1);
-	EXPECT(Folk.Thoughts().Asked == 3 && Folk.Thoughts().Answered == 2);
+	EXPECT(Folk.Thoughts().Asked == 4 && Folk.Thoughts().Answered == 3);
 	EXPECT(earth::minds::JsonString("{\"a\": \"x\\\"y\", \"b\": 12}", "a") == "x\"y" && earth::minds::JsonString("{\"b\": 12}", "b") == "12");
 }
 

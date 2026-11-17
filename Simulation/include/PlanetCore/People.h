@@ -1290,6 +1290,11 @@ public:
 				if (L.empty()) return -1;
 				for (size_t m = 0; m < Ms.size(); ++m)
 					if (L == Ms[m].Name) return static_cast<int>(m);
+				// Everyone knows these, but they aren't materials the world lets anyone work.
+				static const char* Everyday[] = {"water", "snow", "ice", "fire", "air", "earth", "mud", "dirt", "sand", "soil", "rain",
+					"wind", "sun", "moon", "stars", "sky", "river", "sea", "grass", "leaves"};
+				for (const char* E : Everyday)
+					if (L == E) return -1;
 				return -2; // Named, but no such material.
 			};
 			const int W = std::atoi(minds::JsonString(Answer, "way").c_str()) - 1;
