@@ -623,8 +623,53 @@ static void TestHerdsAndCrops()
 	EXPECT(AtCamp);
 }
 
+// Farming bands close together draw into chiefdoms with rulers and capitals, every band's state is a
+// living one, minds can act for their state, and states survive a save.
+static void TestStates()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::EcosystemSettings EcoSettings;
+	EcoSettings.IceAges = false;
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
+	earth::PeopleSettings Settings;
+	Settings.DiscoveryPace = 1e12;
+	Settings.StartCount = 400; // Many bands at once, close together.
+	earth::People Folk(&Eco, 6, Settings);
+	for (int y = 0; y < 80 && !HasFirst(Folk, "The first chiefdom in the world"); ++y)
+		for (int d = 0; d < 13; ++d)
+		{
+			Eco.Step(28);
+			Folk.Step(28);
+		}
+	EXPECT(HasFirst(Folk, "The first chiefdom in the world"));
+	EXPECT(Folk.PolityCount() > 0);
+	for (const earth::Camp& C : Folk.AllCamps()) EXPECT(C.State == 0 || Folk.StateById(C.State) != nullptr);
+	EXPECT(Folk.StatesText().find("Ruler: ") != std::string::npos);
+	// The ruler of the biggest state thinks for it, and its law is kept.
+	const earth::Thinker Lawgiver = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"law\", \"law\": \"Share the harvest\"}" : "{\"thought\": \"x\"}");
+	};
+	Folk.Think(Lawgiver, static_cast<int>(Folk.AllCamps().size()));
+	EXPECT(Folk.StatesText().find("Law: Share the harvest") != std::string::npos);
+	const std::string Path = "states_test.bin";
+	EXPECT(earth::SaveWorld(Path, Eco, Folk));
+	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
+	earth::People Folk2(&Eco2, 6, Settings);
+	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
+	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
+	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
+	{
+		const earth::Polity& A = Folk.AllStates()[i];
+		const earth::Polity& B = Folk2.AllStates()[i];
+		EXPECT(A.Id == B.Id && A.Word == B.Word && A.Ruler == B.Ruler && A.Capital == B.Capital && A.Laws == B.Laws); // Sizes are counted afresh each year, so not compared.
+	}
+	std::remove(Path.c_str());
+}
+
 int main()
 {
+	TestStates();
 	TestColonies();
 	TestThinkingMinds();
 	TestHerdsAndCrops();

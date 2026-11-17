@@ -20,6 +20,7 @@
 #include "Inventions.h"
 #include "Minds.h"
 #include "Parallel.h"
+#include "Polities.h"
 #include "Random.h"
 #include "Skills.h"
 
@@ -326,6 +327,7 @@ struct Camp
 	float Cohesion = 0.0f; // From its beliefs' practices, worked out each step.
 	int DeathsLately = 0;  // Deaths since the band last wondered why.
 	uint32_t Leader = 0;   // The most trusted adult, worked out each step.
+	uint32_t State = 0;    // The chiefdom, kingdom or other state it belongs to (see Polities.h), 0 none.
 
 	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
 	// rest is saved.
@@ -339,6 +341,7 @@ struct Camp
 		if (Ar.Version >= 8) Ar.Io(Kind);
 		if (Ar.Version >= 9) Ar.Io(Crops);
 		if (Ar.Version >= 4) Ar.Io(Leader);
+		if (Ar.Version >= 14) Ar.Io(State);
 	}
 };
 
@@ -497,6 +500,61 @@ public:
 
 	const std::vector<Npc>& All() const { return Npcs; }
 	const std::vector<Camp>& AllCamps() const { return Camps; }
+	const std::vector<Polity>& AllStates() const { return States; }
+	int PolityCount() const { return static_cast<int>(States.size()); }
+	const Polity* StateById(uint32_t Id) const
+	{
+		auto It = std::lower_bound(States.begin(), States.end(), Id, [](const Polity& S, uint32_t V) { return S.Id < V; });
+		return It != States.end() && It->Id == Id ? &*It : nullptr;
+	}
+	Polity* StateById(uint32_t Id) { return const_cast<Polity*>(static_cast<const People*>(this)->StateById(Id)); }
+	static std::string StateName(const Polity& S)
+	{
+		const std::string W = PersonName(S.Word);
+		switch (S.Tier)
+		{
+		case Kingdom: return "the kingdom of " + W;
+		case Empire: return "the " + W + " empire";
+		case Nation: return "the nation of " + W;
+		default: return "the " + W + " chiefdom";
+		}
+	}
+	// The living states, biggest first: size, capital, ruler, religion, wars and laws.
+	std::string StatesText() const
+	{
+		static const char* Lands[6] = {"Africa", "Asia", "Europe", "Australia", "the Americas", "elsewhere"};
+		std::vector<const Polity*> List;
+		for (const Polity& S : States) List.push_back(&S);
+		std::sort(List.begin(), List.end(), [](const Polity* A, const Polity* B) { return A->Members != B->Members ? A->Members > B->Members : A->Id < B->Id; });
+		std::string Out = std::to_string(States.size()) + " states (" + std::to_string(StatesFounded) + " founded since the first)\n\n";
+		char Buf[160];
+		for (const Polity* S : List)
+		{
+			std::string N = StateName(*S);
+			N[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(N[0])));
+			std::snprintf(Buf, sizeof(Buf), ", a %s of %d bands and %d people, founded in year %.0f\n", TierName(S->Tier), S->Bands, S->Members, S->Founded);
+			Out += N + Buf;
+			std::snprintf(Buf, sizeof(Buf), " near %.1f, %.1f in %s\n", S->Lat, S->Lon, Lands[RegionOf(S->Lat, S->Lon)]);
+			Out += "  Capital: " + (S->City ? "the city of " + PersonName(S->City) : std::string("the ruler's camp")) + Buf;
+			Out += "  Ruler: " + (S->Ruler ? PersonName(S->RulerName) + " #" + std::to_string(S->Ruler) : std::string("nobody")) + ", ruler number " +
+				std::to_string(S->Rulers) + "; the next is " + (S->Rule == 0 ? "the ruler's eldest child" : "whoever the capital trusts most") + "\n";
+			if (S->Faith && S->Faith <= BeliefLog.size())
+			{
+				const BeliefRecord& B = BeliefLog[S->Faith - 1];
+				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
+			}
+			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d\n", S->Treasury, S->Conquests);
+			Out += Buf;
+			if (const Polity* E = StateById(S->Enemy)) Out += "  At war with " + StateName(*E) + " for " + std::to_string(S->WarYears) + " years\n";
+			std::string Friends;
+			for (uint32_t A : S->Allies)
+				if (const Polity* F = StateById(A)) Friends += (Friends.empty() ? "" : ", ") + StateName(*F);
+			if (!Friends.empty()) Out += "  Allies: " + Friends + "\n";
+			for (const std::string& L : S->Laws) Out += "  Law: " + L + "\n";
+			Out += "\n";
+		}
+		return Out;
+	}
 	const std::vector<BeliefRecord>& AllBeliefs() const { return BeliefLog; }
 	const std::vector<EcoEvent>& Firsts() const { return Events; }
 	int Alive() const { return static_cast<int>(Npcs.size()); }
@@ -561,10 +619,17 @@ public:
 		if (Ar.Version >= 8) Ar.Io(OthersStarted), Ar.Io(AnyMixedChild), Ar.Io(MetKinds);
 		if (Ar.Version >= 9) Ar.Io(EverKept), Ar.Io(EverSown);
 		if (Ar.Version >= 10) Ar.Io(Findable);
+		if (Ar.Version >= 14) Ar.Io(States), Ar.Io(NextStateId), Ar.Io(StateDays), Ar.Io(TiersSeen), Ar.Io(NextStateMark), Ar.Io(StatesFounded), Ar.Io(AnyLaw);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
 			LandClimate = -1;
+			TallyStates();
+			for (Polity& S : States)
+			{
+				auto It = CampSlots.find(S.Capital);
+				if (It != CampSlots.end()) S.Lat = Camps[static_cast<size_t>(It->second)].Lat, S.Lon = Camps[static_cast<size_t>(It->second)].Lon;
+			}
 		}
 	}
 
@@ -984,6 +1049,7 @@ public:
 		MoveCamps();
 		SplitAndMergeCamps();
 		KeepHerdsAndCrops(1);
+		Govern(1);
 		CheckFirsts();
 	}
 
@@ -1168,6 +1234,7 @@ public:
 		MoveCamps(Days);
 		SplitAndMergeCamps(Days);
 		KeepHerdsAndCrops(Days);
+		Govern(Days);
 		CheckFirsts();
 	}
 
@@ -1215,6 +1282,10 @@ public:
 				const double K = Smarts(P) * Smarts(P) * P.Genes->Curiosity;
 				if (P.AgeYears() >= 15.0 && K > Best) Best = K, Who = i;
 			}
+			// In a state's capital, the ruler does the thinking for the realm.
+			const Polity* Realm = C.State ? StateById(C.State) : nullptr;
+			for (int i : C.Members)
+				if (Realm && Realm->Capital == C.Id && Npcs[static_cast<size_t>(i)].Id == Realm->Ruler) Who = i;
 			if (Who < 0) continue;
 			Npc& P = Npcs[static_cast<size_t>(Who)];
 			std::string Known, Toward, Met, Made, Ways;
@@ -1251,6 +1322,23 @@ public:
 			for (uint32_t F : C.Faith)
 				for (const BeliefRecord& R : BeliefLog)
 					if (R.Id == F) Life += "Your people believe: " + BeliefGloss(R.Subject, R.Claim, R.Practice) + ". ";
+			// The person's place in a state, and what they could do about it.
+			const bool Rules = Realm && Realm->Ruler == P.Id;
+			std::string Deeds;
+			if (Realm)
+			{
+				Life += "Your band belongs to " + StateName(*Realm) + ", " + std::to_string(Realm->Bands) + " bands and " + std::to_string(Realm->Members) +
+					" people" + (Rules ? ", and you are its ruler. " : Realm->Ruler ? ", ruled by " + PersonName(Realm->RulerName) + ". " : ". ");
+				if (const Polity* E = StateById(Realm->Enemy)) Life += "It is at war with " + StateName(*E) + ". ";
+				for (const std::string& L : Realm->Laws) Life += "One of its laws: " + L + ". ";
+				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), "
+								"\"city\" (build a city as your capital), \"law\" (give a law, written in \"law\") or \"\""
+							  : "\"rebel\" (lead your band to break away), \"preach\" (spread your band's beliefs to the whole state) or \"\"";
+			}
+			else if (C.Leader == P.Id && (Has(C.Known, SkillNamed("villages")) || Has(C.Known, SkillNamed("farming"))))
+			{
+				Deeds = "\"found\" (unite the bands near you under your rule) or \"\"";
+			}
 			std::vector<std::string>& Past = PastThoughts[P.Id];
 			std::string Before;
 			for (const std::string& T : Past) Before += "\n- \"" + T + "\"";
@@ -1266,7 +1354,8 @@ public:
 				"or a better way to make something. You know only what is written here; do not use anything else you know. Speak "
 				"plainly, as someone of your time would, with no modern words. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
 				"your own voice), \"way\" (the number of one way of working to try), \"material\" (a material you have come across, "
-				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\").";
+				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\")" +
+				(Deeds.empty() ? std::string(".") : ", and \"deed\": one of " + Deeds + ".");
 			++MindCounts.Asked;
 			const std::string Answer = Mind(Prompt);
 			if (Answer.empty()) continue;
@@ -1376,6 +1465,7 @@ public:
 			{
 				Line += " | works toward " + Aim + ", not yet";
 			}
+			if (!Deeds.empty()) Line += DoDeed(P, static_cast<int>(Order[t]), Lower(minds::JsonString(Answer, "deed")), minds::JsonString(Answer, "law"), Thought);
 			Log += Line + "\n";
 		}
 		return Log;
@@ -1435,6 +1525,14 @@ private:
 	// Names of people with stories and of their parents, partners and children.
 	std::unordered_map<uint32_t, uint16_t> KnownNames;
 	uint32_t FirstLeader = 0;
+	// States above the band, kept in order of id (see Polities.h and Govern).
+	std::vector<Polity> States;
+	uint32_t NextStateId = 1;
+	int StateDays = 0;          // Days since states last took their yearly turn.
+	uint8_t TiersSeen = 0;      // Bits of the tiers that have ever existed.
+	int NextStateMark = 10;
+	int StatesFounded = 0;
+	bool AnyLaw = false;
 	bool AnyRefuge = false;
 	bool AnyGrief = false;
 	bool AnyStore = false;
@@ -1898,6 +1996,8 @@ private:
 					}
 				}
 			}
+			// What anyone in its state knows travels along its roads and through its rulers.
+			if (const Polity* S = C.State ? StateById(C.State) : nullptr) C.Nearby |= S->Known;
 		});
 		MeasureRoom();
 		InParallel(Camps.size(), [&](size_t Here)
@@ -2100,6 +2200,7 @@ private:
 			New.Lexicon = Camps[c].Lexicon;
 			// The ones who leave don't always carry every belief with them.
 			for (uint32_t F : Camps[c].Faith) if (Dice.Chance(0.85)) New.Faith.push_back(F);
+			New.State = Camps[c].State; // A daughter band stays in its state.
 			New.Cohesion = Camps[c].Cohesion;
 			MaybeSchism(New);
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
@@ -4260,6 +4361,529 @@ private:
 			const std::string Where = std::string(RegionNames[Region]) + (Called.empty() ? "" : ", which they call " + Called) + At;
 			AddEvent("First NPC sets foot in " + Where);
 			if (Who) Remember(*Who, "was the first to set foot in " + Where);
+		}
+	}
+
+	// ---- States above the band (see Polities.h) -----------------------------------------------
+
+	static int SkillNamed(const char* Name)
+	{
+		const auto& L = AllSkills();
+		for (size_t k = 0; k < L.size(); ++k)
+			if (L[k].Name == Name) return static_cast<int>(k);
+		return -1;
+	}
+	static bool Has(SkillSet Known, int Skill) { return Skill >= 0 && Knows(Known, Skill); }
+
+	// Camps within Km of a point, as slots into Camps.
+	std::vector<int> CampSlotsNear(double Lat, double Lon, double Km) const
+	{
+		std::vector<int> Out;
+		const int Rows = static_cast<int>(std::ceil(Km / kKmPerDegree));
+		const int Cols = std::min(180, static_cast<int>(std::ceil(Km / (kKmPerDegree * std::max(0.05, std::cos(Lat * kPi / 180.0))))));
+		const int R0 = GridRow(Lat), C0 = GridCol(Lon);
+		for (int r = R0 - Rows; r <= R0 + Rows; ++r)
+			for (int c = C0 - Cols; c <= C0 + Cols; ++c)
+			{
+				auto It = CampGrid.find(GridKey(r, c));
+				if (It == CampGrid.end()) continue;
+				for (int Slot : It->second)
+					if (DistanceKm(Lat, Lon, Camps[Slot].Lat, Camps[Slot].Lon) < Km) Out.push_back(Slot);
+			}
+		std::sort(Out.begin(), Out.end()); // The grid is a hash map: keep the order fixed so the dice fall the same way.
+		return Out;
+	}
+	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
+
+	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	double StrengthOf(const Polity& S) const
+	{
+		static const std::vector<int> Arms = []
+		{
+			std::vector<int> A;
+			for (const char* N : {"bows and arrows", "bronze", "the wheel", "iron", "sailing ships", "gunpowder", "engines", "flight", "rockets", "computers"})
+				A.push_back(SkillNamed(N));
+			return A;
+		}();
+		double Armed = 1.0;
+		for (int K : Arms) Armed += Has(S.Known, K) ? 0.4 : 0.0;
+		double Friends = 0.0;
+		for (uint32_t A : S.Allies)
+			if (const Polity* F = StateById(A)) Friends += 0.5 * F->Members;
+		return (S.Members + Friends) * Armed * (S.City ? 1.2 : 1.0);
+	}
+
+	void NoteState(const Polity& S, const std::string& Text, bool Always = false)
+	{
+		const int Bit = 1 << S.Tier;
+		if (!(TiersSeen & Bit))
+		{
+			TiersSeen = static_cast<uint8_t>(TiersSeen | Bit);
+			std::string T = StateName(S);
+			AddEvent("The first " + std::string(TierName(S.Tier)) + " in the world: " + T + ", with " + std::to_string(S.Bands) + " bands and " +
+				std::to_string(S.Members) + " people" + (S.Ruler ? ", ruled by " + PersonName(S.RulerName) : std::string()));
+			if (const Npc* R = Find(S.Ruler)) Remember(*R, "ruled " + T + ", the first " + TierName(S.Tier) + " in the world");
+			return;
+		}
+		if (Always || S.Tier >= Kingdom) AddEvent(Text);
+	}
+
+	Polity& FoundState(int Slot, const Npc* Ruler, uint8_t Tier)
+	{
+		Camp& C = Camps[static_cast<size_t>(Slot)];
+		Polity S;
+		S.Id = NextStateId++;
+		S.Word = static_cast<uint16_t>(C.Words[3] * 131u + C.Words[5] * 17u + S.Id * 7919u);
+		S.Tier = Tier;
+		S.Rule = Dice.Chance(0.6) ? 0 : 1;
+		S.Capital = C.Id;
+		S.Founded = Eco->Years();
+		S.Lat = C.Lat, S.Lon = C.Lon;
+		if (Ruler) S.Ruler = Ruler->Id, S.RulerName = Ruler->Name, S.Founder = Ruler->Id;
+		S.Faith = C.Faith.empty() ? 0 : C.Faith.front();
+		S.Bands = 1;
+		S.Members = static_cast<int>(C.Members.size());
+		S.Known = C.Known;
+		C.State = S.Id;
+		++StatesFounded;
+		States.push_back(S);
+		return States.back();
+	}
+
+	// The camps of each state, as slots, and its size and knowledge, from scratch.
+	std::unordered_map<uint32_t, std::vector<int>> TallyStates()
+	{
+		std::unordered_map<uint32_t, std::vector<int>> Of;
+		for (Polity& S : States) S.Bands = S.Members = 0, S.Known = 0;
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			Camp& C = Camps[c];
+			if (!C.State) continue;
+			Polity* S = StateById(C.State);
+			if (!S)
+			{
+				C.State = 0;
+				continue;
+			}
+			if (C.Members.empty()) continue;
+			S->Bands += 1;
+			S->Members += static_cast<int>(C.Members.size());
+			S->Known |= C.Known;
+			Of[S->Id].push_back(static_cast<int>(c));
+		}
+		return Of;
+	}
+
+	// A band, and those near it that follow it, break away from their state into one of their own.
+	void BreakAway(int Slot, const Npc* Leader, const std::string& Why)
+	{
+		Camp& C = Camps[static_cast<size_t>(Slot)];
+		Polity* Old = StateById(C.State);
+		if (!Old) return;
+		const std::string OldName = StateName(*Old);
+		const uint32_t OldId = Old->Id;
+		const uint8_t Tier = static_cast<uint8_t>(Old->Tier >= Empire ? Kingdom : Chiefdom);
+		const bool Loud = Old->Tier >= Kingdom;
+		const double Lat = C.Lat, Lon = C.Lon;
+		const uint32_t NewId = FoundState(Slot, Leader, Tier).Id;
+		for (int N : CampSlotsNear(Lat, Lon, 80.0))
+			if (Camps[static_cast<size_t>(N)].State == OldId && Camps[static_cast<size_t>(N)].Id != StateById(OldId)->Capital && Dice.Chance(0.5))
+				Camps[static_cast<size_t>(N)].State = NewId;
+		Polity& New = *StateById(NewId);
+		if (Loud || Leader)
+		{
+			const std::string Text = (Leader ? PersonName(Leader->Name) + " " + Why : Why) + ": " + StateName(New) + " breaks away from " + OldName;
+			NoteState(New, Text, Loud);
+			if (Leader) Remember(*Leader, Why + " and founded " + StateName(New) + ", breaking away from " + OldName);
+		}
+	}
+
+	// Once a year: states gather tribute, crown rulers, grow, go to war, break up and fall, and new
+	// ones rise where bands that farm or live in villages draw together.
+	void Govern(int Days)
+	{
+		StateDays += Days;
+		if (StateDays < 365) return;
+		StateDays -= 365;
+		static const int Villages = SkillNamed("villages"), Farming = SkillNamed("farming"), Writing = SkillNamed("writing"),
+			Cities = SkillNamed("cities"), LawSkill = SkillNamed("laws"), Money = SkillNamed("money"), Roads = SkillNamed("roads"),
+			Printing = SkillNamed("printing");
+		auto Of = TallyStates();
+		const double Year = Eco->Years();
+		for (size_t s = 0; s < States.size(); ++s)
+		{
+			Polity& S = States[s];
+			std::vector<int>& Mine = Of[S.Id];
+			if (Mine.empty()) continue;
+			// The capital: the ruler's camp, or the biggest left if it has gone.
+			int Capital = -1;
+			auto It = CampSlots.find(S.Capital);
+			if (It != CampSlots.end() && Camps[static_cast<size_t>(It->second)].State == S.Id && !Camps[static_cast<size_t>(It->second)].Members.empty())
+				Capital = It->second;
+			if (Capital < 0)
+			{
+				Capital = Mine.front();
+				for (int c : Mine)
+					if (Camps[static_cast<size_t>(c)].Members.size() > Camps[static_cast<size_t>(Capital)].Members.size()) Capital = c;
+				S.Capital = Camps[static_cast<size_t>(Capital)].Id;
+				S.City = 0;
+			}
+			Camp& Seat = Camps[static_cast<size_t>(Capital)];
+			S.Lat = Seat.Lat, S.Lon = Seat.Lon;
+			// A new ruler when the old one dies or leaves.
+			int Split = -1; // A band that breaks away at the end of this state's turn.
+			const char* Why = "";
+			const Npc* R = Find(S.Ruler);
+			if (!R || Camps[static_cast<size_t>(CampSlot(R->Camp))].State != S.Id)
+			{
+				const Npc* Next = nullptr;
+				if (S.Rule == 0 && S.Ruler)
+					for (int c : Mine)
+						for (int i : Camps[static_cast<size_t>(c)].Members)
+						{
+							const Npc& P = Npcs[static_cast<size_t>(i)];
+							if ((P.Mother == S.Ruler || P.Father == S.Ruler) && P.AgeYears() >= 14.0 && (!Next || P.AgeDays > Next->AgeDays)) Next = &P;
+						}
+				// Without an heir, or now and then anyway, a big state fights over who rules, and splits.
+				if (S.Bands >= 6 && Mine.size() >= 6 && ((S.Rule == 0 && !Next) || Dice.Chance(0.04)))
+				{
+					int Far = -1;
+					double FarKm = 0.0;
+					for (int c : Mine)
+					{
+						const Camp& C = Camps[static_cast<size_t>(c)];
+						const double Km = DistanceKm(C.Lat, C.Lon, Seat.Lat, Seat.Lon);
+						if (c != Capital && C.Leader && Km > FarKm) Far = c, FarKm = Km;
+					}
+					if (Far >= 0) Split = Far, Why = "claims the throne";
+				}
+				if (!Next) Next = Find(Seat.Leader);
+				if (!Next)
+					for (int i : Seat.Members)
+						if (Npcs[static_cast<size_t>(i)].AgeYears() >= 16.0 && (!Next || Npcs[static_cast<size_t>(i)].AgeDays > Next->AgeDays)) Next = &Npcs[static_cast<size_t>(i)];
+				S.Ruler = Next ? Next->Id : 0;
+				S.RulerName = Next ? Next->Name : 0;
+				S.Rulers += 1;
+				if (Next && S.Tier >= Empire)
+					AddEvent(PersonName(Next->Name) + " becomes ruler number " + std::to_string(S.Rulers) + " of " + StateName(S));
+			}
+			// Tribute flows to the capital; the state's gods become everyone's.
+			for (int c : Mine)
+			{
+				Camp& C = Camps[static_cast<size_t>(c)];
+				if (c == Capital) continue;
+				const float Paid = 0.05f * C.Store;
+				C.Store -= Paid;
+				Seat.Store += 0.8f * Paid; // Some is lost on the way.
+				S.Treasury += Paid;
+				if (S.Faith && !Shares(C, S.Faith) && C.Faith.size() < 3 && Dice.Chance(0.1)) C.Faith.push_back(S.Faith);
+			}
+			if (!S.Faith && !Seat.Faith.empty()) S.Faith = Seat.Faith.front();
+			if (S.Bands == 1 && S.Tier == Chiefdom && Split < 0 && Dice.Chance(0.2)) // One band alone is no chiefdom for long.
+			{
+				Seat.State = 0;
+				continue;
+			}
+			// Growing up: more bands, writing, cities, laws and money.
+			const std::string Was = StateName(S);
+			if (S.Tier == Chiefdom && S.Bands >= 10 && (Has(S.Known, Writing) || Has(S.Known, Cities))) S.Tier = Kingdom;
+			else if (S.Tier == Kingdom && S.Bands >= 40 && S.Conquests >= 1 && Has(S.Known, LawSkill) && Has(S.Known, Money)) S.Tier = Empire;
+			else if ((S.Tier == Kingdom || S.Tier == Empire) && S.Bands >= 20 && Has(S.Known, Printing)) S.Tier = Nation;
+			if (StateName(S) != Was)
+			{
+				std::string T = Was + " grows into " + StateName(S) + ", with " + std::to_string(S.Bands) + " bands and " + std::to_string(S.Members) + " people";
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				NoteState(S, T);
+			}
+			if (!S.City && Has(Seat.Known, Cities))
+			{
+				S.City = static_cast<uint16_t>(Seat.Words[2] * 977u + S.Id * 31u + 1u);
+				NoteState(S, PersonName(S.RulerName) + " makes the city of " + PersonName(S.City) + " the capital of " + StateName(S));
+			}
+			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
+			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
+			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()));
+			for (int c : Mine)
+			{
+				if (c == Capital) continue;
+				Camp& C = Camps[static_cast<size_t>(c)];
+				const double Km = DistanceKm(C.Lat, C.Lon, Seat.Lat, Seat.Lon);
+				if (Km > Reach * 1.3 && Dice.Chance(0.2))
+				{
+					C.State = 0;
+					continue;
+				}
+				const double Risk = Order * (0.002 + (Understand(C, Seat) ? 0.0 : 0.01) + (S.Faith && !Shares(C, S.Faith) ? 0.01 : 0.0) + (Km > Reach ? 0.02 : 0.0));
+				if (Split < 0 && C.Leader && C.Members.size() >= 15 && Dice.Chance(Risk)) Split = c, Why = "leads a revolt";
+			}
+			if (Split >= 0)
+			{
+				BreakAway(Split, Find(Camps[static_cast<size_t>(Split)].Leader), Why);
+				break; // The list of states changed; the rest take their turn next year.
+			}
+		}
+
+		// Wars: each year of fighting, the weaker side tends to lose its nearest bands to the stronger;
+		// lose too many, or the capital, and it is conquered.
+		Of = TallyStates();
+		for (size_t s = 0; s < States.size(); ++s)
+		{
+			Polity& A = States[s];
+			Polity* B = StateById(A.Enemy);
+			if (!B || B->Enemy != A.Id || A.Bands == 0 || B->Bands == 0)
+			{
+				A.Enemy = 0, A.WarYears = 0;
+				continue;
+			}
+			if (A.Id > B->Id) continue; // Each war is fought once a year, by the side with the lower id.
+			A.WarYears += 1, B->WarYears += 1;
+			const double SA = StrengthOf(A), SB = StrengthOf(*B);
+			const bool AWins = Dice.Chance(SA / std::max(1.0, SA + SB));
+			Polity& Win = AWins ? A : *B;
+			Polity& Lose = AWins ? *B : A;
+			std::vector<int>& Lost = Of[Lose.Id];
+			std::sort(Lost.begin(), Lost.end(), [&](int X, int Y)
+			{
+				const Camp& P = Camps[static_cast<size_t>(X)];
+				const Camp& Q = Camps[static_cast<size_t>(Y)];
+				return DistanceKm(P.Lat, P.Lon, Win.Lat, Win.Lon) < DistanceKm(Q.Lat, Q.Lon, Win.Lat, Win.Lon);
+			});
+			const size_t Taken = std::min(Lost.size(), static_cast<size_t>(1 + Lose.Bands / 8));
+			bool CapitalTaken = false;
+			for (size_t k = 0; k < Taken; ++k)
+			{
+				Camp& C = Camps[static_cast<size_t>(Lost[k])];
+				CapitalTaken = CapitalTaken || C.Id == Lose.Capital;
+				C.State = Win.Id;
+				Win.Treasury += 0.5f * C.Store, C.Store *= 0.5f; // Plunder.
+				for (int i : C.Members)
+				{
+					Npc& P = Npcs[static_cast<size_t>(i)];
+					if (P.AgeYears() >= 16.0 && P.AgeYears() < 50.0 && Dice.Chance(0.1)) P.Health = 0.0f; // Killed in the fighting.
+				}
+			}
+			Lose.Bands -= static_cast<int>(Taken), Win.Bands += static_cast<int>(Taken);
+			const std::string WinName = StateName(Win), LoseName = StateName(Lose);
+			if (CapitalTaken || Lose.Bands <= 1)
+			{
+				for (size_t k = Taken; k < Lost.size(); ++k) Camps[static_cast<size_t>(Lost[k])].State = Win.Id;
+				Win.Bands += Lose.Bands, Lose.Bands = 0;
+				Lose.Conquests = -1; // Marks it as conquered, not fallen.
+				Win.Conquests += 1, Win.Enemy = 0, Win.WarYears = 0;
+				std::string T = WinName + " conquers " + LoseName + (Win.Ruler ? " under " + PersonName(Win.RulerName) : std::string());
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				if (Win.Tier >= Kingdom || Lose.Tier >= Kingdom) AddEvent(T);
+				if (const Npc* R = Find(Win.Ruler); R && Win.Tier >= Kingdom) Remember(*R, "led " + WinName + " to conquer " + LoseName);
+			}
+			else if (A.WarYears >= 2 && Dice.Chance((A.Laws.empty() && B->Laws.empty()) ? 0.15 : 0.3))
+			{
+				A.Enemy = 0, B->Enemy = 0, A.WarYears = 0, B->WarYears = 0;
+				if (A.Tier >= Kingdom && B->Tier >= Kingdom) AddEvent("Peace between " + StateName(A) + " and " + StateName(*B));
+			}
+		}
+
+		// Neighbours meet: wars begin between strangers, alliances between those who share tongue or gods.
+		Of = TallyStates();
+		for (size_t s = 0; s < States.size(); ++s)
+		{
+			Polity& A = States[s];
+			const std::vector<int>& Mine = Of[A.Id];
+			if (Mine.empty() || !Dice.Chance(0.3)) continue;
+			const Camp& Edge = Camps[static_cast<size_t>(Mine[std::min(Mine.size() - 1, static_cast<size_t>(Dice.Uniform() * static_cast<double>(Mine.size())))])];
+			for (int N : CampSlotsNear(Edge.Lat, Edge.Lon, 100.0))
+			{
+				const Camp& O = Camps[static_cast<size_t>(N)];
+				Polity* B = O.State && O.State != A.Id ? StateById(O.State) : nullptr;
+				if (!B || B->Bands == 0) continue;
+				const bool Allied = std::find(A.Allies.begin(), A.Allies.end(), B->Id) != A.Allies.end();
+				const bool Kin = Understand(Edge, O), SameGods = A.Faith && A.Faith == B->Faith;
+				if (!A.Enemy && !B->Enemy && !Allied && Dice.Chance(0.04 * (Kin ? 1.0 : 2.0) * (SameGods ? 1.0 : 2.0) * (A.Laws.empty() ? 1.0 : 0.5)))
+					StartWar(A, *B);
+				else if (!Allied && A.Enemy != B->Id && (Kin || SameGods) && A.Allies.size() < 4 && B->Allies.size() < 4 && Dice.Chance(0.03))
+					Ally(A, *B);
+				break;
+			}
+		}
+
+		// New chiefdoms, where a band that farms or lives in a village leads others close by that
+		// speak its tongue or share its gods.
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			Camp& C = Camps[c];
+			if (C.State || C.Kind != 0 || C.Members.size() < 20 || !C.Leader || !(Has(C.Known, Villages) || Has(C.Known, Farming)) || !Dice.Chance(0.02))
+				continue;
+			std::vector<int> Follow;
+			for (int N : CampSlotsNear(C.Lat, C.Lon, 60.0))
+			{
+				const Camp& O = Camps[static_cast<size_t>(N)];
+				if (static_cast<size_t>(N) != c && !O.State && O.Kind == 0 && !O.Members.empty() &&
+					(Understand(C, O) || (!C.Faith.empty() && Shares(O, C.Faith.front()))))
+					Follow.push_back(N);
+			}
+			if (Follow.size() < 2) continue;
+			Polity& S = FoundState(static_cast<int>(c), Find(C.Leader), Chiefdom);
+			for (int N : Follow) Camps[static_cast<size_t>(N)].State = S.Id, S.Members += static_cast<int>(Camps[static_cast<size_t>(N)].Members.size());
+			S.Bands += static_cast<int>(Follow.size());
+			NoteState(S, "");
+		}
+		// Bands near a state join it, drawn by shared speech, gods, trade and its might.
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			Camp& C = Camps[c];
+			if (States.empty()) break;
+			if (C.State || C.Kind != 0 || C.Members.empty() || !Dice.Chance(0.2)) continue;
+			for (int N : CampSlotsNear(C.Lat, C.Lon, 80.0))
+			{
+				const Camp& O = Camps[static_cast<size_t>(N)];
+				const Polity* S = O.State ? StateById(O.State) : nullptr;
+				if (!S) continue;
+				if (DistanceKm(C.Lat, C.Lon, S->Lat, S->Lon) <= ReachKm(S->Tier, Has(S->Known, Roads)))
+				{
+					const double Pull = 0.5 + (Understand(C, O) ? 1.0 : 0.0) + (Shares(C, S->Faith) ? 1.0 : 0.0) + (C.Neighbour == O.Id ? 0.5 : 0.0) + 0.5 * S->Tier;
+					if (Dice.Chance(0.05 * Pull)) C.State = S->Id;
+				}
+				break;
+			}
+		}
+
+		// States left with no bands fall.
+		Of = TallyStates();
+		for (const Polity& S : States)
+			if (S.Bands == 0 && S.Tier >= Kingdom && S.Conquests >= 0)
+			{
+				std::string T = StateName(S) + " falls, " + std::to_string(static_cast<int>(Year - S.Founded)) + " years after it was founded";
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				AddEvent(T);
+			}
+		States.erase(std::remove_if(States.begin(), States.end(), [](const Polity& S) { return S.Bands == 0; }), States.end());
+		for (Polity& S : States)
+		{
+			if (S.Enemy && !StateById(S.Enemy)) S.Enemy = 0, S.WarYears = 0;
+			S.Allies.erase(std::remove_if(S.Allies.begin(), S.Allies.end(), [&](uint32_t A) { return !StateById(A); }), S.Allies.end());
+		}
+		while (static_cast<int>(States.size()) >= NextStateMark)
+		{
+			AddEvent(std::to_string(NextStateMark) + " states in the world at once");
+			NextStateMark *= 2;
+		}
+	}
+
+	// The nearest band of another state to a state's capital, and that state.
+	Polity* NearestOther(const Polity& S)
+	{
+		for (int N : CampSlotsNear(S.Lat, S.Lon, ReachKm(S.Tier, false)))
+			if (Camps[static_cast<size_t>(N)].State && Camps[static_cast<size_t>(N)].State != S.Id)
+				if (Polity* O = StateById(Camps[static_cast<size_t>(N)].State)) return O;
+		return nullptr;
+	}
+
+	// What a thinking mind chose to do with its power, if the world lets it; one note for the log.
+	std::string DoDeed(const Npc& P, int Slot, const std::string& Deed, std::string Law, const std::string& Thought)
+	{
+		if (Deed.empty()) return "";
+		Camp& C = Camps[static_cast<size_t>(Slot)];
+		Polity* S = C.State ? StateById(C.State) : nullptr;
+		const bool Rules = S && S->Ruler == P.Id;
+		const std::string Name = PersonName(P.Name);
+		auto Quote = [&] { return Thought.empty() ? std::string() : ": \"" + Thought + "\""; };
+		if (Rules && (Deed == "war" || Deed == "ally"))
+		{
+			Polity* O = NearestOther(*S);
+			if (!O) return " | wants to " + Deed + ", but no other state is near";
+			const bool Friends = std::find(S->Allies.begin(), S->Allies.end(), O->Id) != S->Allies.end();
+			const std::string Them = StateName(*O);
+			if (Deed == "war")
+			{
+				if (S->Enemy || O->Enemy || Friends) return " | wants war on " + Them + ", but cannot now";
+				StartWar(*S, *O);
+				Remember(P, "led " + StateName(*S) + " to war against " + Them + Quote());
+				return " | DEED: goes to war with " + Them;
+			}
+			if (Friends || S->Enemy == O->Id || S->Allies.size() >= 4 || O->Allies.size() >= 4) return " | seeks an alliance with " + Them + ", but cannot now";
+			Ally(*S, *O);
+			return " | DEED: allies with " + Them;
+		}
+		if (Rules && Deed == "peace")
+		{
+			Polity* E = StateById(S->Enemy);
+			if (!E) return " | seeks peace, but there is no war";
+			S->Enemy = E->Enemy = 0, S->WarYears = E->WarYears = 0;
+			AddEvent(Name + " makes peace between " + StateName(*S) + " and " + StateName(*E));
+			return " | DEED: makes peace with " + StateName(*E);
+		}
+		if (Rules && Deed == "city")
+		{
+			static const int Cities = SkillNamed("cities"), Villages = SkillNamed("villages");
+			if (S->City) return " | the capital is already a city";
+			if (!Has(C.Known, Cities) && !Has(C.Known, Villages)) return " | dreams of a city, but nobody here knows how to build one";
+			S->Capital = C.Id;
+			S->City = static_cast<uint16_t>(C.Words[2] * 977u + S->Id * 31u + 1u);
+			const std::string T = Name + " builds the city of " + PersonName(S->City) + " as the capital of " + StateName(*S);
+			AddEvent(T);
+			Remember(P, "built the city of " + PersonName(S->City) + Quote());
+			return " | DEED: builds the city of " + PersonName(S->City);
+		}
+		if (Rules && Deed == "law")
+		{
+			if (Law.size() > 160) Law.resize(160);
+			if (Law.empty()) return " | wants to give a law, but says none";
+			if (S->Laws.size() >= 5) S->Laws.erase(S->Laws.begin());
+			S->Laws.push_back(Law + " (given by " + Name + ")");
+			if (!AnyLaw) AnyLaw = true, AddEvent(Name + " of " + StateName(*S) + " gives the first law: \"" + Law + "\"");
+			Remember(P, "gave " + StateName(*S) + " the law: \"" + Law + "\"");
+			return " | DEED: gives the law \"" + Law + "\"";
+		}
+		if (S && !Rules && Deed == "rebel")
+		{
+			if (C.Id == S->Capital) return " | wants to rebel, but lives in the capital";
+			BreakAway(Slot, &P, "rises up");
+			return " | DEED: rebels and founds " + StateName(*StateById(C.State));
+		}
+		if (S && !Rules && Deed == "preach")
+		{
+			if (C.Faith.empty() || S->Faith == C.Faith.front()) return " | preaches, but the state already shares these beliefs";
+			if (!Dice.Chance(0.3)) return " | preaches, but few listen";
+			S->Faith = C.Faith.front();
+			const BeliefRecord& B = BeliefLog[S->Faith - 1];
+			AddEvent(Name + ", a prophet, turns " + StateName(*S) + " to the belief \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")");
+			Remember(P, "was a prophet who turned " + StateName(*S) + " to their band's beliefs" + Quote());
+			return " | DEED: a prophet; the state takes up their beliefs";
+		}
+		if (!S && Deed == "found" && C.Leader == P.Id)
+		{
+			std::vector<int> Follow;
+			for (int N : CampSlotsNear(C.Lat, C.Lon, 60.0))
+				if (N != Slot && !Camps[static_cast<size_t>(N)].State && Camps[static_cast<size_t>(N)].Kind == C.Kind && Understand(C, Camps[static_cast<size_t>(N)])) Follow.push_back(N);
+			if (Follow.empty()) return " | wants to unite the bands, but none near will follow";
+			Polity& New = FoundState(Slot, &P, Chiefdom);
+			for (int N : Follow) Camps[static_cast<size_t>(N)].State = New.Id, New.Members += static_cast<int>(Camps[static_cast<size_t>(N)].Members.size());
+			New.Bands += static_cast<int>(Follow.size());
+			const std::string T = StateName(New);
+			NoteState(New, Name + " unites " + std::to_string(New.Bands) + " bands into " + T, true);
+			Remember(P, "united the bands around them into " + T + Quote());
+			return " | DEED: founds " + T;
+		}
+		return " | REFUSED deed \"" + Deed + "\": not something they can do";
+	}
+
+	void StartWar(Polity& A, Polity& B)
+	{
+		A.Enemy = B.Id, B.Enemy = A.Id, A.WarYears = B.WarYears = 0;
+		if (A.Tier >= Kingdom || B.Tier >= Kingdom)
+		{
+			std::string T = StateName(A) + " goes to war with " + StateName(B);
+			T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+			AddEvent(T);
+		}
+	}
+	void Ally(Polity& A, Polity& B)
+	{
+		A.Allies.push_back(B.Id), B.Allies.push_back(A.Id);
+		if (A.Tier >= Kingdom && B.Tier >= Kingdom)
+		{
+			std::string T = StateName(A) + " and " + StateName(B) + " become allies";
+			T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+			AddEvent(T);
 		}
 	}
 

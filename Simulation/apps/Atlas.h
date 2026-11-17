@@ -59,7 +59,7 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 	struct Square
 	{
 		int People = 0, Biggest = 0, Lang = 0;
-		uint32_t Belief = 0;
+		uint32_t Belief = 0, State = 0;
 		unsigned Crops = 0, Herds = 0; // Bits of AllCrops() and of the kept kinds, in species order.
 	};
 	std::map<int, Square> Squares;
@@ -91,6 +91,7 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 			S.Biggest = Size;
 			S.Lang = Lang;
 			S.Belief = Belief;
+			S.State = C.State;
 		}
 	}
 	std::vector<std::string> KeptNames;
@@ -113,7 +114,7 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 	First = true;
 	for (const auto& [Key, S] : Squares)
 	{
-		O << (First ? "" : ",") << '[' << Key << ',' << S.People << ',' << S.Lang << ',' << S.Belief << ',' << S.Crops << ',' << S.Herds << ']';
+		O << (First ? "" : ",") << '[' << Key << ',' << S.People << ',' << S.Lang << ',' << S.Belief << ',' << S.Crops << ',' << S.Herds << ',' << S.State << ']';
 		First = false;
 	}
 	O << "],crops:[";
@@ -138,6 +139,13 @@ inline void AppendAtlasFrame(const std::string& JsPath, const earth::Ecosystem& 
 	{
 		const earth::BeliefRecord& B = Folk.AllBeliefs()[Id - 1];
 		O << (First ? "" : ",") << Id << ":[" << JsonText(earth::SayWord(B.Word)) << ',' << JsonText(earth::BeliefGloss(B.Subject, B.Claim, B.Practice)) << ',' << Bands << ']';
+		First = false;
+	}
+	O << "},states:{";
+	First = true;
+	for (const earth::Polity& P : Folk.AllStates())
+	{
+		O << (First ? "" : ",") << P.Id << ":[" << JsonText(earth::People::StateName(P)) << ',' << P.Bands << ',' << P.Members << ']';
 		First = false;
 	}
 	O << "},ev:[";
@@ -170,7 +178,7 @@ h2{font-size:15px;margin:0 0 6px}ul{list-style:none;padding:0;margin:0;max-heigh
 .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}.m{color:var(--muted)}
 </style></head><body><h1>Earth 315k atlas</h1><p class="sub" id="when">Loading...</p>
 <div class="bar"><button id="play">Play</button><input type="range" id="t" min="0" max="0" value="0" aria-label="Time">
-<select id="mode" aria-label="Colour by"><option value="lang">Languages</option><option value="belief">Beliefs</option><option value="people">People</option><option value="farm">Crops and herds</option></select></div>
+<select id="mode" aria-label="Colour by"><option value="lang">Languages</option><option value="belief">Beliefs</option><option value="people">People</option><option value="farm">Crops and herds</option><option value="state">States</option></select></div>
 <canvas id="map" width="1080" height="540"></canvas>
 <div class="cols"><div><h2 id="keyhead">Languages</h2><ul id="key"></ul></div><div><h2>What happened (up to this moment)</h2><ul id="ev"></ul></div></div>
 <script>window.ATLAS=[];</script><script src=")HTML" << JsName << R"HTML("></script><script>
@@ -184,8 +192,8 @@ g.fillStyle=css('--sea');g.fillRect(0,0,W,H);g.fillStyle=css('--land');let p=0,l
 for(const n of f.land.split(',').map(Number)){if(land)for(let k=p;k<p+n;k++){g.fillRect((k%cols)*cw,Math.floor(k/cols)*ch,cw+.5,ch+.5)}p+=n;land=!land}
 const m=mode.value,max=Math.max(1,...f.sq.map(s=>s[1]));
 const low=v=>v?Math.log2(v&-v):-1;
-for(const [k,ppl,l,b,cr=0,hd=0] of f.sq){const x=(k%cols)*cw,y=Math.floor(k/cols)*ch;
-g.fillStyle=m==='lang'?col(l):m==='belief'?(b?col(b):css('--muted')):m==='farm'?(cr?col(1+low(cr)):hd?col(50+low(hd)):css('--muted')):`hsl(25 80% ${70-45*Math.sqrt(ppl/max)}%)`;g.fillRect(x,y,cw+.5,ch+.5);
+for(const [k,ppl,l,b,cr=0,hd=0,st=0] of f.sq){const x=(k%cols)*cw,y=Math.floor(k/cols)*ch;
+g.fillStyle=m==='state'?(st?col(st):css('--muted')):m==='lang'?col(l):m==='belief'?(b?col(b):css('--muted')):m==='farm'?(cr?col(1+low(cr)):hd?col(50+low(hd)):css('--muted')):`hsl(25 80% ${70-45*Math.sqrt(ppl/max)}%)`;g.fillRect(x,y,cw+.5,ch+.5);
 if(m==='farm'&&cr&&hd){g.fillStyle=col(50+low(hd));g.beginPath();g.arc(x+cw/2,y+ch/2,Math.min(cw,ch)/3,0,7);g.fill()}}
 const people=f.sq.reduce((a,s)=>a+s[1],0);
 document.getElementById('when').textContent=`Year ${fmt(f.y)}, ${fmt(f.ago)} years ago. ${fmt(people)} people, sea level ${f.sea} m.`;
@@ -194,6 +202,11 @@ if(m==='belief'){document.getElementById('keyhead').textContent='Beliefs (each b
 for(const [id,[w,gl,n]] of Object.entries(f.beliefs).sort((a,b)=>b[1][2]-a[1][2]).slice(0,40)){const li=document.createElement('li');
 li.innerHTML=`<span class="sw" style="background:${col(+id)}"></span><b></b> <span class="m"></span><br><span></span>`;li.querySelector('b').textContent='"'+w+'"';
 li.querySelector('.m').textContent=n+' bands';li.lastChild.textContent=gl;key.appendChild(li)}}
+else if(m==='state'){document.getElementById('keyhead').textContent='States (chiefdoms, kingdoms, empires, nations)';
+const st=Object.entries(f.states||{}).sort((a,b)=>b[1][2]-a[1][2]);
+if(!st.length){const li=document.createElement('li');li.className='m';li.textContent='No states yet: every band governs itself.';key.appendChild(li)}
+for(const [id,[nm,bands,ppl]] of st.slice(0,40)){const li=document.createElement('li');li.innerHTML=`<span class="sw" style="background:${col(+id)}"></span><b></b> <span class="m"></span>`;
+li.querySelector('b').textContent=nm;li.querySelector('.m').textContent=fmt(ppl)+' people in '+bands+' bands';key.appendChild(li)}}
 else if(m==='farm'){document.getElementById('keyhead').textContent='Crops sown and animals kept (places)';
 const n=(bit,idx)=>f.sq.filter(s=>(s[idx]||0)>>bit&1).length,rows=[];
 (f.crops||[]).forEach((c,i)=>{const k=n(i,4);if(k)rows.push([col(1+i),c,k])});(f.kept||[]).forEach((c,i)=>{const k=n(i,5);if(k)rows.push([col(50+i),c,k])});
