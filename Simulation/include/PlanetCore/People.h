@@ -1231,17 +1231,31 @@ public:
 			const double Lat = std::abs(C.Lat);
 			const char* Where = Lat < 15.0 ? "in hot lands near the middle of the world" : Lat < 35.0 ? "in warm lands" : Lat < 55.0 ? "in lands with cold winters" : "in cold lands with long, dark winters";
 			const std::string Name = PersonName(P.Name);
+			// What sets this person and moment apart, so minds don't all think the same thought.
+			std::string Life;
+			if (C.Leader == P.Id) Life += "Your band trusts you most and looks to you to lead. ";
+			if (P.Grief > 0.3f) Life += "You are grieving someone you loved. ";
+			if (C.DeathsLately > 2) Life += std::to_string(C.DeathsLately) + " of your people have died lately. ";
+			if (C.SeenDanger > 0.5f) Life += "Dangerous animals are close to camp. ";
+			if (Eco->IceCover() > 0.5) Life += "The winters have grown long and hard. ";
+			Life += C.Store > 50.0f * static_cast<float>(C.Members.size()) ? "Your band has plenty of food put by. " : C.Store > 0.0f ? "Your band has a little food put by. " : "Your band has no food put by. ";
+			for (uint32_t F : C.Faith)
+				for (const BeliefRecord& R : BeliefLog)
+					if (R.Id == F) Life += "Your people believe: " + BeliefGloss(R.Subject, R.Claim, R.Practice) + ". ";
+			std::vector<std::string>& Past = PastThoughts[P.Id];
+			std::string Before;
+			for (const std::string& T : Past) Before += "\n- \"" + T + "\"";
 			const std::string Prompt = "You are " + Name + ", aged " + std::to_string(static_cast<int>(P.AgeYears())) + ", in a band of " +
-				std::to_string(C.Members.size()) + " people living " + Where + ". " +
-				(C.DeathsLately > 2 ? std::to_string(C.DeathsLately) + " of your people have died lately. " : "") +
-				"Your band has " + std::to_string(static_cast<int>(C.Store)) + " kg of food put by.\n" +
+				std::to_string(C.Members.size()) + " people living " + Where + ". " + Life + "\n" +
+				(Before.empty() ? "" : "Things you have thought before:" + Before + "\nThink of something new this time, not the same idea again.\n") +
 				"Your band knows how to: " + (Known.empty() ? "nothing beyond what everyone is born knowing" : Known) + ".\n" +
 				"Materials you have come across: " + (Met.empty() ? "none yet" : Met) + ".\n" +
 				"Things your band has made: " + (Made.empty() ? "nothing yet" : Made) + ".\n" +
 				"Ways anyone could try to work materials (X and Y stand for materials):" + Ways + "\n" +
 				"Things your band could work toward learning next: " + (Toward.empty() ? "nothing" : Toward) + ".\n" +
-				"Think as yourself about your band's life and what would help it most. You know only what is written here; "
-				"do not use anything else you know. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
+				"Think as yourself about your band's life: food, danger, cold, children, the sick, the dead, your gods, your neighbours, "
+				"or a better way to make something. You know only what is written here; do not use anything else you know. Speak "
+				"plainly, as someone of your time would, with no modern words. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
 				"your own voice), \"way\" (the number of one way of working to try), \"material\" (a material you have come across, "
 				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\").";
 			++MindCounts.Asked;
@@ -1250,6 +1264,11 @@ public:
 			++MindCounts.Answered;
 			std::string Thought = minds::JsonString(Answer, "thought");
 			if (Thought.size() > 300) Thought.resize(300);
+			if (!Thought.empty())
+			{
+				Past.push_back(Thought);
+				if (Past.size() > 3) Past.erase(Past.begin());
+			}
 			if (MindCounts.Answered == 1 && !Thought.empty())
 				AddEvent(Name + " has the first real thought anyone in the world has had: \"" + Thought + "\"");
 			std::string Line = "Year " + std::to_string(static_cast<long long>(Eco->Years())) + " | " + Name + " (band of " +
@@ -1275,7 +1294,7 @@ public:
 				Line += " | REFUSED: names a material the band has never met (" + minds::JsonString(Answer, "material") + ", " +
 					minds::JsonString(Answer, "material2") + ")";
 			}
-			else if (W < 0 || W >= static_cast<int>(Ws.size()) || A < 0)
+			else if (W < 0 || W >= static_cast<int>(Ws.size()) || A < 0 || (NeedsB && B < 0))
 			{
 				Line += " | tries nothing";
 			}
@@ -1350,6 +1369,9 @@ public:
 
 private:
 	ThoughtCounts MindCounts;
+	// Each thinker's last few thoughts, so a mind builds on them instead of starting over.
+	// shortcut: not saved, so minds forget them on resume; save them if long memories matter.
+	std::unordered_map<uint32_t, std::vector<std::string>> PastThoughts;
 	Ecosystem* Eco;
 	Rng Dice;
 	uint64_t BaseSeed = 0;
