@@ -75,6 +75,30 @@ static bool FileExists(const std::string& Path)
 	return false;
 }
 
+// Adds a column to a CSV an older build started, so a resumed run's new rows line up with its header.
+// Older rows simply lack it, which the report reads as 0.
+static void AddCsvColumn(const std::string& Path, const std::string& Name)
+{
+	std::string Head;
+	{
+		std::ifstream In(Path);
+		if (!std::getline(In, Head) || ("," + Head + ",").find("," + Name + ",") != std::string::npos) return;
+	}
+	const std::string Tmp = Path + ".tmp";
+	{
+		std::ifstream In(Path, std::ios::binary);
+		std::ofstream Out(Tmp, std::ios::binary);
+		std::string Line;
+		std::getline(In, Line);
+		if (!Line.empty() && Line.back() == '\r') Line.pop_back();
+		Out << Line << ',' << Name << '\n';
+		if (In.peek() != std::char_traits<char>::eof()) Out << In.rdbuf();
+		if (!Out) return; // Disk full or similar: keep the old file as it is.
+	}
+	std::remove(Path.c_str());
+	std::rename(Tmp.c_str(), Path.c_str());
+}
+
 // The key moments of the run so far, oldest first: the world's events and the people's firsts,
 // leaving out the many small ones (each new invention and each first hunt of a kind).
 static void WriteHistory(const std::string& Path, const earth::Ecosystem& Eco, const earth::People& Folk)
@@ -264,6 +288,7 @@ int main(int Argc, char** Argv)
 	const bool Appending = FirstYear > 0 && FileExists(CsvPath);
 	if (!CsvPath.empty() && Appending)
 	{
+		AddCsvColumn(CsvPath, "polities");
 		Csv.open(CsvPath, std::ios::app);
 	}
 	else if (!CsvPath.empty())
@@ -273,7 +298,7 @@ int main(int Argc, char** Argv)
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << ",inventions,beliefs,religions,kindness,curiosity";
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
-		Csv << ",offworld_people\n";
+		Csv << ",offworld_people,polities\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -314,7 +339,7 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
 				<< Folk.AverageCuriosity();
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
-			Csv << ',' << static_cast<long long>(Space.Alive()) << '\n';
+			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << '\n';
 			Csv.flush();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
@@ -338,6 +363,7 @@ int main(int Argc, char** Argv)
 					if (N > 0) Others += (Others.empty() ? "" : ", ") + std::to_string(N) + " " + earth::OtherKinds()[k].Plural;
 				}
 				if (!Others.empty()) std::printf("            NPCs: %d; other kinds of human: %s\n", Folk.AliveOfKind(0), Others.c_str());
+				if (Folk.PolityCount() > 0) std::printf("            %d states (chiefdoms, kingdoms, empires and nations)\n", Folk.PolityCount());
 			}
 			if (!LanguagesPath.empty() && Folk.Alive() > 0)
 			{
@@ -357,6 +383,10 @@ int main(int Argc, char** Argv)
 			if (!InventionsPath.empty())
 			{
 				std::ofstream(InventionsPath) << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": things made from materials, oldest first\n\n" << Folk.InventionsText();
+			}
+			if (WithPeople && Folk.PolityCount() > 0 && !FirstOutput.empty())
+			{
+				std::ofstream(FolderOf(FirstOutput) + "polities.txt") << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the states of the world, biggest first\n\n" << Folk.StatesText();
 			}
 			if (!StoriesPath.empty())
 			{
