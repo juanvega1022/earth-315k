@@ -32,6 +32,8 @@
 #include <cstdio>
 #include <iterator>
 #include <memory>
+#include <mutex>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -1144,11 +1146,18 @@ public:
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 		});
 		StoreFood(Carer, Spare, Days);
-		for (size_t i = 0; i < Count; ++i)
+		// Courting and copying stay within a band, so bands take their turns side by side, each with
+		// its own dice.
+		InParallel(Camps.size(), [&](size_t Here)
 		{
-			MaybeConceive(i, Chosen[i] >= 0 && Dice.Chance(OverDays(Shares[i][static_cast<int>(Action::Socialize)], Days)), Days);
-			Imitate(i, Days);
-		}
+			Rng Mine(BaseSeed ^ (Today * 0x94D049BB133111EBull) ^ (static_cast<uint64_t>(Camps[Here].Id) * 0xBF58476D1CE4E5B9ull));
+			for (int i : Camps[Here].Members)
+			{
+				const size_t I = static_cast<size_t>(i);
+				MaybeConceive(I, Chosen[I] >= 0 && Mine.Chance(OverDays(Shares[I][static_cast<int>(Action::Socialize)], Days)), Days, Mine);
+				Imitate(I, Days, Mine);
+			}
+		});
 
 		LearnSkills(Days);
 		Invent(Days);
@@ -1369,6 +1378,7 @@ public:
 
 private:
 	ThoughtCounts MindCounts;
+	std::mutex EventMutex;
 	// Each thinker's last few thoughts, so a mind builds on them instead of starting over.
 	// shortcut: not saved, so minds forget them on resume; save them if long memories matter.
 	std::unordered_map<uint32_t, std::vector<std::string>> PastThoughts;
@@ -1598,6 +1608,14 @@ private:
 		return In && Livable(Lat, Lon, Fisher);
 	}
 
+	// Runs Body(i) for i in [0, N) on all cores when the pool is up (Step), else in turn (StepDay).
+	void InParallel(size_t N, const std::function<void(size_t)>& Body)
+	{
+		if (Pool) Pool->For(N, Body);
+		else
+			for (size_t i = 0; i < N; ++i) Body(i);
+	}
+
 	int CampSlot(int Id) const
 	{
 		auto It = CampSlots.find(Id);
@@ -1809,8 +1827,9 @@ private:
 			LandClimate = Eco->ClimateVersion();
 			MeasureLand();
 		}
-		for (Camp& C : Camps)
+		InParallel(Camps.size(), [&](size_t Here)
 		{
+			Camp& C = Camps[Here];
 			const int R0 = GridRow(C.Lat);
 			const int C0 = GridCol(C.Lon);
 			double Capacity = 0.0;
@@ -1833,14 +1852,16 @@ private:
 			}
 			Capacity *= C.Effects.Land * NumbersNow(C.Kind);
 			C.Room = Capacity > 0.0 ? static_cast<float>(std::clamp(1.0 - Living / Capacity, 0.0, 1.0)) : 0.0f;
-		}
+		});
 	}
 
 	// Reads what each camp can see and knows today.
 	void SenseCamps(int Days)
 	{
-		for (Camp& C : Camps)
+		// Each camp only writes its own fields here, so camps are worked out on all cores.
+		InParallel(Camps.size(), [&](size_t Here)
 		{
+			Camp& C = Camps[Here];
 			C.Known = 0;
 			for (int i : C.Members)
 			{
@@ -1849,11 +1870,12 @@ private:
 			C.Effects = EffectsOf(C.Known);
 			AddInventionEffects(C.Inventions, C.Known, C.Effects);
 			AddBeliefEffects(C);
-		}
+		});
 		WeighReputations();
 		RememberPlaces(Days);
-		for (Camp& C : Camps)
+		InParallel(Camps.size(), [&](size_t Here)
 		{
+			Camp& C = Camps[Here];
 			C.Nearby = 0;
 			C.Neighbour = 0;
 			for (int r = GridRow(C.Lat) - 1; r <= GridRow(C.Lat) + 1; ++r)
@@ -1871,16 +1893,17 @@ private:
 					}
 				}
 			}
-		}
+		});
 		MeasureRoom();
-		for (Camp& C : Camps)
+		InParallel(Camps.size(), [&](size_t Here)
 		{
+			Camp& C = Camps[Here];
 			C.SeenDanger = static_cast<float>(std::clamp(Eco->PredatorsNear(C.Lat, C.Lon) / 40.0, 0.0, 1.0));
 			C.SeenFood = static_cast<float>(std::clamp(GatherableAt(C.Lat, C.Lon, Fishes(C)) / Settings.GatherableKg, 0.0, 1.0));
 			C.SeenGame = static_cast<float>(std::clamp(Eco->GameNear(C.Lat, C.Lon, 1000.0) / 2000.0, 0.0, 1.0));
 			C.SeenWater = static_cast<float>(WaterFor(C, C.Lat, C.Lon));
 			C.SeenSeason = static_cast<float>(Eco->GrowingSeason(C.Lat));
-		}
+		});
 	}
 
 	// How good a place looks for camp SelfId: food to gather, water and game, minus danger and
@@ -1933,18 +1956,29 @@ private:
 	// have found, or failing that the best-looking place within a day's walk.
 	void MoveCamps(int Days = 1)
 	{
-		for (size_t Slot = 0; Slot < Camps.size(); ++Slot)
+		// Each band weighs where to go on all cores, seeing where everyone was at the start, with its
+		// own dice; then they move in turn.
+		struct Plan
+		{
+			bool Go = false;
+			double Lat = 0.0, Lon = 0.0;
+			const Npc* Elder = nullptr;
+		};
+		std::vector<Plan> Plans(Camps.size());
+		const uint64_t Today = static_cast<uint64_t>(Eco->Day());
+		InParallel(Camps.size(), [&](size_t Slot)
 		{
 			Camp& C = Camps[Slot];
+			Rng Mine(BaseSeed ^ (Today * 0xD6E8FEB86659FD93ull) ^ (static_cast<uint64_t>(C.Id) * 0x9E3779B97F4A7C15ull));
 			C.ScoutScore *= Days == 1 ? 0.995 : std::pow(0.995, Days); // Old news gets less trustworthy.
 			C.DaysHere += Days;
 			const double Here = PlaceScore(C.Lat, C.Lon, C);
 			const double Food = GatherableAt(C.Lat, C.Lon, Fishes(C)) / std::max(1.0, (Eco->PlantCover(C.Lat, C.Lon) + (Fishes(C) ? ShoreFood(C.Lat, C.Lon) : 0.0)) * Settings.GatherableKg);
 			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id, 1) > 0;
-			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Dice.Chance(OverDays(0.02, Days)));
+			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Mine.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
-				continue;
+				return;
 			}
 			double TargetLat = C.Lat;
 			double TargetLon = C.Lon;
@@ -1964,14 +1998,6 @@ private:
 			{
 				TargetLat = Elder->RefugeLat;
 				TargetLon = Elder->RefugeLon;
-				if (!AnyRefuge)
-				{
-					AnyRefuge = true;
-					AddEvent(PersonName(Elder->Name) + ", aged " + std::to_string(static_cast<int>(Elder->AgeYears())) +
-						", leads their band in a hard time to a place they remember from years before");
-					Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before" +
-						Say(C, NameWord(*Elder), {C.Words[7], "come"}, {C.Words[0], "water"}));
-				}
 			}
 			else if (C.ScoutScore > Here + 0.05)
 			{
@@ -1985,7 +2011,7 @@ private:
 				{
 					double La = 0.0;
 					double Lo = 0.0;
-					Offset(C.Lat, C.Lon, (d + Dice.Uniform()) * kPi / 4.0, 25.0, La, Lo);
+					Offset(C.Lat, C.Lon, (d + Mine.Uniform()) * kPi / 4.0, 25.0, La, Lo);
 					const double S = PlaceScore(La, Lo, C);
 					if (S > Best)
 					{
@@ -1994,6 +2020,21 @@ private:
 						TargetLon = Lo;
 					}
 				}
+			}
+			Plans[Slot] = {true, TargetLat, TargetLon, Elder};
+		});
+		for (size_t Slot = 0; Slot < Camps.size(); ++Slot)
+		{
+			if (!Plans[Slot].Go) continue;
+			Camp& C = Camps[Slot];
+			const double TargetLat = Plans[Slot].Lat, TargetLon = Plans[Slot].Lon;
+			if (const Npc* Elder = Plans[Slot].Elder; Elder && !AnyRefuge)
+			{
+				AnyRefuge = true;
+				AddEvent(PersonName(Elder->Name) + ", aged " + std::to_string(static_cast<int>(Elder->AgeYears())) +
+					", leads their band in a hard time to a place they remember from years before");
+				Remember(*Elder, "led their band in a hard time to a well-watered place they remembered from years before" +
+					Say(C, NameWord(*Elder), {C.Words[7], "come"}, {C.Words[0], "water"}));
 			}
 			const double Km = DistanceKm(C.Lat, C.Lon, TargetLat, TargetLon);
 			if (Km < 1.0)
@@ -2506,7 +2547,9 @@ private:
 	}
 
 	// A fertile woman with a fertile man in camp may conceive; more likely if she spent the day with others.
-	void MaybeConceive(size_t Index, bool Socialized, int Days = 1)
+	void MaybeConceive(size_t Index, bool Socialized, int Days = 1) { MaybeConceive(Index, Socialized, Days, Dice); }
+	// R: the dice to throw. Writes only her and her mate, who share her camp.
+	void MaybeConceive(size_t Index, bool Socialized, int Days, Rng& R)
 	{
 		Npc& P = Npcs[Index];
 		// Fewer children as the land around fills up, so numbers level off gently where food runs short.
@@ -2515,7 +2558,7 @@ private:
 		{
 			Room *= 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
 		}
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !Dice.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !R.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
 		{
 			return;
 		}
@@ -2530,7 +2573,7 @@ private:
 			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id)
 			{
 				// Couples tend to stay together: the father of her last child comes first if he's still here.
-				const double Score = Dice.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0) -
+				const double Score = R.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0) -
 					(Q.Kind != P.Kind ? 0.8 : 0.0); // Seldom someone of another kind of human.
 				if (Mate < 0 || Score > Best)
 				{
@@ -2552,6 +2595,8 @@ private:
 		P.BabyFatherShare = Npcs[Mate].OtherShare;
 		if (Npcs[Mate].Kind != P.Kind && !AnyMixedChild)
 		{
+			std::lock_guard<std::mutex> Lock(EventMutex); // Bands work this out side by side in Step.
+			if (AnyMixedChild) return;
 			AnyMixedChild = true;
 			AddEvent(PersonName(P.Name) + ", " + KindName(P.Kind) + ", and " + PersonName(Npcs[Mate].Name) + ", " + KindName(Npcs[Mate].Kind) +
 				", have a child together: the first child of two kinds of human");
@@ -3029,9 +3074,16 @@ private:
 		constexpr double kPacePeople = 3000.0;
 		const double PaceRef = kPacePeople * Settings.PeoplePerKm2 / 0.0003;
 		std::array<int, kMaxSkills> Able{};
-		for (const Npc& P : Npcs)
-			if (P.AgeYears() >= 5.0)
-				for (int k = 0; k < Count; ++k) Able[static_cast<size_t>(k)] += CanDiscover(P.Skills, k);
+		constexpr size_t kBlock = 4096;
+		std::vector<std::array<int, kMaxSkills>> BlockAble((Npcs.size() + kBlock - 1) / kBlock);
+		InParallel(BlockAble.size(), [&](size_t b)
+		{
+			for (size_t i = b * kBlock; i < std::min(Npcs.size(), (b + 1) * kBlock); ++i)
+				if (Npcs[i].AgeYears() >= 5.0)
+					for (int k = 0; k < Count; ++k) BlockAble[b][static_cast<size_t>(k)] += CanDiscover(Npcs[i].Skills, k);
+		});
+		for (const auto& B : BlockAble)
+			for (int k = 0; k < Count; ++k) Able[static_cast<size_t>(k)] += B[static_cast<size_t>(k)];
 		// The chance grows with time since a skill became findable (a Weibull wait of shape 3 with
 		// mean YearsToFind), so a first find long before its time is rare, and so is one long overdue.
 		const double Now = Eco->Years();
@@ -3060,12 +3112,18 @@ private:
 		double MeanGift = 0.0;
 		for (const Npc& P : Npcs) MeanGift += Smarts(P) * Smarts(P) * P.Genes->Curiosity;
 		MeanGift = Npcs.empty() ? 1.0 : std::max(1e-6, MeanGift / static_cast<double>(Npcs.size()));
-		for (Npc& P : Npcs)
+		// Everyone at once on all cores, each with their own dice so the result doesn't depend on
+		// how the work is split; first finds, which touch the whole world's record, are noted after.
+		std::vector<int8_t> Found(Npcs.size(), -1);
+		const uint64_t Today = static_cast<uint64_t>(Eco->Day());
+		InParallel(Npcs.size(), [&](size_t Index)
 		{
+			Npc& P = Npcs[Index];
 			if (P.AgeYears() < 5.0)
 			{
-				continue;
+				return;
 			}
+			Rng Mine(BaseSeed ^ (Today * 0xA24BAED4963EE407ull) ^ (static_cast<uint64_t>(P.Id) * 0x9FB21C651E98DF25ull));
 			const double Wits = Smarts(P);
 			const Camp& C = Camps[CampSlot(P.Camp)];
 			// Something new: rarer the deeper it is, likelier for the curious and the clever.
@@ -3079,14 +3137,15 @@ private:
 					Total += Odds[k];
 				}
 			}
-			double Pick = Dice.Uniform();
+			double Pick = Mine.Uniform();
 			if (Pick < Total)
 			{
 				for (int k = 0; k < Count; ++k)
 				{
 					if ((Pick -= Odds[k]) < 0.0)
 					{
-						Discover(P, k);
+						P.LearnSkill(k);
+						Found[Index] = static_cast<int8_t>(k);
 						break;
 					}
 				}
@@ -3099,13 +3158,15 @@ private:
 				const double Neighbours = OverDays(std::min(0.5, 0.0002 * C.Effects.Teaching * Wits), Days);
 				for (int k = 0; k < Count; ++k)
 				{
-					if (Knows(Missing, k) && CanDiscover(P.Skills, k) && Dice.Chance(Knows(C.Known, k) ? InCamp : Neighbours))
+					if (Knows(Missing, k) && CanDiscover(P.Skills, k) && Mine.Chance(Knows(C.Known, k) ? InCamp : Neighbours))
 					{
 						P.LearnSkill(k);
 					}
 				}
 			}
-		}
+		});
+		for (size_t i = 0; i < Npcs.size(); ++i)
+			if (Found[i] >= 0) Discover(Npcs[i], Found[i]);
 		NoteSkills();
 	}
 
@@ -3360,16 +3421,29 @@ private:
 	// each band's most trusted adult.
 	void WeighReputations()
 	{
-		for (Npc& P : Npcs) P.Reputation = 0.0f;
-		for (const Npc& P : Npcs)
+		// Npcs are sorted by id; searching a flat list of ids is far faster than the records themselves.
+		std::vector<uint32_t> Ids(Npcs.size());
+		for (size_t i = 0; i < Npcs.size(); ++i) Ids[i] = Npcs[i].Id;
+		auto IndexOf = [&](uint32_t Id) -> long
+		{
+			auto It = std::lower_bound(Ids.begin(), Ids.end(), Id);
+			return It != Ids.end() && *It == Id ? static_cast<long>(It - Ids.begin()) : -1;
+		};
+		// Finding who each bond points at is the slow part, so that runs on all cores; adding up stays
+		// in order, so the sums come out the same however the work is split.
+		std::vector<long> Target(Npcs.size() * Npc::kBonds, -1);
+		InParallel(Npcs.size(), [&](size_t i)
 		{
 			for (int b = 0; b < Npc::kBonds; ++b)
+				if (Npcs[i].BondWith[b] != 0) Target[i * Npc::kBonds + static_cast<size_t>(b)] = IndexOf(Npcs[i].BondWith[b]);
+		});
+		for (Npc& P : Npcs) P.Reputation = 0.0f;
+		for (size_t i = 0; i < Npcs.size(); ++i)
+			for (int b = 0; b < Npc::kBonds; ++b)
 			{
-				if (P.BondWith[b] == 0) continue;
-				auto It = std::lower_bound(Npcs.begin(), Npcs.end(), P.BondWith[b], [](const Npc& N, uint32_t V) { return N.Id < V; });
-				if (It != Npcs.end() && It->Id == P.BondWith[b]) It->Reputation += P.Trust[b];
+				const long At = Target[i * Npc::kBonds + static_cast<size_t>(b)];
+				if (At >= 0) Npcs[static_cast<size_t>(At)].Reputation += Npcs[i].Trust[b];
 			}
-		}
 		for (Camp& C : Camps)
 		{
 			int Hungriest = -1, Richest = -1, Leader = -1, Sitting = -1;
@@ -3413,8 +3487,8 @@ private:
 		for (Npc& P : Npcs) P.Leads = false;
 		for (const Camp& C : Camps)
 		{
-			auto It = C.Leader ? std::lower_bound(Npcs.begin(), Npcs.end(), C.Leader, [](const Npc& N, uint32_t V) { return N.Id < V; }) : Npcs.end();
-			if (It != Npcs.end() && It->Id == C.Leader) It->Leads = true;
+			const long At = C.Leader ? IndexOf(C.Leader) : -1;
+			if (At >= 0) Npcs[static_cast<size_t>(At)].Leads = true;
 		}
 	}
 
@@ -3835,10 +3909,12 @@ private:
 	}
 
 	// Sometimes copies the habits of an older camp mate who is doing better.
-	void Imitate(size_t Index, int Days = 1)
+	void Imitate(size_t Index, int Days = 1) { Imitate(Index, Days, Dice); }
+	// Copies only from camp mates, so camps can imitate side by side.
+	void Imitate(size_t Index, int Days, Rng& R)
 	{
 		Npc& P = Npcs[Index];
-		if (P.IsChild() || !Dice.Chance(OverDays(P.Genes->Imitation, Days)))
+		if (P.IsChild() || !R.Chance(OverDays(P.Genes->Imitation, Days)))
 		{
 			return;
 		}
@@ -3846,7 +3922,7 @@ private:
 		int Best = -1;
 		for (int Try = 0; Try < 5 && !Mates.empty(); ++Try)
 		{
-			const int j = Mates[static_cast<size_t>(Dice.Next() % Mates.size())];
+			const int j = Mates[static_cast<size_t>(R.Next() % Mates.size())];
 			const Npc& Q = Npcs[j];
 			if (j != static_cast<int>(Index) && Q.AgeDays > P.AgeDays && Q.Wellbeing > P.Wellbeing &&
 				(Best < 0 || Q.Wellbeing > Npcs[Best].Wellbeing))
