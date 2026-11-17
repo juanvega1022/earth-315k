@@ -7,6 +7,7 @@
 #include "PlanetCore/WorldSave.h"
 #include "Atlas.h"
 #include "RunReport.h"
+#include "StatesMap.h"
 
 #include <algorithm>
 #include <chrono>
@@ -276,6 +277,10 @@ int main(int Argc, char** Argv)
 		}
 	};
 
+	// The states' history: a snapshot every 10 lived years once there are any (see StatesMap.h).
+	const std::string StatesJs = FirstOutput.empty() || !WithPeople ? std::string() : FolderOf(FirstOutput) + "states_history.js";
+	size_t StateEventsDone = FileExists(StatesJs) ? Folk.Firsts().size() : 0;
+	if (!StatesJs.empty()) WriteStatesPage(FolderOf(FirstOutput) + "states.html", "states_history.js");
 	const std::string MindsLog = (FirstOutput.empty() ? std::string() : FolderOf(FirstOutput)) + "minds.txt";
 	const earth::Thinker Mind = earth::minds::OllamaThinker(MindModel, MindsLog + ".request.json");
 	if (Minds > 0) std::printf("Thinking minds: %d a year, with %s through Ollama; thoughts go to %s\n", Minds, MindModel.c_str(), MindsLog.c_str());
@@ -341,6 +346,11 @@ int main(int Argc, char** Argv)
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
 			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << '\n';
 			Csv.flush();
+		}
+		if (!StatesJs.empty() && Folk.PolityCount() > 0 && Lived % 10 == 0)
+		{
+			AppendStatesFrame(StatesJs, Eco, Folk, Y, StateEventsDone);
+			std::ofstream(FolderOf(FirstOutput) + "polities.txt") << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the states of the world, biggest first\n\n" << Folk.StatesText();
 		}
 		// At least every 1,000 years, so long runs can be followed while they go.
 		const int Every = std::min(1000, TotalYears >= 100 ? TotalYears / 10 : 10);
