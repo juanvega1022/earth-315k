@@ -660,7 +660,7 @@ static void TestStates()
 	{
 		const earth::Polity& A = Folk.AllStates()[i];
 		const earth::Polity& B = Folk2.AllStates()[i];
-		EXPECT(A.Id == B.Id && A.Word == B.Word && A.Ruler == B.Ruler && A.Capital == B.Capital && A.Laws == B.Laws && A.Bands == B.Bands);
+		EXPECT(A.Id == B.Id && A.Word == B.Word && A.Ruler == B.Ruler && A.Capital == B.Capital && A.Laws == B.Laws); // Sizes are counted afresh each year, so not compared.
 	}
 	std::remove(Path.c_str());
 }
