@@ -555,6 +555,38 @@ public:
 		return static_cast<int>(N / 2);
 	}
 	double WorldTradePerYear() const { return WorldTrade; }
+	// People living in cities, in the whole world and in its biggest city.
+	long long CityPeopleTotal() const
+	{
+		long long N = 0;
+		for (const Polity& S : States) N += S.CityPeople;
+		return N;
+	}
+	int BiggestCity() const
+	{
+		int N = 0;
+		for (const Polity& S : States) N = std::max(N, S.CapitalPeople);
+		return N;
+	}
+	// The cities of the world, biggest first.
+	std::string CitiesText() const
+	{
+		std::vector<const Polity*> List;
+		for (const Polity& S : States)
+			if (S.City) List.push_back(&S);
+		std::sort(List.begin(), List.end(), [](const Polity* A, const Polity* B) { return A->CapitalPeople != B->CapitalPeople ? A->CapitalPeople > B->CapitalPeople : A->Id < B->Id; });
+		long long Urban = CityPeopleTotal();
+		std::string Out = std::to_string(Urban) + " people live in cities, " + std::to_string(static_cast<int>(100.0 * static_cast<double>(Urban) / std::max(1, Alive()))) +
+			"% of the world\n\n";
+		char Buf[200];
+		for (const Polity* S : List)
+		{
+			std::snprintf(Buf, sizeof(Buf), " (%.1f, %.1f): %d people; %d cities in the state, %d people in them (%d%% of its people)\n", S->Lat, S->Lon, S->CapitalPeople, S->Towns,
+				S->CityPeople, static_cast<int>(100.0 * S->CityPeople / std::max(1, S->Members)));
+			Out += PersonName(S->City) + ", capital of " + StateName(*S) + Buf;
+		}
+		return Out;
+	}
 	const Polity* StateById(uint32_t Id) const
 	{
 		auto It = std::lower_bound(States.begin(), States.end(), Id, [](const Polity& S, uint32_t V) { return S.Id < V; });
@@ -588,7 +620,7 @@ public:
 			std::snprintf(Buf, sizeof(Buf), ", a %s of %d bands and %d people, founded in year %.0f\n", TierName(S->Tier), S->Bands, S->Members, S->Founded);
 			Out += N + Buf;
 			std::snprintf(Buf, sizeof(Buf), " near %.1f, %.1f in %s\n", S->Lat, S->Lon, Lands[RegionOf(S->Lat, S->Lon)]);
-			Out += "  Capital: " + (S->City ? "the city of " + PersonName(S->City) : std::string("the ruler's camp")) + Buf;
+			Out += "  Capital: " + (S->City ? "the city of " + PersonName(S->City) + " (" + std::to_string(S->CapitalPeople) + " people)" : std::string("the ruler's camp")) + Buf;
 			Out += "  Ruler: " + (S->Ruler ? PersonName(S->RulerName) + " #" + std::to_string(S->Ruler) : std::string("nobody")) + ", ruler number " +
 				std::to_string(S->Rulers) + "; the next is " + (S->Rule == 0 ? "the ruler's eldest child" : "whoever the capital trusts most") + "\n";
 			if (S->Faith && S->Faith <= BeliefLog.size())
@@ -680,6 +712,7 @@ public:
 		if (Ar.Version >= 14) Ar.Io(States), Ar.Io(NextStateId), Ar.Io(StateDays), Ar.Io(TiersSeen), Ar.Io(NextStateMark), Ar.Io(StatesFounded), Ar.Io(AnyLaw);
 		if (Ar.Version >= 15) Ar.Io(Diseases), Ar.Io(DiseaseDays), Ar.Io(DiseaseDeaths);
 		if (Ar.Version >= 16) Ar.Io(AnyRoute), Ar.Io(AnySeaRoute), Ar.Io(WorldTrade);
+		if (Ar.Version >= 17) Ar.Io(NextCityMark);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1593,6 +1626,7 @@ private:
 	int StateDays = 0;          // Days since states last took their yearly turn.
 	uint8_t TiersSeen = 0;      // Bits of the tiers that have ever existed.
 	int NextStateMark = 10;
+	int NextCityMark = 100;
 	int StatesFounded = 0;
 	bool AnyLaw = false;
 	bool AnyRoute = false, AnySeaRoute = false;
@@ -4554,7 +4588,7 @@ private:
 		for (const Polity& S : States)
 		{
 			auto It = CampSlots.find(S.Capital);
-			if (S.City && It != CampSlots.end() && !Camps[static_cast<size_t>(It->second)].Sick && Has(S.Known, Cities) && Dice.Chance(1e-4) && Diseases.size() < 60000)
+			if (S.City && It != CampSlots.end() && !Camps[static_cast<size_t>(It->second)].Sick && Has(S.Known, Cities) && Dice.Chance(1e-4 * std::clamp(S.CapitalPeople / 500.0, 1.0, 10.0)) && Diseases.size() < 60000)
 				NewDisease(static_cast<size_t>(It->second), -1);
 		}
 	}
@@ -4690,6 +4724,19 @@ private:
 		{
 			auto R = Rich.find(S.Id);
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
+			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
+			S.CityPeople = S.CapitalPeople = S.Towns = 0;
+			if (!S.City) continue;
+			static const std::pair<int, double> Urbanizing[] = {{SkillNamed("cities"), 0.05}, {SkillNamed("money"), 0.02}, {SkillNamed("roads"), 0.02},
+				{SkillNamed("irrigation"), 0.01}, {SkillNamed("printing"), 0.02}, {SkillNamed("factories"), 0.08}, {SkillNamed("railways"), 0.07},
+				{SkillNamed("electricity"), 0.08}, {SkillNamed("fertilizers"), 0.06}, {SkillNamed("engines"), 0.05}, {SkillNamed("computers"), 0.05},
+				{SkillNamed("the internet"), 0.03}};
+			double Share = 0.03;
+			for (const auto& [Skill, More] : Urbanizing)
+				if (Has(S.Known, Skill)) Share += More;
+			S.Towns = std::max(1, S.Bands / 6);
+			S.CityPeople = static_cast<int>(S.Members * Share);
+			S.CapitalPeople = S.Towns == 1 ? S.CityPeople : static_cast<int>(S.CityPeople * 0.3);
 		}
 		return Of;
 	}
@@ -4988,6 +5035,13 @@ private:
 			AddEvent(std::to_string(NextStateMark) + " states in the world at once");
 			NextStateMark *= 2;
 		}
+		// The first city to reach 100, 1,000, 10,000 people and on.
+		for (const Polity& S : States)
+			while (S.City && S.CapitalPeople >= NextCityMark)
+			{
+				AddEvent("The city of " + PersonName(S.City) + " in " + StateName(S) + " is the first with " + std::to_string(NextCityMark) + " people");
+				NextCityMark *= 10;
+			}
 	}
 
 	// The nearest band of another state to a state's capital, and that state.

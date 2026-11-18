@@ -652,6 +652,15 @@ static void TestStates()
 	};
 	Folk.Think(Lawgiver, static_cast<int>(Folk.AllCamps().size()));
 	EXPECT(Folk.StatesText().find("Law: Share the harvest") != std::string::npos);
+	// A ruler builds a city, and people come to live in it.
+	const earth::Thinker Builder = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"city\"}" : "{\"thought\": \"x\"}");
+	};
+	Folk.Think(Builder, static_cast<int>(Folk.AllCamps().size()));
+	for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	EXPECT(Folk.BiggestCity() > 0 && Folk.CityPeopleTotal() >= Folk.BiggestCity());
+	EXPECT(Folk.CitiesText().find(", capital of ") != std::string::npos);
 	// States near each other open trade.
 	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
