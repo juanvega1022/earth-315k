@@ -667,8 +667,41 @@ static void TestStates()
 	std::remove(Path.c_str());
 }
 
+// A sickness passes from band to band and kills; those who lived through it don't catch it again
+// soon, and it survives a save.
+static void TestDiseases()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
+	earth::PeopleSettings Settings;
+	Settings.StartCount = 300; // Several bands close together.
+	earth::People Folk(&Eco, 8, Settings);
+	for (int i = 0; i < 13; ++i) Eco.Step(28), Folk.Step(28);
+	EXPECT(Folk.BandCount() >= 3);
+	const long long DeadBefore = Folk.TotalDeaths();
+	const uint16_t Id = Folk.StartDisease(0, -1, 0.4f, 2.0f, 60);
+	int MostSick = 0;
+	for (int i = 0; i < 26; ++i)
+	{
+		Eco.Step(28), Folk.Step(28);
+		MostSick = std::max(MostSick, Folk.SickBands());
+	}
+	const earth::Disease& D = Folk.AllDiseases()[Id - 1u];
+	EXPECT(D.Killed > 0 && Folk.DiseaseDeathsSoFar() == D.Killed && Folk.TotalDeaths() >= DeadBefore + D.Killed);
+	EXPECT(D.Bands >= 2); // It spread.
+	EXPECT(Folk.DiseasesText().find("a sickness of crowds") != std::string::npos);
+	const std::string Path = "diseases_test.bin";
+	EXPECT(earth::SaveWorld(Path, Eco, Folk));
+	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 8);
+	earth::People Folk2(&Eco2, 8, Settings);
+	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
+	EXPECT(Folk2.AllDiseases().size() == Folk.AllDiseases().size() && Folk2.DiseasesText() == Folk.DiseasesText());
+	std::remove(Path.c_str());
+}
+
 int main()
 {
+	TestDiseases();
 	TestStates();
 	TestColonies();
 	TestThinkingMinds();

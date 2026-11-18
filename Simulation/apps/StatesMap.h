@@ -22,7 +22,7 @@ inline std::string Capital(std::string S)
 inline bool IsStateEvent(const std::string& T)
 {
 	for (const char* K : {"chiefdom", "kingdom", "empire", "nation of", " state", "war ", "war with", "Peace between", "allies", "law",
-			 "city of", "throne", "revolt", "rises up", "prophet", " falls"})
+			 "city of", "throne", "revolt", "rises up", "prophet", " falls", "plague", "sickness"})
 		if (T.find(K) != std::string::npos) return true;
 	return false;
 }
