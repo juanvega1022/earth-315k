@@ -678,6 +678,8 @@ static void TestStates()
 	}
 	EXPECT(!Folk.AllBattles().empty());
 	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
+	// Farmed fields wear.
+	EXPECT(Folk.FarmedSquares() > 0 && Folk.AverageWear() > 0.0);
 	const std::string Path = "states_test.bin";
 	EXPECT(earth::SaveWorld(Path, Eco, Folk));
 	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
@@ -685,6 +687,7 @@ static void TestStates()
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
+	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
 	{
 		const earth::Polity& A = Folk.AllStates()[i];

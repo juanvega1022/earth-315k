@@ -38,6 +38,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace earth
@@ -555,6 +556,15 @@ public:
 		return static_cast<int>(N / 2);
 	}
 	double WorldTradePerYear() const { return WorldTrade; }
+	// Farmed squares and how worn their soil is on average (0 .. 0.5), and forest cleared for fields in km2.
+	int FarmedSquares() const { return static_cast<int>(Worn.size()); }
+	double AverageWear() const
+	{
+		double T = 0.0;
+		for (const auto& [Key, W] : Worn) T += W;
+		return Worn.empty() ? 0.0 : T / static_cast<double>(Worn.size());
+	}
+	double ForestClearedKm2() const { return ForestCleared * 750.0; } // shortcut: a quarter-degree square is about 750 km2 at mid latitudes.
 	// Gt of CO2 burned last year.
 	double FuelPerYear() const { return FuelThisYear; }
 	// Everyone killed in war and driven from home by it, and the latest battles, newest first.
@@ -734,6 +744,7 @@ public:
 		if (Ar.Version >= 17) Ar.Io(NextCityMark);
 		if (Ar.Version >= 18) Ar.Io(Battles), Ar.Io(WarDead), Ar.Io(Refugees), Ar.Io(DeadliestBattle);
 		if (Ar.Version >= 19) Ar.Io(NextWarmMark), Ar.Io(FuelRunningOut);
+		if (Ar.Version >= 20) Ar.Io(Worn), Ar.Io(ForestCleared), Ar.Io(AnyCollapse);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1652,6 +1663,9 @@ private:
 	long long WarDead = 0, Refugees = 0;
 	int DeadliestBattle = 0;
 	int NextWarmMark = 1;
+	std::unordered_map<int64_t, double> Worn; // How worn out each farmed square's soil is, 0 .. 0.5.
+	int ForestCleared = 0;                     // Forest squares cleared for fields.
+	bool AnyCollapse = false;
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -1945,7 +1959,8 @@ private:
 	// Plant food left at a spot, plus shellfish and fish on a shore for a band that fishes.
 	double GatherableAt(double Lat, double Lon, bool Shore = false) const
 	{
-		const double Full = (Eco->PlantCover(Lat, Lon) + (Shore ? ShoreFood(Lat, Lon) : 0.0)) * Settings.GatherableKg;
+		double Full = (Eco->PlantCover(Lat, Lon) + (Shore ? ShoreFood(Lat, Lon) : 0.0)) * Settings.GatherableKg;
+		if (auto W = Worn.find(KeyOf(Lat, Lon)); W != Worn.end()) Full *= 1.0 - W->second;
 		auto It = Gathered.find(KeyOf(Lat, Lon));
 		return std::max(0.0, Full - (It == Gathered.end() ? 0.0 : It->second));
 	}
@@ -4668,6 +4683,44 @@ private:
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
 	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	// Once a year: fields farmed year after year wear out (faster where they are watered, as salt
+	// builds up; slower with herds' dung and far slower with fertilizers), and rest back when left.
+	// Farming forest clears it. A state whose fields are worn out may collapse.
+	void WearLand()
+	{
+		static const int Farming = SkillNamed("farming"), Irrigation = SkillNamed("irrigation"), Herding = SkillNamed("herding"), Fertilizers = SkillNamed("fertilizers");
+		std::unordered_set<int64_t> Farmed;
+		std::unordered_map<uint32_t, std::pair<double, int>> StateWear;
+		for (const Camp& C : Camps)
+		{
+			if (!Has(C.Known, Farming) || C.Members.empty()) continue;
+			const int64_t Key = KeyOf(C.Lat, C.Lon);
+			if (!Farmed.insert(Key).second) continue;
+			auto [It, New] = Worn.emplace(Key, 0.0);
+			if (New && Eco->PlantCover(C.Lat, C.Lon) > 0.6) ForestCleared += 1;
+			const double Wear = 0.0005 * (Has(C.Known, Irrigation) ? 2.0 : 1.0) * (Has(C.Known, Herding) ? 0.6 : 1.0) * (Has(C.Known, Fertilizers) ? 0.2 : 1.0);
+			It->second = std::min(0.5, It->second + Wear);
+			if (C.State) StateWear[C.State].first += It->second, StateWear[C.State].second += 1;
+		}
+		for (auto It = Worn.begin(); It != Worn.end();)
+		{
+			if (!Farmed.count(It->first)) It->second -= 0.02;
+			It = It->second <= 0.0 ? Worn.erase(It) : std::next(It);
+		}
+		for (Polity& S : States)
+		{
+			auto W = StateWear.find(S.Id);
+			if (W == StateWear.end() || W->second.first / W->second.second < 0.35 || !Dice.Chance(0.05)) continue;
+			for (Camp& C : Camps)
+				if (C.State == S.Id) C.State = 0;
+			S.Conquests = -1; // Not a plain fall: told here.
+			std::string T = StateName(S) + " collapses: its worn-out fields can no longer feed its people";
+			T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+			if (S.Tier >= Kingdom || !AnyCollapse) AddEvent(T);
+			AnyCollapse = true;
+		}
+	}
+
 	// Tonnes of CO2 a year each person in a state burns, from steam to engines and power stations;
 	// clean power cuts it.
 	static double FuelPerHead(SkillSet Known)
@@ -5147,6 +5200,7 @@ private:
 			}
 		}
 
+		WearLand();
 		// States left with no bands fall.
 		Of = TallyStates();
 		for (const Polity& S : States)
