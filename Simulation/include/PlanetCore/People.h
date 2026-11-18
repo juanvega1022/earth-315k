@@ -565,6 +565,10 @@ public:
 		return Worn.empty() ? 0.0 : T / static_cast<double>(Worn.size());
 	}
 	double ForestClearedKm2() const { return ForestCleared * 750.0; } // shortcut: a quarter-degree square is about 750 km2 at mid latitudes.
+	// Over the last year: mean age at death, and births and deaths for every thousand alive.
+	double LifeExpectancyYears() const { return LifeExpectancy; }
+	double BirthsPer1000() const { return BirthRate; }
+	double DeathsPer1000() const { return DeathRate; }
 	// Share of the world's people who can read, and its universities.
 	double WorldLiteracy() const
 	{
@@ -762,6 +766,8 @@ public:
 		if (Ar.Version >= 19) Ar.Io(NextWarmMark), Ar.Io(FuelRunningOut);
 		if (Ar.Version >= 20) Ar.Io(Worn), Ar.Io(ForestCleared), Ar.Io(AnyCollapse);
 		if (Ar.Version >= 21) Ar.Io(AnySchool), Ar.Io(AnyLibrary), Ar.Io(AnyUniversity);
+		if (Ar.Version >= 22) Ar.Io(NextLifeMark);
+		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1684,6 +1690,9 @@ private:
 	int ForestCleared = 0;                     // Forest squares cleared for fields.
 	bool AnyCollapse = false;
 	bool AnySchool = false, AnyLibrary = false, AnyUniversity = false;
+	int NextLifeMark = 40;
+	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
+	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -2826,6 +2835,8 @@ private:
 		{
 			Room *= 1.0 - static_cast<double>(Npcs.size()) / Settings.MaxPeople;
 		}
+		const Camp& Home = Camps[CampSlot(P.Camp)];
+		if (const Polity* S = Home.State ? StateById(Home.State) : nullptr) Room *= S->Fertility;
 		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !R.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
 		{
 			return;
@@ -4469,6 +4480,7 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
+		AgeAtDeath += P.AgeYears(), ++DeathsThisYear;
 		if (!Camps.empty())
 		{
 			Camp& C = Camps[CampSlot(P.Camp)];
@@ -4709,7 +4721,22 @@ private:
 	}
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
-	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	// Once a year: how long people live, and how many are born and die for every thousand alive.
+	void Census()
+	{
+		const double Alive = std::max(1.0, static_cast<double>(Npcs.size()));
+		if (DeathsThisYear > 0) LifeExpectancy = AgeAtDeath / static_cast<double>(DeathsThisYear); // shortcut: mean age at death, right for a steady population.
+		BirthRate = BirthsAtCensus < 0 ? 0.0 : 1000.0 * static_cast<double>(Births - BirthsAtCensus) / Alive; // The first year after a start or a load is partial.
+		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
+		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
+		AgeAtDeath = 0.0, DeathsThisYear = 0, BirthsAtCensus = Births;
+		while (Enough && LifeExpectancy >= NextLifeMark)
+		{
+			AddEvent("People now live " + std::to_string(NextLifeMark) + " years on average");
+			NextLifeMark += 10;
+		}
+	}
+
 	// Once a year: states with writing open schools and, in their cities, libraries; once there are
 	// universities, those too. Printing, then electricity, put a school within reach of every child.
 	void Institutions(Polity& S)
@@ -4850,6 +4877,7 @@ private:
 			AddEvent(Where + ": " + B.Winner + " besieges " + B.Loser + "'s capital; " + std::to_string(Dead) + " killed");
 	}
 
+	// How much fighting a state can field: its people, armed with what any of them knows how to make.
 	double StrengthOf(const Polity& S) const
 	{
 		static const std::vector<int> Arms = []
@@ -4933,6 +4961,7 @@ private:
 		{
 			auto R = Rich.find(S.Id);
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
+			S.Fertility = 1.0f; // Set with the cities below.
 			S.Literacy = std::min(0.95f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members)));
 			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
 			S.CityPeople = S.CapitalPeople = S.Towns = 0;
@@ -4947,6 +4976,8 @@ private:
 			S.Towns = std::max(1, S.Bands / 6);
 			S.CityPeople = static_cast<int>(S.Members * Share);
 			S.CapitalPeople = S.Towns == 1 ? S.CityPeople : static_cast<int>(S.CityPeople * 0.3);
+			// The demographic transition: where most read and many live in towns, families get smaller.
+			S.Fertility = static_cast<float>(1.0 - 0.65 * S.Literacy * std::min(1.0, 2.0 * Share));
 		}
 		return Of;
 	}
@@ -4982,6 +5013,7 @@ private:
 		StateDays += Days;
 		if (StateDays < 365) return;
 		StateDays -= 365;
+		Census();
 		static const int Villages = SkillNamed("villages"), Farming = SkillNamed("farming"), Writing = SkillNamed("writing"),
 			Cities = SkillNamed("cities"), LawSkill = SkillNamed("laws"), Money = SkillNamed("money"), Roads = SkillNamed("roads"),
 			Printing = SkillNamed("printing");

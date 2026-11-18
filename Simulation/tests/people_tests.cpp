@@ -687,6 +687,8 @@ static void TestStates()
 	}
 	EXPECT(!Folk.AllBattles().empty());
 	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
+	// The yearly census counts how long people live and how many are born and die.
+	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
 	// Farmed fields wear.
 	EXPECT(Folk.FarmedSquares() > 0 && Folk.AverageWear() > 0.0);
 	const std::string Path = "states_test.bin";

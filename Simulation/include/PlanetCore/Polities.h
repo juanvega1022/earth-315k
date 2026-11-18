@@ -56,6 +56,7 @@ struct Polity
 	int CapitalPeople = 0;   // How many live in its capital city.
 	int Towns = 0;           // How many cities it has.
 	float Literacy = 0.0f;   // Share of its people who can read.
+	float Fertility = 1.0f;  // How many children its people have, against the old way: fewer once most read and live in towns.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>
