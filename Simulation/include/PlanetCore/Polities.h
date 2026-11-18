@@ -43,6 +43,8 @@ struct Polity
 	std::vector<std::string> Laws; // Given by its thinking rulers, newest last.
 	std::vector<uint32_t> Partners; // States it trades with.
 	double Wealth = 0.0;            // What its trade has earned, in kg of food's worth.
+	uint16_t Schools = 0, Libraries = 0, Universities = 0;
+	SkillSet Written = 0;           // What its libraries hold: kept even if everyone who knew it dies.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -53,6 +55,7 @@ struct Polity
 	int CityPeople = 0;      // How many of its people live in its cities.
 	int CapitalPeople = 0;   // How many live in its capital city.
 	int Towns = 0;           // How many cities it has.
+	float Literacy = 0.0f;   // Share of its people who can read.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>
@@ -61,6 +64,7 @@ struct Polity
 		Ar.Io(Id), Ar.Io(Word), Ar.Io(Tier), Ar.Io(Rule), Ar.Io(Capital), Ar.Io(City), Ar.Io(Ruler), Ar.Io(RulerName), Ar.Io(Rulers);
 		Ar.Io(Founder), Ar.Io(Faith), Ar.Io(Founded), Ar.Io(Treasury), Ar.Io(Enemy), Ar.Io(WarYears), Ar.Io(Conquests), Ar.Io(Allies), Ar.Io(Laws);
 		if (Ar.Version >= 16) Ar.Io(Partners), Ar.Io(Wealth);
+		if (Ar.Version >= 21) Ar.Io(Schools), Ar.Io(Libraries), Ar.Io(Universities), Ar.Io(Written);
 	}
 };
 

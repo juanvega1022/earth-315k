@@ -565,6 +565,19 @@ public:
 		return Worn.empty() ? 0.0 : T / static_cast<double>(Worn.size());
 	}
 	double ForestClearedKm2() const { return ForestCleared * 750.0; } // shortcut: a quarter-degree square is about 750 km2 at mid latitudes.
+	// Share of the world's people who can read, and its universities.
+	double WorldLiteracy() const
+	{
+		double R = 0.0;
+		for (const Polity& S : States) R += S.Literacy * S.Members;
+		return R / std::max(1, Alive());
+	}
+	int WorldUniversities() const
+	{
+		int N = 0;
+		for (const Polity& S : States) N += S.Universities;
+		return N;
+	}
 	// Gt of CO2 burned last year.
 	double FuelPerYear() const { return FuelThisYear; }
 	// Everyone killed in war and driven from home by it, and the latest battles, newest first.
@@ -664,6 +677,9 @@ public:
 			for (uint32_t P : S->Partners)
 				if (const Polity* T = StateById(P)) Traders += (Traders.empty() ? "" : ", ") + StateName(*T);
 			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
+			if (S->Schools || S->Libraries || S->Universities)
+				Out += "  Schools: " + std::to_string(S->Schools) + ", libraries: " + std::to_string(S->Libraries) + ", universities: " + std::to_string(S->Universities) + "; " +
+					std::to_string(static_cast<int>(100.0f * S->Literacy)) + "% can read\n";
 			if (const Polity* E = StateById(S->Enemy)) Out += "  At war with " + StateName(*E) + " for " + std::to_string(S->WarYears) + " years\n";
 			std::string Friends;
 			for (uint32_t A : S->Allies)
@@ -745,6 +761,7 @@ public:
 		if (Ar.Version >= 18) Ar.Io(Battles), Ar.Io(WarDead), Ar.Io(Refugees), Ar.Io(DeadliestBattle);
 		if (Ar.Version >= 19) Ar.Io(NextWarmMark), Ar.Io(FuelRunningOut);
 		if (Ar.Version >= 20) Ar.Io(Worn), Ar.Io(ForestCleared), Ar.Io(AnyCollapse);
+		if (Ar.Version >= 21) Ar.Io(AnySchool), Ar.Io(AnyLibrary), Ar.Io(AnyUniversity);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1459,7 +1476,7 @@ public:
 				if (const Polity* E = StateById(Realm->Enemy)) Life += "It is at war with " + StateName(*E) + ". ";
 				for (const std::string& L : Realm->Laws) Life += "One of its laws: " + L + ". ";
 				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), \"trade\" (send merchants to a new state), "
-								"\"city\" (build a city as your capital), \"law\" (give a law, written in \"law\") or \"\""
+								"\"city\" (build a city as your capital), \"school\" (open a school), \"library\" (gather the state's writings), \"law\" (give a law, written in \"law\") or \"\""
 							  : "\"rebel\" (lead your band to break away), \"preach\" (spread your band's beliefs to the whole state) or \"\"";
 			}
 			else if (C.Leader == P.Id && (Has(C.Known, SkillNamed("villages")) || Has(C.Known, SkillNamed("farming"))))
@@ -1666,6 +1683,7 @@ private:
 	std::unordered_map<int64_t, double> Worn; // How worn out each farmed square's soil is, 0 .. 0.5.
 	int ForestCleared = 0;                     // Forest squares cleared for fields.
 	bool AnyCollapse = false;
+	bool AnySchool = false, AnyLibrary = false, AnyUniversity = false;
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -3359,8 +3377,16 @@ private:
 		if (Eco->IceCover() > 0.15) TierOdds[kPlanting] = 0.0;
 		// Wits and curiosity decide who finds things, not how fast the world does: brains grew
 		// across the run, and history's pace already includes what minds could do.
+		std::vector<float> Scholar(Camps.size(), 1.0f);
+		std::vector<SkillSet> Books(Camps.size(), SkillSet(0));
+		for (size_t c = 0; c < Camps.size(); ++c)
+			if (Camps[c].State)
+			{
+				Scholar[c] = static_cast<float>(Scholarship(Camps[c]));
+				if (const Polity* S = StateById(Camps[c].State)) Books[c] = S->Written;
+			}
 		double MeanGift = 0.0;
-		for (const Npc& P : Npcs) MeanGift += Smarts(P) * Smarts(P) * P.Genes->Curiosity;
+		for (const Npc& P : Npcs) MeanGift += Smarts(P) * Smarts(P) * P.Genes->Curiosity * Scholar[static_cast<size_t>(CampSlot(P.Camp))];
 		MeanGift = Npcs.empty() ? 1.0 : std::max(1e-6, MeanGift / static_cast<double>(Npcs.size()));
 		// Everyone at once on all cores, each with their own dice so the result doesn't depend on
 		// how the work is split; first finds, which touch the whole world's record, are noted after.
@@ -3383,7 +3409,7 @@ private:
 			{
 				if (CanDiscover(P.Skills, k))
 				{
-					Odds[k] = TierOdds[k] * Days / 365.0 * Wits * Wits * P.Genes->Curiosity / MeanGift;
+					Odds[k] = TierOdds[k] * Days / 365.0 * Wits * Wits * P.Genes->Curiosity * Scholar[static_cast<size_t>(CampSlot(P.Camp))] / MeanGift;
 					Total += Odds[k];
 				}
 			}
@@ -3401,14 +3427,15 @@ private:
 				}
 			}
 			// Something others in camp, or in camps nearby, already know, once what it builds on is known.
-			const SkillSet Missing = (C.Known | C.Nearby) & ~P.Skills;
+			const SkillSet Written = Books[static_cast<size_t>(CampSlot(P.Camp))];
+			const SkillSet Missing = (C.Known | C.Nearby | Written) & ~P.Skills;
 			if (Missing)
 			{
 				const double InCamp = OverDays(std::min(0.5, 0.002 * C.Effects.Teaching * Wits), Days);
 				const double Neighbours = OverDays(std::min(0.5, 0.0002 * C.Effects.Teaching * Wits), Days);
 				for (int k = 0; k < Count; ++k)
 				{
-					if (Knows(Missing, k) && CanDiscover(P.Skills, k) && Mine.Chance(Knows(C.Known, k) ? InCamp : Neighbours))
+					if (Knows(Missing, k) && CanDiscover(P.Skills, k) && Mine.Chance(Knows(C.Known, k) || Knows(Written, k) ? InCamp : Neighbours))
 					{
 						P.LearnSkill(k);
 					}
@@ -4683,6 +4710,44 @@ private:
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
 	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	// Once a year: states with writing open schools and, in their cities, libraries; once there are
+	// universities, those too. Printing, then electricity, put a school within reach of every child.
+	void Institutions(Polity& S)
+	{
+		static const int Writing = SkillNamed("writing"), Paper = SkillNamed("paper"), Printing = SkillNamed("printing"), Univ = SkillNamed("universities"),
+			Power = SkillNamed("electricity");
+		if (!Has(S.Known, Writing)) return;
+		const std::string Name = StateName(S);
+		// shortcut: the sim holds far fewer people than Earth did, so a school here stands for many; about 10 of the sim's pupils each.
+		const int PerSchool = Has(S.Known, Power) ? 10 : Has(S.Known, Printing) ? 20 : Has(S.Known, Paper) ? 100 : 300;
+		if (S.Schools < S.Members / PerSchool && Dice.Chance(0.3))
+		{
+			if (!S.Schools && !AnySchool) AnySchool = true, AddEvent("The first school in the world opens in " + Name + ", teaching children to read and write");
+			++S.Schools;
+		}
+		else if (S.Schools > S.Members / PerSchool + 1) --S.Schools; // Too few pupils left to keep it open.
+		if (S.City && S.Libraries < std::max(1, S.Towns) && Dice.Chance(0.02))
+		{
+			if (!AnyLibrary) AnyLibrary = true, AddEvent("The first library in the world: " + PersonName(S.City) + " in " + Name + " keeps its writings");
+			++S.Libraries;
+		}
+		if (S.City && Has(S.Known, Univ) && S.Universities < std::max(1, S.Towns / 3) && Dice.Chance(0.03))
+		{
+			if (!AnyUniversity) AnyUniversity = true, AddEvent("The first university in the world opens in the city of " + PersonName(S.City) + " in " + Name);
+			++S.Universities;
+		}
+		if (S.Libraries) S.Written |= S.Known;
+	}
+
+	// How much likelier than others someone in a camp is to find new things: those who can read,
+	// and above all those near libraries and universities. Shares out the world's finds; the pace
+	// stays history's.
+	double Scholarship(const Camp& C) const
+	{
+		const Polity* S = C.State ? StateById(C.State) : nullptr;
+		return S ? 1.0 + 2.0 * S->Literacy + (S->Libraries ? 0.5 : 0.0) + (S->Universities ? 2.0 : 0.0) : 1.0;
+	}
+
 	// Once a year: fields farmed year after year wear out (faster where they are watered, as salt
 	// builds up; slower with herds' dung and far slower with fertilizers), and rest back when left.
 	// Farming forest clears it. A state whose fields are worn out may collapse.
@@ -4868,6 +4933,7 @@ private:
 		{
 			auto R = Rich.find(S.Id);
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
+			S.Literacy = std::min(0.95f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members)));
 			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
 			S.CityPeople = S.CapitalPeople = S.Towns = 0;
 			if (!S.City) continue;
@@ -5011,6 +5077,7 @@ private:
 				S.City = static_cast<uint16_t>(Seat.Words[2] * 977u + S.Id * 31u + 1u);
 				NoteState(S, PersonName(S.RulerName) + " makes the city of " + PersonName(S.City) + " the capital of " + StateName(S));
 			}
+			Institutions(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
 			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()));
@@ -5297,6 +5364,21 @@ private:
 			AddEvent(T);
 			Remember(P, "built the city of " + PersonName(S->City) + Quote());
 			return " | DEED: builds the city of " + PersonName(S->City);
+		}
+		if (Rules && (Deed == "school" || Deed == "library"))
+		{
+			static const int Writing = SkillNamed("writing");
+			if (!Has(S->Known, Writing)) return " | wants a " + Deed + ", but nobody in the state can write";
+			if (Deed == "library" && !S->City) return " | wants a library, but there is no city to keep it";
+			const bool School = Deed == "school";
+			uint16_t& N = School ? S->Schools : S->Libraries;
+			const std::string T = Name + " opens a " + Deed + " in " + StateName(*S);
+			if (School && !AnySchool) AnySchool = true, AddEvent("The first school in the world: " + T);
+			else if (!School && !AnyLibrary) AnyLibrary = true, AddEvent("The first library in the world: " + T);
+			++N;
+			if (!School) S->Written |= S->Known;
+			Remember(P, "opened a " + Deed + " in " + StateName(*S) + Quote());
+			return " | DEED: opens a " + Deed;
 		}
 		if (Rules && Deed == "law")
 		{
