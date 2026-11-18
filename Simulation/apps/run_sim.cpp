@@ -296,6 +296,8 @@ int main(int Argc, char** Argv)
 		AddCsvColumn(CsvPath, "polities");
 		AddCsvColumn(CsvPath, "sick_bands");
 		AddCsvColumn(CsvPath, "disease_deaths");
+		AddCsvColumn(CsvPath, "trade_routes");
+		AddCsvColumn(CsvPath, "trade_per_year");
 		Csv.open(CsvPath, std::ios::app);
 	}
 	else if (!CsvPath.empty())
@@ -305,7 +307,7 @@ int main(int Argc, char** Argv)
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << ",inventions,beliefs,religions,kindness,curiosity";
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
-		Csv << ",offworld_people,polities,sick_bands,disease_deaths\n";
+		Csv << ",offworld_people,polities,sick_bands,disease_deaths,trade_routes,trade_per_year\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -346,7 +348,7 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
 				<< Folk.AverageCuriosity();
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
-			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << '\n';
+			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << ',' << Folk.TradeRoutes() << ',' << static_cast<long long>(Folk.WorldTradePerYear()) << '\n';
 			Csv.flush();
 		}
 		if (!StatesJs.empty() && Folk.PolityCount() > 0 && Lived % 10 == 0)

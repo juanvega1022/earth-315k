@@ -652,6 +652,11 @@ static void TestStates()
 	};
 	Folk.Think(Lawgiver, static_cast<int>(Folk.AllCamps().size()));
 	EXPECT(Folk.StatesText().find("Law: Share the harvest") != std::string::npos);
+	// States near each other open trade.
+	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
+		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	EXPECT(Folk.TradeRoutes() > 0 && HasFirst(Folk, "The first trade route"));
+	EXPECT(Folk.StatesText().find("Trades with: ") != std::string::npos);
 	const std::string Path = "states_test.bin";
 	EXPECT(earth::SaveWorld(Path, Eco, Folk));
 	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 6, EcoSettings);

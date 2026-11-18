@@ -22,7 +22,7 @@ inline std::string Capital(std::string S)
 inline bool IsStateEvent(const std::string& T)
 {
 	for (const char* K : {"chiefdom", "kingdom", "empire", "nation of", " state", "war ", "war with", "Peace between", "allies", "law",
-			 "city of", "throne", "revolt", "rises up", "prophet", " falls", "plague", "sickness"})
+			 "city of", "throne", "revolt", "rises up", "prophet", " falls", "plague", "sickness", "trade"})
 		if (T.find(K) != std::string::npos) return true;
 	return false;
 }
@@ -70,7 +70,9 @@ inline void AppendStatesFrame(const std::string& JsPath, const earth::Ecosystem&
 	{
 		O << (First ? "" : ",") << P.Id << ":[" << JsonText(earth::People::StateName(P)) << ',' << static_cast<int>(P.Tier) << ',' << P.Bands << ','
 		  << P.Members << ',' << static_cast<int>(P.Lat * 10.0) / 10.0 << ',' << static_cast<int>(P.Lon * 10.0) / 10.0 << ',' << P.Enemy << ','
-		  << JsonText(P.Ruler ? Capital(earth::SayWord(P.RulerName)) : "") << ']';
+		  << JsonText(P.Ruler ? Capital(earth::SayWord(P.RulerName)) : "") << ",[";
+		for (size_t k = 0; k < P.Partners.size(); ++k) O << (k ? "," : "") << P.Partners[k];
+		O << "]]";
 		First = false;
 	}
 	O << "},ev:[";
@@ -105,7 +107,7 @@ h2{font-size:15px;margin:0 0 6px}ul{list-style:none;padding:0;margin:0;max-heigh
 <div class="bar"><button id="play">Play</button><input type="range" id="t" min="0" max="0" value="0" aria-label="Year">
 <label><input type="checkbox" id="zoom"> Zoom to the states</label></div>
 <canvas id="map" width="1080" height="540" aria-label="Map of the states"></canvas>
-<p class="m">Each colour is a state; grey is people with no state. Red lines join the capitals of states at war.</p>
+<p class="m">Each colour is a state; grey is people with no state. Red lines join the capitals of states at war; dashed lines are trade routes.</p>
 <div class="cols"><div><h2 id="keyhead">Biggest states</h2><ul id="key"></ul></div><div><h2>History of the states (up to this year)</h2><ul id="ev"></ul></div></div>
 <script>window.STATES=[];</script><script src=")HTML" << JsName << R"HTML("></script><script>
 const F=[],seen={};for(const f of STATES){seen[f.y]=f}for(const y of Object.keys(seen).map(Number).sort((a,b)=>a-b))F.push(seen[y]);
@@ -120,7 +122,9 @@ function draw(i){const f=F[i];if(!f)return;const W=cv.width,H=cv.height,[c0,r0,v
 const X=c=>(c-c0)*cw,Y=r=>(r-r0)*ch;g.fillStyle=css('--sea');g.fillRect(0,0,W,H);g.fillStyle=css('--land');let p=0,land=false;
 for(const n of f.land.split(',').map(Number)){if(land)for(let k=p;k<p+n;k++)g.fillRect(X(k%180),Y(Math.floor(k/180)),cw+.5,ch+.5);p+=n;land=!land}
 for(const[k,s]of f.sq){g.fillStyle=col(s);g.globalAlpha=s?1:.35;g.fillRect(X(k%180),Y(Math.floor(k/180)),cw+.5,ch+.5)}g.globalAlpha=1;
-const at=(la,lo)=>[X((lo+180)/2),Y((90-la)/2)];g.strokeStyle=css('--war');g.lineWidth=2.5;
+const at=(la,lo)=>[X((lo+180)/2),Y((90-la)/2)];g.strokeStyle=css('--muted');g.lineWidth=1;g.setLineDash([4,3]);
+for(const[id,s]of Object.entries(f.s))for(const p of (s[8]||[])){const e=f.s[p];if(!e||+id>p)continue;const[a,b]=at(s[4],s[5]),[c,d]=at(e[4],e[5]);g.beginPath();g.moveTo(a,b);g.lineTo(c,d);g.stroke()}
+g.setLineDash([]);g.strokeStyle=css('--war');g.lineWidth=2.5;
 for(const[id,s]of Object.entries(f.s)){const e=f.s[s[6]];if(!e||+id>s[6])continue;const[a,b]=at(s[4],s[5]),[c,d]=at(e[4],e[5]);g.beginPath();g.moveTo(a,b);g.lineTo(c,d);g.stroke()}
 const list=Object.entries(f.s).sort((a,b)=>b[1][3]-a[1][3]);g.fillStyle=css('--fg');g.font='bold 13px system-ui';
 for(const[id,s]of list.slice(0,12)){if(s[1]<1)continue;const[a,b]=at(s[4],s[5]);g.beginPath();g.arc(a,b,3.5,0,7);g.fill();g.fillText(s[0].replace(/^the /,''),a+6,b-4)}
