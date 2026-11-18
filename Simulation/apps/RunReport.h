@@ -204,6 +204,7 @@ inline bool WriteReport(const std::string& HtmlPath, const std::string& CsvPath,
 		Box(Thousands(At("inventions")), "inventions known");
 		Box(Thousands(At("beliefs")), "beliefs");
 		Box(Thousands(At("religions")), "religions");
+		if (At("disease_deaths") >= 1.0) Box(Thousands(At("disease_deaths")), "deaths from sickness so far");
 		if (At("polities") >= 1.0) Box(Thousands(At("polities")), "states (chiefdoms, kingdoms, empires and nations)");
 		Box(Thousands(At("average_brain")), "neurons in an average brain");
 		Box(std::to_string(Species), "wild animal species alive");

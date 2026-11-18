@@ -17,6 +17,7 @@
 #include "Hominins.h"
 #include "Beliefs.h"
 #include "Crops.h"
+#include "Diseases.h"
 #include "Inventions.h"
 #include "Minds.h"
 #include "Parallel.h"
@@ -328,6 +329,9 @@ struct Camp
 	int DeathsLately = 0;  // Deaths since the band last wondered why.
 	uint32_t Leader = 0;   // The most trusted adult, worked out each step.
 	uint32_t State = 0;    // The chiefdom, kingdom or other state it belongs to (see Polities.h), 0 none.
+	uint16_t Sick = 0;     // The sickness going through the band now (see Diseases.h), 0 none.
+	int SickDays = 0;
+	std::vector<std::pair<uint16_t, float>> Exposed; // Sicknesses the band's people have lived through, and the last year.
 
 	// What the camp sees, knows and who belongs to it are worked out again each step, so only the
 	// rest is saved.
@@ -342,6 +346,7 @@ struct Camp
 		if (Ar.Version >= 9) Ar.Io(Crops);
 		if (Ar.Version >= 4) Ar.Io(Leader);
 		if (Ar.Version >= 14) Ar.Io(State);
+		if (Ar.Version >= 15) Ar.Io(Sick), Ar.Io(SickDays), Ar.Io(Exposed);
 	}
 };
 
@@ -501,6 +506,47 @@ public:
 	const std::vector<Npc>& All() const { return Npcs; }
 	const std::vector<Camp>& AllCamps() const { return Camps; }
 	const std::vector<Polity>& AllStates() const { return States; }
+	const std::vector<Disease>& AllDiseases() const { return Diseases; }
+	long long DiseaseDeathsSoFar() const { return DiseaseDeaths; }
+	// Bands sick right now.
+	int SickBands() const { return static_cast<int>(std::count_if(Camps.begin(), Camps.end(), [](const Camp& C) { return C.Sick != 0; })); }
+	// Starts a sickness in a band, as if it had just jumped to people there; returns its id.
+	uint16_t StartDisease(size_t Slot, int Source, float Deadliness, float Spread, int Days)
+	{
+		Camp& C = Camps[Slot];
+		Disease D;
+		D.Id = static_cast<uint16_t>(Diseases.size() + 1);
+		D.Word = static_cast<uint16_t>(C.Words[1] * 613u + C.Words[9] * 7u + D.Id * 4099u);
+		D.Source = Source, D.Deadliness = Deadliness, D.Spread = Spread, D.Days = Days;
+		D.Year = Eco->Years(), D.CampId = C.Id, D.Lat = C.Lat, D.Lon = C.Lon;
+		Diseases.push_back(D);
+		C.Sick = D.Id, C.SickDays = 0;
+		Diseases.back().Bands = 1;
+		return D.Id;
+	}
+	std::string DiseaseName(const Disease& D) const
+	{
+		return "\"" + SayWord(D.Word) + "\" (" + (D.Source >= 0 ? "caught from " + std::string(Eco->GetSpecies()[static_cast<size_t>(D.Source)].Name) : std::string("a sickness of crowds")) + ")";
+	}
+	// Every sickness that has killed anyone, deadliest first.
+	std::string DiseasesText() const
+	{
+		std::vector<const Disease*> L;
+		for (const Disease& D : Diseases) L.push_back(&D);
+		std::sort(L.begin(), L.end(), [](const Disease* A, const Disease* B) { return A->Killed != B->Killed ? A->Killed > B->Killed : A->Id < B->Id; });
+		std::string Out = std::to_string(Diseases.size()) + " sicknesses have arisen; " + std::to_string(DiseaseDeaths) + " people have died of them; " +
+			std::to_string(SickBands()) + " bands are sick now\n\n";
+		char Buf[200];
+		for (const Disease* D : L)
+		{
+			int Now = 0;
+			for (const Camp& C : Camps) Now += C.Sick == D->Id;
+			std::snprintf(Buf, sizeof(Buf), ": first in year %.0f near %.1f, %.1f; kills %.0f%% of those who never met it; %lld dead in %lld bands; %d great plagues; %s\n",
+				D->Year, D->Lat, D->Lon, D->Deadliness * 100.0, D->Killed, D->Bands, D->Waves, Now ? ("in " + std::to_string(Now) + " bands now").c_str() : "gone for now");
+			Out += DiseaseName(*D) + Buf;
+		}
+		return Out;
+	}
 	int PolityCount() const { return static_cast<int>(States.size()); }
 	const Polity* StateById(uint32_t Id) const
 	{
@@ -620,6 +666,7 @@ public:
 		if (Ar.Version >= 9) Ar.Io(EverKept), Ar.Io(EverSown);
 		if (Ar.Version >= 10) Ar.Io(Findable);
 		if (Ar.Version >= 14) Ar.Io(States), Ar.Io(NextStateId), Ar.Io(StateDays), Ar.Io(TiersSeen), Ar.Io(NextStateMark), Ar.Io(StatesFounded), Ar.Io(AnyLaw);
+		if (Ar.Version >= 15) Ar.Io(Diseases), Ar.Io(DiseaseDays), Ar.Io(DiseaseDeaths);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1046,6 +1093,7 @@ public:
 		DriftLanguages(1);
 		BirthsAndDeaths();
 		IndexCamps();
+		Sicken(1);
 		MoveCamps();
 		SplitAndMergeCamps();
 		KeepHerdsAndCrops(1);
@@ -1231,6 +1279,7 @@ public:
 		DriftLanguages(Days);
 		BirthsAndDeaths(Days);
 		IndexCamps();
+		Sicken(Days);
 		MoveCamps(Days);
 		SplitAndMergeCamps(Days);
 		KeepHerdsAndCrops(Days);
@@ -1533,6 +1582,9 @@ private:
 	int NextStateMark = 10;
 	int StatesFounded = 0;
 	bool AnyLaw = false;
+	std::vector<Disease> Diseases; // Every sickness that has ever arisen; a sickness's id is its place plus one.
+	int DiseaseDays = 0;
+	long long DiseaseDeaths = 0;
 	bool AnyRefuge = false;
 	bool AnyGrief = false;
 	bool AnyStore = false;
@@ -2201,6 +2253,7 @@ private:
 			// The ones who leave don't always carry every belief with them.
 			for (uint32_t F : Camps[c].Faith) if (Dice.Chance(0.85)) New.Faith.push_back(F);
 			New.State = Camps[c].State; // A daughter band stays in its state.
+			New.Exposed = Camps[c].Exposed;
 			New.Cohesion = Camps[c].Cohesion;
 			MaybeSchism(New);
 			double Angle = Dice.Range(0.0, 2.0 * kPi);
@@ -4362,6 +4415,143 @@ private:
 			AddEvent("First NPC sets foot in " + Where);
 			if (Who) Remember(*Who, "was the first to set foot in " + Where);
 		}
+	}
+
+	// ---- Sickness (see Diseases.h) ----------------------------------------------------------
+
+	static float ResistanceTo(const Camp& C, uint16_t Id, double Year, bool* Immune = nullptr)
+	{
+		for (const auto& [D, When] : C.Exposed)
+			if (D == Id)
+			{
+				if (Immune) *Immune = Year - When < 25.0; // Those who lived through it are still alive.
+				return 0.35f;
+			}
+		if (Immune) *Immune = false;
+		return 1.0f;
+	}
+
+	void Catch(Camp& C, uint16_t Id)
+	{
+		bool Immune = false;
+		if (C.Sick || C.Members.empty()) return;
+		ResistanceTo(C, Id, Eco->Years(), &Immune);
+		if (Immune) return;
+		static const int Vaccines = SkillNamed("vaccines");
+		if (Has(C.Known, Vaccines) && Dice.Chance(0.8)) return;
+		C.Sick = Id, C.SickDays = 0;
+		Diseases[Id - 1u].Bands += 1;
+	}
+
+	// Sick bands lose people and pass the sickness on; once a year new sicknesses may arise.
+	void Sicken(int Days)
+	{
+		static const int Medicine = SkillNamed("medicine"), Vaccines = SkillNamed("vaccines"), Antibiotics = SkillNamed("antibiotics"),
+			Roads = SkillNamed("roads"), Cities = SkillNamed("cities");
+		const double Year = Eco->Years();
+		bool AnyDied = false;
+		std::vector<std::pair<size_t, uint16_t>> Passed;
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			Camp& C = Camps[c];
+			if (!C.Sick) continue;
+			Disease& D = Diseases[C.Sick - 1u];
+			const double Cure = (Has(C.Known, Medicine) ? 0.75 : 1.0) * (Has(C.Known, Antibiotics) ? 0.4 : 1.0) * (Has(C.Known, Vaccines) ? 0.5 : 1.0);
+			const double Toll = D.Deadliness * ResistanceTo(C, D.Id, Year) * Cure * std::min(1.0, static_cast<double>(Days) / D.Days);
+			for (int i : C.Members)
+			{
+				Npc& P = Npcs[static_cast<size_t>(i)];
+				const double Age = P.AgeYears();
+				const double Frail = Age < 5.0 || Age > 60.0 ? 1.6 : (P.Energy < 0.3f ? 1.5 : 1.0); // The young, old and hungry die more.
+				if (P.Alive && Dice.Chance(std::min(0.95, Toll * Frail)))
+				{
+					Die(P, 0);
+					AnyDied = true;
+					D.Killed += 1, D.KilledThisYear += 1, ++DiseaseDeaths;
+				}
+			}
+			// It passes to bands nearby, along the state's roads to its capital, and with armies to the enemy.
+			const double Pass = OverDays(0.02 * D.Spread, Days);
+			for (int N : CampSlotsNear(C.Lat, C.Lon, Has(C.Known, Roads) ? 150.0 : 80.0))
+				if (static_cast<size_t>(N) != c && Dice.Chance(Pass)) Passed.push_back({static_cast<size_t>(N), C.Sick});
+			if (const Polity* S = C.State ? StateById(C.State) : nullptr)
+			{
+				auto It = CampSlots.find(S->Capital);
+				if (It != CampSlots.end() && Dice.Chance(OverDays(0.01 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(It->second), C.Sick});
+				if (const Polity* E = StateById(S->Enemy))
+				{
+					auto Ie = CampSlots.find(E->Capital);
+					if (Ie != CampSlots.end() && Dice.Chance(OverDays(0.005 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(Ie->second), C.Sick});
+				}
+			}
+			C.SickDays += Days;
+			if (C.SickDays >= D.Days)
+			{
+				bool Found = false;
+				for (auto& E : C.Exposed)
+					if (E.first == C.Sick) E.second = static_cast<float>(Year), Found = true;
+				if (!Found) C.Exposed.push_back({C.Sick, static_cast<float>(Year)});
+				C.Sick = 0, C.SickDays = 0;
+			}
+		}
+		for (const auto& [Slot, Id] : Passed) Catch(Camps[Slot], Id);
+		if (AnyDied)
+		{
+			Npcs.erase(std::remove_if(Npcs.begin(), Npcs.end(), [](const Npc& P) { return !P.Alive; }), Npcs.end());
+			IndexCamps();
+		}
+
+		DiseaseDays += Days;
+		if (DiseaseDays < 365) return;
+		DiseaseDays -= 365;
+		// Great plagues: a sickness that killed one in fifty this year.
+		const double Alive = std::max<double>(1.0, static_cast<double>(Npcs.size()));
+		for (Disease& D : Diseases)
+		{
+			if (D.KilledThisYear >= 200 && static_cast<double>(D.KilledThisYear) > Alive * 0.02)
+			{
+				D.Waves += 1;
+				char Pct[32];
+				std::snprintf(Pct, sizeof(Pct), "%.1f%%", 100.0 * static_cast<double>(D.KilledThisYear) / (Alive + static_cast<double>(D.KilledThisYear)));
+				AddEvent("A great plague: the sickness " + DiseaseName(D) + " kills " + std::to_string(D.KilledThisYear) + " people this year, " + Pct + " of the world");
+			}
+			D.KilledThisYear = 0;
+		}
+		// New sicknesses jump from kept animals, or arise in crowded cities.
+		std::unordered_map<uint32_t, int> Kept;
+		for (const AnimalGroup& G : Eco->Groups())
+			if (G.Herder && G.Count >= 1.0) Kept[G.Herder] = G.SpeciesIndex;
+		for (const auto& [Herder, Kind] : Kept)
+		{
+			auto It = CampSlots.find(static_cast<int>(Herder));
+			if (It == CampSlots.end()) continue;
+			const Camp& C = Camps[static_cast<size_t>(It->second)];
+			const double Crowd = C.State ? 3.0 : 1.0;
+			if (C.Sick || C.Members.size() < 10 || !Dice.Chance(1e-5 * Crowd) || Diseases.size() >= 60000) continue;
+			NewDisease(static_cast<size_t>(It->second), Kind);
+		}
+		for (const Polity& S : States)
+		{
+			auto It = CampSlots.find(S.Capital);
+			if (S.City && It != CampSlots.end() && !Camps[static_cast<size_t>(It->second)].Sick && Has(S.Known, Cities) && Dice.Chance(1e-4) && Diseases.size() < 60000)
+				NewDisease(static_cast<size_t>(It->second), -1);
+		}
+	}
+
+	void NewDisease(size_t Slot, int Source)
+	{
+		const Camp& C = Camps[Slot];
+		const uint16_t Id = StartDisease(Slot, Source, static_cast<float>(Dice.Range(0.03, 0.45)), static_cast<float>(Dice.Range(0.4, 2.0)),
+			static_cast<int>(Dice.Range(30.0, 120.0)));
+		const Disease& D = Diseases[Id - 1u];
+		static const char* Lands[6] = {"Africa", "Asia", "Europe", "Australia", "the Americas", "elsewhere"};
+		char Pct[24];
+		std::snprintf(Pct, sizeof(Pct), "%.0f%%", D.Deadliness * 100.0);
+		const std::string Where = std::string(" in ") + Lands[RegionOf(C.Lat, C.Lon)];
+		if (Diseases.size() == 1)
+			AddEvent("The first sickness to pass from band to band, " + DiseaseName(D) + ", appears" + Where + ". It kills up to " + Pct + " of those who catch it");
+		else if (D.Deadliness >= 0.25f)
+			AddEvent("A deadly new sickness, " + DiseaseName(D) + ", appears" + Where + ". It kills up to " + Pct + " of those who catch it");
 	}
 
 	// ---- States above the band (see Polities.h) -----------------------------------------------
