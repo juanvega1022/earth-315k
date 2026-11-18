@@ -694,6 +694,27 @@ static void TestStates()
 	std::remove(Path.c_str());
 }
 
+// Burned fuel stays in the air, warms the world, fades over centuries, and survives a save.
+static void TestFuel()
+{
+	earth::ElevationGrid Grid = MakePlanet();
+	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 9);
+	earth::People Folk(&Eco, 9);
+	const double Before = Eco.Warming();
+	Eco.Burn(2000.0);
+	EXPECT(Eco.Co2Ppm() > 380.0 && Eco.Co2Ppm() < 400.0);
+	EXPECT(Eco.Greenhouse() > 1.0 && Eco.Warming() > Before + 1.0);
+	const std::string Path = "fuel_test.bin";
+	EXPECT(earth::SaveWorld(Path, Eco, Folk));
+	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 9);
+	earth::People Folk2(&Eco2, 9);
+	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
+	EXPECT(Eco2.Co2Ppm() == Eco.Co2Ppm() && Eco2.FuelBurnedGt() == 2000.0);
+	std::remove(Path.c_str());
+	for (int i = 0; i < 13 * 300; ++i) Eco.Step(28);
+	EXPECT(Eco.Co2Ppm() < 360.0); // The sea takes it back.
+}
+
 // A sickness passes from band to band and kills; those who lived through it don't catch it again
 // soon, and it survives a save.
 static void TestDiseases()
@@ -751,6 +772,7 @@ int main()
 	TestInventionRules();
 	TestInventionsHappen();
 	TestSaveAndResume();
+	TestFuel();
 	TestUnderstand();
 	TestSayWord();
 	TestSkillTree();

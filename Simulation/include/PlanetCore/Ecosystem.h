@@ -306,7 +306,16 @@ public:
 	double GreenSahara() const { return GreenSaharaThen(YearsAgo()) * (1.0 - 0.5 * IceCover()); }
 
 	// How much warmer than today the brightening Sun has made the world, in degrees C.
-	double Warming() const { return sky::SunWarming(-YearsAgo()); }
+	double Warming() const { return sky::SunWarming(-YearsAgo()) + Greenhouse(); }
+	// Carbon dioxide people have added to the air by burning fuel, in parts per million above the
+	// 280 before industry; the oceans and forests take a share of it back over centuries.
+	double Co2Ppm() const { return 280.0 + Co2Excess; }
+	// Degrees C of warming from it: about 3 for each doubling.
+	double Greenhouse() const { return 3.0 * std::log2(Co2Ppm() / 280.0); }
+	// Burns fuel: Gt of CO2 into the air, about half of which stays there.
+	void Burn(double GtCo2) { Co2Excess += 0.45 * GtCo2 / 7.8, FuelBurned += GtCo2; }
+	// Gt of CO2 from all the coal, oil and gas burned so far.
+	double FuelBurnedGt() const { return FuelBurned; }
 	// 0 normal .. 1 no plant growth at all: the winter after an eruption or an impact.
 	double DisasterWinter() const { return WinterEnd > Years() ? WinterStrength * (WinterEnd - Years()) / std::max(0.1, WinterYears) : 0.0; }
 	// The latest blast from an eruption or impact: where, how far it killed, and how many there have been.
@@ -703,6 +712,7 @@ public:
 		if (Ar.Version >= 2) Ar.Io(BaseSeed);
 		Ar.Io(Random), Ar.Io(NextGroupId), Ar.Io(Cells), Ar.Io(AnimalGroups), Ar.Io(SpeciesAlive), Ar.Io(EventLog), Ar.Io(DayNumber);
 		Ar.Io(SeaChange), Ar.Io(ClimateStep), Ar.Io(ClimateCount), Ar.Io(Settings.StartYearsAgo), Ar.Io(Settings.IceAges);
+		if (Ar.Version >= 19) Ar.Io(Co2Excess), Ar.Io(FuelBurned);
 		if (Ar.Version >= 11) Ar.Io(Sheets.Volume), Ar.Io(Sheets.Melting), Ar.Io(IceYearsAgo), Ar.Io(WinterStrength), Ar.Io(WinterYears), Ar.Io(WinterEnd), Ar.Io(LatestBlast);
 		else if (Ar.IsReading())
 		{
@@ -796,6 +806,7 @@ private:
 	int ClimateStep = 0;
 	int ClimateCount = 0;
 	double GreenBuilt = -1.0; // GreenSaharaThen() when the plants were last rebuilt; not saved.
+	double Co2Excess = 0.0, FuelBurned = 0.0;
 	double WarmBuilt = -1.0;  // Warming() and the air's plant limit then; not saved.
 	double AirBuilt = -1.0;
 	sky::IceSheets Sheets;      // The future's ice, from the orbit; the past reads the real record.
@@ -865,17 +876,17 @@ private:
 	// plant capacity to match. Land the sea gives back starts half grown.
 	void UpdateClimate()
 	{
-		const int Step = static_cast<int>(Years() / 100.0);
+		const int Step = static_cast<int>(Years() / (Co2Excess > 5.0 ? 10.0 : 100.0)); // Every ten years while fuel burning changes the air.
 		if (Step == ClimateStep || Ground.empty())
 		{
 			return;
 		}
 		ClimateStep = Step;
 		const double Elapsed = IceYearsAgo - YearsAgo();
-		if (Elapsed > 0.0) Sky(Elapsed);
+		if (Elapsed > 0.0) Sky(Elapsed), Co2Excess *= std::exp(-Elapsed / 500.0);
 		IceYearsAgo = YearsAgo();
 		if (!Settings.IceAges) return;
-		const double Sea = YearsAgo() > 0.0 ? SeaLevelThen(YearsAgo()) : FutureSeaLevel();
+		const double Sea = (YearsAgo() > 0.0 ? SeaLevelThen(YearsAgo()) : FutureSeaLevel()) + Greenhouse(); // shortcut: 1 m of sea per degree, no lag.
 		const double Green = GreenSaharaThen(YearsAgo());
 		const double Warm = Warming(), Air = sky::PlantAir(-YearsAgo());
 		if (std::abs(Sea - SeaChange) < 1.0 && std::abs(Green - GreenBuilt) < 0.1 && std::abs(Warm - WarmBuilt) < 0.25 && std::abs(Air - AirBuilt) < 0.02)
