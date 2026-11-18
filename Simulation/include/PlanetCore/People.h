@@ -548,6 +548,13 @@ public:
 		return Out;
 	}
 	int PolityCount() const { return static_cast<int>(States.size()); }
+	int TradeRoutes() const
+	{
+		size_t N = 0;
+		for (const Polity& S : States) N += S.Partners.size();
+		return static_cast<int>(N / 2);
+	}
+	double WorldTradePerYear() const { return WorldTrade; }
 	const Polity* StateById(uint32_t Id) const
 	{
 		auto It = std::lower_bound(States.begin(), States.end(), Id, [](const Polity& S, uint32_t V) { return S.Id < V; });
@@ -589,8 +596,13 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
-			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d\n", S->Treasury, S->Conquests);
+			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d; wealth from trade: %.0f; richest band has %.1fx the food per head of the poorest\n",
+				S->Treasury, S->Conquests, S->Wealth, S->Inequality);
 			Out += Buf;
+			std::string Traders;
+			for (uint32_t P : S->Partners)
+				if (const Polity* T = StateById(P)) Traders += (Traders.empty() ? "" : ", ") + StateName(*T);
+			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
 			if (const Polity* E = StateById(S->Enemy)) Out += "  At war with " + StateName(*E) + " for " + std::to_string(S->WarYears) + " years\n";
 			std::string Friends;
 			for (uint32_t A : S->Allies)
@@ -667,6 +679,7 @@ public:
 		if (Ar.Version >= 10) Ar.Io(Findable);
 		if (Ar.Version >= 14) Ar.Io(States), Ar.Io(NextStateId), Ar.Io(StateDays), Ar.Io(TiersSeen), Ar.Io(NextStateMark), Ar.Io(StatesFounded), Ar.Io(AnyLaw);
 		if (Ar.Version >= 15) Ar.Io(Diseases), Ar.Io(DiseaseDays), Ar.Io(DiseaseDeaths);
+		if (Ar.Version >= 16) Ar.Io(AnyRoute), Ar.Io(AnySeaRoute), Ar.Io(WorldTrade);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1380,7 +1393,7 @@ public:
 					" people" + (Rules ? ", and you are its ruler. " : Realm->Ruler ? ", ruled by " + PersonName(Realm->RulerName) + ". " : ". ");
 				if (const Polity* E = StateById(Realm->Enemy)) Life += "It is at war with " + StateName(*E) + ". ";
 				for (const std::string& L : Realm->Laws) Life += "One of its laws: " + L + ". ";
-				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), "
+				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), \"trade\" (send merchants to a new state), "
 								"\"city\" (build a city as your capital), \"law\" (give a law, written in \"law\") or \"\""
 							  : "\"rebel\" (lead your band to break away), \"preach\" (spread your band's beliefs to the whole state) or \"\"";
 			}
@@ -1582,6 +1595,8 @@ private:
 	int NextStateMark = 10;
 	int StatesFounded = 0;
 	bool AnyLaw = false;
+	bool AnyRoute = false, AnySeaRoute = false;
+	double TradeThisYear = 0.0, WorldTrade = 0.0;
 	std::vector<Disease> Diseases; // Every sickness that has ever arisen; a sickness's id is its place plus one.
 	int DiseaseDays = 0;
 	long long DiseaseDeaths = 0;
@@ -2049,7 +2064,7 @@ private:
 				}
 			}
 			// What anyone in its state knows travels along its roads and through its rulers.
-			if (const Polity* S = C.State ? StateById(C.State) : nullptr) C.Nearby |= S->Known;
+			if (const Polity* S = C.State ? StateById(C.State) : nullptr) C.Nearby |= S->Known | S->Heard;
 		});
 		MeasureRoom();
 		InParallel(Camps.size(), [&](size_t Here)
@@ -4478,6 +4493,12 @@ private:
 			{
 				auto It = CampSlots.find(S->Capital);
 				if (It != CampSlots.end() && Dice.Chance(OverDays(0.01 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(It->second), C.Sick});
+				for (uint32_t T : S->Partners)
+					if (const Polity* P = StateById(T))
+					{
+						auto Ip = CampSlots.find(P->Capital);
+						if (Ip != CampSlots.end() && C.Id == S->Capital && Dice.Chance(OverDays(0.01 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(Ip->second), C.Sick});
+					}
 				if (const Polity* E = StateById(S->Enemy))
 				{
 					auto Ie = CampSlots.find(E->Capital);
@@ -4645,6 +4666,7 @@ private:
 	{
 		std::unordered_map<uint32_t, std::vector<int>> Of;
 		for (Polity& S : States) S.Bands = S.Members = 0, S.Known = 0;
+		std::unordered_map<uint32_t, std::pair<float, float>> Rich; // Least and most food put by per head.
 		for (size_t c = 0; c < Camps.size(); ++c)
 		{
 			Camp& C = Camps[c];
@@ -4660,6 +4682,14 @@ private:
 			S->Members += static_cast<int>(C.Members.size());
 			S->Known |= C.Known;
 			Of[S->Id].push_back(static_cast<int>(c));
+			const float PerHead = C.Store / static_cast<float>(C.Members.size());
+			auto R = Rich.emplace(S->Id, std::make_pair(PerHead, PerHead));
+			R.first->second.first = std::min(R.first->second.first, PerHead), R.first->second.second = std::max(R.first->second.second, PerHead);
+		}
+		for (Polity& S : States)
+		{
+			auto R = Rich.find(S.Id);
+			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
 		}
 		return Of;
 	}
@@ -4895,6 +4925,8 @@ private:
 			}
 		}
 
+		Trade();
+
 		// New chiefdoms, where a band that farms or lives in a village leads others close by that
 		// speak its tongue or share its gods.
 		for (size_t c = 0; c < Camps.size(); ++c)
@@ -4976,6 +5008,18 @@ private:
 		const bool Rules = S && S->Ruler == P.Id;
 		const std::string Name = PersonName(P.Name);
 		auto Quote = [&] { return Thought.empty() ? std::string() : ": \"" + Thought + "\""; };
+		if (Rules && Deed == "trade")
+		{
+			Polity* Best = nullptr;
+			double BestKm = TradeKm(*S);
+			for (Polity& B : States)
+				if (B.Id != S->Id && B.Bands > 0 && DistanceKm(S->Lat, S->Lon, B.Lat, B.Lon) < BestKm &&
+					std::find(S->Partners.begin(), S->Partners.end(), B.Id) == S->Partners.end())
+					Best = &B, BestKm = DistanceKm(S->Lat, S->Lon, B.Lat, B.Lon);
+			if (!Best || !OpenRoute(*S, *Best)) return " | seeks trade, but finds no one new within reach";
+			Remember(P, "opened trade between " + StateName(*S) + " and " + StateName(*Best) + Quote());
+			return " | DEED: opens trade with " + StateName(*Best);
+		}
 		if (Rules && (Deed == "war" || Deed == "ally"))
 		{
 			Polity* O = NearestOther(*S);
@@ -5054,6 +5098,78 @@ private:
 			return " | DEED: founds " + T;
 		}
 		return " | REFUSED deed \"" + Deed + "\": not something they can do";
+	}
+
+	// How far a state's merchants reach, in km.
+	static double TradeKm(const Polity& S)
+	{
+		static const int Roads = SkillNamed("roads"), Wheel = SkillNamed("the wheel"), Ships = SkillNamed("sailing ships"), Rail = SkillNamed("railways"),
+			Flight = SkillNamed("flight");
+		double Km = 300.0 * (Has(S.Known, Roads) ? 2.0 : 1.0) * (Has(S.Known, Wheel) ? 1.5 : 1.0);
+		if (Has(S.Known, Ships)) Km = std::max(Km, 3000.0);
+		if (Has(S.Known, Rail)) Km = std::max(Km, 6000.0);
+		if (Has(S.Known, Flight)) Km = 20000.0;
+		return Km;
+	}
+	bool OpenRoute(Polity& A, Polity& B)
+	{
+		if (A.Id == B.Id || A.Enemy == B.Id || A.Partners.size() >= 6 || B.Partners.size() >= 6 ||
+			std::find(A.Partners.begin(), A.Partners.end(), B.Id) != A.Partners.end())
+			return false;
+		A.Partners.push_back(B.Id), B.Partners.push_back(A.Id);
+		const double Km = DistanceKm(A.Lat, A.Lon, B.Lat, B.Lon);
+		auto Cap = [](std::string T) { T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0]))); return T; };
+		if (!AnyRoute)
+			AnyRoute = true, AddEvent("The first trade route: " + StateName(A) + " and " + StateName(B) + " trade goods across " + std::to_string(static_cast<int>(Km)) + " km");
+		else if (Km > 1000.0 && !AnySeaRoute && Eco->IsLand(A.Lat, A.Lon) && !Eco->IsLand((A.Lat + B.Lat) / 2.0, (A.Lon + B.Lon) / 2.0))
+			AnySeaRoute = true, AddEvent("The first trade across the sea: " + Cap(StateName(A)) + "'s ships reach " + StateName(B) + ", " + std::to_string(static_cast<int>(Km)) + " km away");
+		return true;
+	}
+
+	// Once a year: states open trade with neighbours within their merchants' reach; goods earn both
+	// sides wealth, food flows from plenty to want, and each learns what the other knows.
+	void Trade()
+	{
+		static const int Money = SkillNamed("money");
+		for (Polity& A : States)
+		{
+			A.Heard = A.Known;
+			// Routes close with war, distance or a partner's fall.
+			A.Partners.erase(std::remove_if(A.Partners.begin(), A.Partners.end(), [&](uint32_t P)
+			{
+				const Polity* B = StateById(P);
+				return !B || B->Bands == 0 || A.Enemy == P || DistanceKm(A.Lat, A.Lon, B->Lat, B->Lon) > 1.5 * std::max(TradeKm(A), TradeKm(*B));
+			}), A.Partners.end());
+		}
+		for (Polity& A : States)
+		{
+			if (A.Bands == 0 || A.Partners.size() >= 6 || !Dice.Chance(0.2)) continue;
+			Polity* Best = nullptr;
+			double BestKm = TradeKm(A);
+			for (Polity& B : States)
+			{
+				if (B.Id == A.Id || B.Bands == 0 || std::find(A.Partners.begin(), A.Partners.end(), B.Id) != A.Partners.end()) continue;
+				const double Km = DistanceKm(A.Lat, A.Lon, B.Lat, B.Lon);
+				if (Km < BestKm && Km < TradeKm(B)) Best = &B, BestKm = Km;
+			}
+			if (Best) OpenRoute(A, *Best);
+		}
+		for (Polity& A : States)
+			for (uint32_t P : A.Partners)
+			{
+				Polity* B = StateById(P);
+				if (!B || A.Id > B->Id) continue; // Each route once.
+				const double Goods = 0.01 * std::sqrt(static_cast<double>(A.Members) * B->Members) * (Has(A.Known | B->Known, Money) ? 2.0 : 1.0);
+				A.Wealth += Goods, B->Wealth += Goods, TradeThisYear += Goods;
+				A.Heard |= B->Known, B->Heard |= A.Known;
+				auto IA = CampSlots.find(A.Capital), IB = CampSlots.find(B->Capital);
+				if (IA == CampSlots.end() || IB == CampSlots.end()) continue;
+				Camp& CA = Camps[static_cast<size_t>(IA->second)];
+				Camp& CB = Camps[static_cast<size_t>(IB->second)];
+				const float Move = 0.05f * (CA.Store - CB.Store);
+				CA.Store -= Move, CB.Store += Move;
+			}
+		WorldTrade = TradeThisYear, TradeThisYear = 0.0;
 	}
 
 	void StartWar(Polity& A, Polity& B)

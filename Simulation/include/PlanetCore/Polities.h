@@ -41,11 +41,15 @@ struct Polity
 	int Conquests = 0;
 	std::vector<uint32_t> Allies;
 	std::vector<std::string> Laws; // Given by its thinking rulers, newest last.
+	std::vector<uint32_t> Partners; // States it trades with.
+	double Wealth = 0.0;            // What its trade has earned, in kg of food's worth.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
 	int Members = 0;
 	SkillSet Known = 0;
+	SkillSet Heard = 0;      // What it and its trading partners know: ideas travel with goods.
+	float Inequality = 1.0f; // Food put by per head in its richest band over its poorest.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>
@@ -53,6 +57,7 @@ struct Polity
 	{
 		Ar.Io(Id), Ar.Io(Word), Ar.Io(Tier), Ar.Io(Rule), Ar.Io(Capital), Ar.Io(City), Ar.Io(Ruler), Ar.Io(RulerName), Ar.Io(Rulers);
 		Ar.Io(Founder), Ar.Io(Faith), Ar.Io(Founded), Ar.Io(Treasury), Ar.Io(Enemy), Ar.Io(WarYears), Ar.Io(Conquests), Ar.Io(Allies), Ar.Io(Laws);
+		if (Ar.Version >= 16) Ar.Io(Partners), Ar.Io(Wealth);
 	}
 };
 
