@@ -661,6 +661,15 @@ static void TestStates()
 	for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.BiggestCity() > 0 && Folk.CityPeopleTotal() >= Folk.BiggestCity());
 	EXPECT(Folk.CitiesText().find(", capital of ") != std::string::npos);
+	// A ruler who can write gathers the state's writings in a library, and what it holds is kept.
+	const earth::Thinker Keeper = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"library\"}" : "{\"thought\": \"x\"}");
+	};
+	Folk.Think(Keeper, static_cast<int>(Folk.AllCamps().size()));
+	bool Kept = false;
+	for (const earth::Polity& S : Folk.AllStates()) Kept = Kept || (S.Libraries > 0 && S.Written.Count() > 0);
+	EXPECT(Kept || HasFirst(Folk, "The first library in the world"));
 	// States near each other open trade.
 	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
