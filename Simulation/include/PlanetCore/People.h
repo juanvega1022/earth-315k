@@ -555,6 +555,8 @@ public:
 		return static_cast<int>(N / 2);
 	}
 	double WorldTradePerYear() const { return WorldTrade; }
+	// Gt of CO2 burned last year.
+	double FuelPerYear() const { return FuelThisYear; }
 	// Everyone killed in war and driven from home by it, and the latest battles, newest first.
 	long long WarDeaths() const { return WarDead; }
 	long long WarRefugees() const { return Refugees; }
@@ -731,6 +733,7 @@ public:
 		if (Ar.Version >= 16) Ar.Io(AnyRoute), Ar.Io(AnySeaRoute), Ar.Io(WorldTrade);
 		if (Ar.Version >= 17) Ar.Io(NextCityMark);
 		if (Ar.Version >= 18) Ar.Io(Battles), Ar.Io(WarDead), Ar.Io(Refugees), Ar.Io(DeadliestBattle);
+		if (Ar.Version >= 19) Ar.Io(NextWarmMark), Ar.Io(FuelRunningOut);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1648,6 +1651,9 @@ private:
 	std::vector<Battle> Battles; // The latest years of fighting, oldest first.
 	long long WarDead = 0, Refugees = 0;
 	int DeadliestBattle = 0;
+	int NextWarmMark = 1;
+	bool FuelRunningOut = false;
+	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
 	bool AnyLaw = false;
 	bool AnyRoute = false, AnySeaRoute = false;
@@ -4662,6 +4668,43 @@ private:
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
 	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	// Tonnes of CO2 a year each person in a state burns, from steam to engines and power stations;
+	// clean power cuts it.
+	static double FuelPerHead(SkillSet Known)
+	{
+		static const std::pair<int, double> Burners[] = {{SkillNamed("steam engines"), 0.5}, {SkillNamed("factories"), 1.0}, {SkillNamed("railways"), 0.5},
+			{SkillNamed("engines"), 1.5}, {SkillNamed("electricity"), 1.5}, {SkillNamed("flight"), 0.5}, {SkillNamed("computers"), 0.5}};
+		static const std::pair<int, double> Clean[] = {{SkillNamed("solar power"), 0.6}, {SkillNamed("nuclear power"), 0.8}, {SkillNamed("fusion power"), 0.1}};
+		double T = 0.0;
+		for (const auto& [K, More] : Burners) T += Has(Known, K) ? More : 0.0;
+		for (const auto& [K, Times] : Clean) T *= Has(Known, K) ? Times : 1.0;
+		return T;
+	}
+
+	// Once a year: industry burns coal, oil and gas, warming the world, until the fuel runs low.
+	void BurnFuel()
+	{
+		// shortcut: each person counts for the world's 8 billion shared out by the sim's people, so a
+		// world of factories burns what ours does whatever the sim's head count; scale it if the sim
+		// ever holds real numbers.
+		const double Stand = 8e9 / std::max(1, Alive());
+		double Tonnes = 0.0;
+		for (const Polity& S : States) Tonnes += S.Members * FuelPerHead(S.Known);
+		const double Left = std::max(0.0, 1.0 - Eco->FuelBurnedGt() / 18000.0); // About 18,000 Gt of CO2 in all the coal, oil and gas there is.
+		const double Gt = Tonnes * Stand / 1e9 * std::min(1.0, 4.0 * Left);
+		FuelThisYear = Gt;
+		if (Gt <= 0.0) return;
+		Eco->Burn(Gt);
+		char Buf[160];
+		while (Eco->Greenhouse() >= NextWarmMark)
+		{
+			std::snprintf(Buf, sizeof(Buf), "Burning fuel has warmed the world by %d degrees: the air holds %.0f ppm of CO2", NextWarmMark, Eco->Co2Ppm());
+			AddEvent(Buf);
+			++NextWarmMark;
+		}
+		if (Left < 0.25 && !FuelRunningOut) FuelRunningOut = true, AddEvent("The world's coal, oil and gas are running out");
+	}
+
 	// How deadly the weapons in a set of skills are: 1 for spears, more for bronze, iron, guns, engines and planes.
 	static double WeaponsOf(SkillSet Known)
 	{
@@ -5124,6 +5167,7 @@ private:
 			AddEvent(std::to_string(NextStateMark) + " states in the world at once");
 			NextStateMark *= 2;
 		}
+		BurnFuel();
 		// The first city to reach 100, 1,000, 10,000 people and on.
 		for (const Polity& S : States)
 			while (S.City && S.CapitalPeople >= NextCityMark)
