@@ -50,6 +50,9 @@ struct Polity
 	SkillSet Known = 0;
 	SkillSet Heard = 0;      // What it and its trading partners know: ideas travel with goods.
 	float Inequality = 1.0f; // Food put by per head in its richest band over its poorest.
+	int CityPeople = 0;      // How many of its people live in its cities.
+	int CapitalPeople = 0;   // How many live in its capital city.
+	int Towns = 0;           // How many cities it has.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>
