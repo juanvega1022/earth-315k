@@ -689,6 +689,12 @@ static void TestStates()
 	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
 	// The yearly census counts how long people live and how many are born and die.
 	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
+	// Settlers sail from a state's shore bands to a far shore; each landing is counted. (The test states lie inland, so this only checks the count.)
+	int Landed = 0;
+	for (int i = 0; i < 20; ++i)
+		for (const earth::Polity& S : std::vector<earth::Polity>(Folk.AllStates())) Landed += Folk.SendVoyage(S.Id, 3000.0);
+	EXPECT(Folk.ColoniesFounded() == Landed);
+	std::printf("  Voyages: %d of %zu landed\n", Landed, 20 * Folk.AllStates().size());
 	// Farmed fields wear.
 	EXPECT(Folk.FarmedSquares() > 0 && Folk.AverageWear() > 0.0);
 	const std::string Path = "states_test.bin";
