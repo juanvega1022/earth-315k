@@ -64,6 +64,23 @@ struct Polity
 	}
 };
 
+// One year's fighting in a war, remembered after the states are gone.
+struct Battle
+{
+	double Year = 0.0;
+	double Lat = 0.0, Lon = 0.0;
+	uint16_t Place = 0; // Named in the losers' speech.
+	std::string Winner, Loser;
+	int WinnerDead = 0, LoserDead = 0, Refugees = 0;
+	bool Siege = false; // Fought for a capital city.
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Year), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(Place), Ar.Io(Winner), Ar.Io(Loser), Ar.Io(WinnerDead), Ar.Io(LoserDead), Ar.Io(Refugees), Ar.Io(Siege);
+	}
+};
+
 inline const char* TierName(int Tier)
 {
 	static const char* Names[] = {"chiefdom", "kingdom", "empire", "nation"};

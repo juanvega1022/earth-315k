@@ -300,6 +300,8 @@ int main(int Argc, char** Argv)
 		AddCsvColumn(CsvPath, "trade_per_year");
 		AddCsvColumn(CsvPath, "city_people");
 		AddCsvColumn(CsvPath, "biggest_city");
+		AddCsvColumn(CsvPath, "war_deaths");
+		AddCsvColumn(CsvPath, "refugees");
 		Csv.open(CsvPath, std::ios::app);
 	}
 	else if (!CsvPath.empty())
@@ -309,7 +311,7 @@ int main(int Argc, char** Argv)
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << ",inventions,beliefs,religions,kindness,curiosity";
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
-		Csv << ",offworld_people,polities,sick_bands,disease_deaths,trade_routes,trade_per_year,city_people,biggest_city\n";
+		Csv << ",offworld_people,polities,sick_bands,disease_deaths,trade_routes,trade_per_year,city_people,biggest_city,war_deaths,refugees\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -350,7 +352,7 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
 				<< Folk.AverageCuriosity();
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
-			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << ',' << Folk.TradeRoutes() << ',' << static_cast<long long>(Folk.WorldTradePerYear()) << ',' << Folk.CityPeopleTotal() << ',' << Folk.BiggestCity() << '\n';
+			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << ',' << Folk.TradeRoutes() << ',' << static_cast<long long>(Folk.WorldTradePerYear()) << ',' << Folk.CityPeopleTotal() << ',' << Folk.BiggestCity() << ',' << Folk.WarDeaths() << ',' << Folk.WarRefugees() << '\n';
 			Csv.flush();
 		}
 		if (!StatesJs.empty() && Folk.PolityCount() > 0 && Lived % 10 == 0)
@@ -405,6 +407,7 @@ int main(int Argc, char** Argv)
 			if (WithPeople && Folk.PolityCount() > 0 && !FirstOutput.empty())
 			{
 				std::ofstream(FolderOf(FirstOutput) + "polities.txt") << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the states of the world, biggest first\n\n" << Folk.StatesText();
+				std::ofstream(FolderOf(FirstOutput) + "wars.txt") << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the latest battles and sieges, newest first\n\n" << Folk.BattlesText();
 				std::ofstream(FolderOf(FirstOutput) + "cities.txt") << "Year " << Y << ", " << When(Eco.YearsAgo()) << ": the cities of the world, biggest first\n\n" << Folk.CitiesText();
 			}
 			if (WithPeople && !Folk.AllDiseases().empty() && !FirstOutput.empty())
