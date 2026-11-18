@@ -666,12 +666,25 @@ static void TestStates()
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.TradeRoutes() > 0 && HasFirst(Folk, "The first trade route"));
 	EXPECT(Folk.StatesText().find("Trades with: ") != std::string::npos);
+	// Rulers go to war: battles are fought, people die, and the battles are kept.
+	const earth::Thinker Warlord = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"war\"}" : "{\"thought\": \"x\"}");
+	};
+	for (int y = 0; y < 20 && Folk.AllBattles().empty(); ++y)
+	{
+		Folk.Think(Warlord, static_cast<int>(Folk.AllCamps().size()));
+		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	}
+	EXPECT(!Folk.AllBattles().empty());
+	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
 	const std::string Path = "states_test.bin";
 	EXPECT(earth::SaveWorld(Path, Eco, Folk));
 	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 6, EcoSettings);
 	earth::People Folk2(&Eco2, 6, Settings);
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
+	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
 	{
 		const earth::Polity& A = Folk.AllStates()[i];

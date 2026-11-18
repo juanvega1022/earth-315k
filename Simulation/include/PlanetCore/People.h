@@ -555,6 +555,23 @@ public:
 		return static_cast<int>(N / 2);
 	}
 	double WorldTradePerYear() const { return WorldTrade; }
+	// Everyone killed in war and driven from home by it, and the latest battles, newest first.
+	long long WarDeaths() const { return WarDead; }
+	long long WarRefugees() const { return Refugees; }
+	const std::vector<Battle>& AllBattles() const { return Battles; }
+	std::string BattlesText(size_t Most = 300) const
+	{
+		std::string Out = std::to_string(WarDead) + " killed in war and " + std::to_string(Refugees) + " driven from home so far\n\n";
+		char Buf[120];
+		for (size_t k = Battles.size(); k-- > 0 && Battles.size() - k <= Most;)
+		{
+			const Battle& B = Battles[k];
+			std::snprintf(Buf, sizeof(Buf), "Year %.0f, %s of %s (%.1f, %.1f): ", B.Year, B.Siege ? "siege" : "battle", PersonName(B.Place).c_str(), B.Lat, B.Lon);
+			Out += Buf + B.Winner + " beats " + B.Loser + "; " + std::to_string(B.WinnerDead) + " and " + std::to_string(B.LoserDead) + " killed" +
+				(B.Refugees ? ", " + std::to_string(B.Refugees) + " flee" : std::string()) + "\n";
+		}
+		return Out;
+	}
 	// People living in cities, in the whole world and in its biggest city.
 	long long CityPeopleTotal() const
 	{
@@ -713,6 +730,7 @@ public:
 		if (Ar.Version >= 15) Ar.Io(Diseases), Ar.Io(DiseaseDays), Ar.Io(DiseaseDeaths);
 		if (Ar.Version >= 16) Ar.Io(AnyRoute), Ar.Io(AnySeaRoute), Ar.Io(WorldTrade);
 		if (Ar.Version >= 17) Ar.Io(NextCityMark);
+		if (Ar.Version >= 18) Ar.Io(Battles), Ar.Io(WarDead), Ar.Io(Refugees), Ar.Io(DeadliestBattle);
 		if (Ar.IsReading())
 		{
 			IndexCamps();
@@ -1627,6 +1645,9 @@ private:
 	uint8_t TiersSeen = 0;      // Bits of the tiers that have ever existed.
 	int NextStateMark = 10;
 	int NextCityMark = 100;
+	std::vector<Battle> Battles; // The latest years of fighting, oldest first.
+	long long WarDead = 0, Refugees = 0;
+	int DeadliestBattle = 0;
 	int StatesFounded = 0;
 	bool AnyLaw = false;
 	bool AnyRoute = false, AnySeaRoute = false;
@@ -4641,6 +4662,33 @@ private:
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
 	// How much fighting a state can field: its people, armed with what any of them knows how to make.
+	// How deadly the weapons in a set of skills are: 1 for spears, more for bronze, iron, guns, engines and planes.
+	static double WeaponsOf(SkillSet Known)
+	{
+		static const std::pair<int, double> Arms[] = {{SkillNamed("bows and arrows"), 0.3}, {SkillNamed("bronze"), 0.3}, {SkillNamed("iron"), 0.4},
+			{SkillNamed("gunpowder"), 1.0}, {SkillNamed("engines"), 1.5}, {SkillNamed("flight"), 1.5}, {SkillNamed("rockets"), 1.0}};
+		double W = 1.0;
+		for (const auto& [K, More] : Arms) W += Has(Known, K) ? More : 0.0;
+		return W;
+	}
+
+	// Keeps a year's fighting, and tells the history of sieges and the deadliest battles.
+	void NoteBattle(const Battle& B, bool Big)
+	{
+		Battles.push_back(B);
+		if (Battles.size() > 2000) Battles.erase(Battles.begin(), Battles.begin() + 1000);
+		const int Dead = B.WinnerDead + B.LoserDead;
+		std::string Where = (B.Siege ? "The siege of " : "The battle of ") + PersonName(B.Place);
+		if (Dead > DeadliestBattle && Dead >= 20)
+		{
+			DeadliestBattle = Dead;
+			AddEvent(Where + ", the deadliest yet: " + B.Winner + " defeats " + B.Loser + "; " + std::to_string(Dead) + " killed" +
+				(B.Refugees ? ", " + std::to_string(B.Refugees) + " flee" : std::string()));
+		}
+		else if (Big && B.Siege)
+			AddEvent(Where + ": " + B.Winner + " besieges " + B.Loser + "'s capital; " + std::to_string(Dead) + " killed");
+	}
+
 	double StrengthOf(const Polity& S) const
 	{
 		static const std::vector<int> Arms = []
@@ -4915,25 +4963,66 @@ private:
 				const Camp& Q = Camps[static_cast<size_t>(Y)];
 				return DistanceKm(P.Lat, P.Lon, Win.Lat, Win.Lon) < DistanceKm(Q.Lat, Q.Lon, Win.Lat, Win.Lon);
 			});
-			const size_t Taken = std::min(Lost.size(), static_cast<size_t>(1 + Lose.Bands / 8));
-			bool CapitalTaken = false;
+			size_t Taken = std::min(Lost.size(), static_cast<size_t>(1 + Lose.Bands / 8));
+			// A walled capital city holds out for a year unless the attackers are far stronger.
+			Battle Fight;
+			Fight.Year = Eco->Years(), Fight.Winner = StateName(Win), Fight.Loser = StateName(Lose);
 			for (size_t k = 0; k < Taken; ++k)
+				if (Camps[static_cast<size_t>(Lost[k])].Id == Lose.Capital && Lose.City)
+				{
+					Fight.Siege = true;
+					if (StrengthOf(Win) < 2.0 * StrengthOf(Lose) && Dice.Chance(0.6)) Taken = k; // The siege fails this year.
+					break;
+				}
+			// Deadlier weapons kill more of those who fight; the winners lose fewer.
+			const double Deadly = std::min(0.6, 0.06 * WeaponsOf(Win.Known | Lose.Known));
+			auto Fighting = [&](Camp& C, double Rate)
 			{
-				Camp& C = Camps[static_cast<size_t>(Lost[k])];
-				CapitalTaken = CapitalTaken || C.Id == Lose.Capital;
-				C.State = Win.Id;
-				Win.Treasury += 0.5f * C.Store, C.Store *= 0.5f; // Plunder.
+				int Dead = 0;
 				for (int i : C.Members)
 				{
 					Npc& P = Npcs[static_cast<size_t>(i)];
-					if (P.AgeYears() >= 16.0 && P.AgeYears() < 50.0 && Dice.Chance(0.1)) P.Health = 0.0f; // Killed in the fighting.
+					if (P.Health > 0.0f && P.AgeYears() >= 16.0 && P.AgeYears() < 50.0 && Dice.Chance(Rate)) P.Health = 0.0f, ++Dead;
 				}
+				return Dead;
+			};
+			const auto Front = Of[Win.Id];
+			for (size_t k = 0; k < std::min(Front.size(), std::max<size_t>(Taken, 1)); ++k)
+				Fight.WinnerDead += Fighting(Camps[static_cast<size_t>(Front[Front.size() - 1 - k])], Deadly * 0.4);
+			bool CapitalTaken = false;
+			for (size_t k = 0; k < std::min(Lost.size(), Taken + (Fight.Siege ? 1 : 0)); ++k)
+			{
+				Camp& C = Camps[static_cast<size_t>(Lost[k])];
+				if (k == 0) Fight.Place = C.Words[3], Fight.Lat = C.Lat, Fight.Lon = C.Lon;
+				Fight.LoserDead += Fighting(C, Deadly);
+				if (k >= Taken) continue; // The besieged city starves and bleeds, but holds.
+				CapitalTaken = CapitalTaken || C.Id == Lose.Capital;
+				// Some flee toward their own capital, the rest are taken.
+				if (C.Id != Lose.Capital && Lose.Bands > static_cast<int>(Taken) + 1 && Dice.Chance(0.3))
+				{
+					const double La = C.Lat + (Lose.Lat - C.Lat) * 0.5, Lo = C.Lon + (Lose.Lon - C.Lon) * 0.5;
+					if (std::abs(Lo - C.Lon) < 90.0 && LivableFor(C.Kind, La, Lo, Fishes(C)))
+					{
+						GridRemove(Lost[k]);
+						C.Lat = La, C.Lon = Lo;
+						GridAdd(Lost[k]);
+						C.DaysHere = 0;
+						Fight.Refugees += static_cast<int>(C.Members.size());
+						continue;
+					}
+				}
+				C.State = Win.Id;
+				Win.Treasury += 0.5f * C.Store, C.Store *= 0.5f; // Plunder.
 			}
-			Lose.Bands -= static_cast<int>(Taken), Win.Bands += static_cast<int>(Taken);
+			WarDead += Fight.WinnerDead + Fight.LoserDead, Refugees += Fight.Refugees;
+			NoteBattle(Fight, Win.Tier >= Kingdom || Lose.Tier >= Kingdom);
+			int Moved = 0;
+			for (size_t k = 0; k < Taken; ++k) Moved += Camps[static_cast<size_t>(Lost[k])].State == Win.Id;
+			Lose.Bands -= Moved, Win.Bands += Moved;
 			const std::string WinName = StateName(Win), LoseName = StateName(Lose);
 			if (CapitalTaken || Lose.Bands <= 1)
 			{
-				for (size_t k = Taken; k < Lost.size(); ++k) Camps[static_cast<size_t>(Lost[k])].State = Win.Id;
+				for (size_t k = 0; k < Lost.size(); ++k) Camps[static_cast<size_t>(Lost[k])].State = Win.Id;
 				Win.Bands += Lose.Bands, Lose.Bands = 0;
 				Lose.Conquests = -1; // Marks it as conquered, not fallen.
 				Win.Conquests += 1, Win.Enemy = 0, Win.WarYears = 0;
@@ -5047,7 +5136,7 @@ private:
 	// The nearest band of another state to a state's capital, and that state.
 	Polity* NearestOther(const Polity& S)
 	{
-		for (int N : CampSlotsNear(S.Lat, S.Lon, ReachKm(S.Tier, false)))
+		for (int N : CampSlotsNear(S.Lat, S.Lon, std::max(ReachKm(S.Tier, false), TradeKm(S))))
 			if (Camps[static_cast<size_t>(N)].State && Camps[static_cast<size_t>(N)].State != S.Id)
 				if (Polity* O = StateById(Camps[static_cast<size_t>(N)].State)) return O;
 		return nullptr;
