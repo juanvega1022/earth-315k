@@ -679,7 +679,19 @@ static void TestDiseases()
 	for (int i = 0; i < 13; ++i) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.BandCount() >= 3);
 	const long long DeadBefore = Folk.TotalDeaths();
-	const uint16_t Id = Folk.StartDisease(0, -1, 0.4f, 2.0f, 60);
+	// Start it in the band with the most others close by.
+	size_t Start = 0;
+	int Most = -1;
+	const auto& All = Folk.AllCamps();
+	for (size_t a = 0; a < All.size(); ++a)
+	{
+		int Near = 0;
+		for (size_t b = 0; b < All.size(); ++b)
+			Near += a != b && std::abs(All[a].Lat - All[b].Lat) < 0.6 && std::abs(All[a].Lon - All[b].Lon) < 0.6;
+		if (Near > Most) Most = Near, Start = a;
+	}
+	EXPECT(Most > 0);
+	const uint16_t Id = Folk.StartDisease(Start, -1, 0.3f, 2.0f, 120);
 	int MostSick = 0;
 	for (int i = 0; i < 26; ++i)
 	{
