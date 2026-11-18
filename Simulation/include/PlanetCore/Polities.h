@@ -45,6 +45,9 @@ struct Polity
 	double Wealth = 0.0;            // What its trade has earned, in kg of food's worth.
 	uint16_t Schools = 0, Libraries = 0, Universities = 0;
 	SkillSet Written = 0;           // What its libraries hold: kept even if everyone who knew it dies.
+	bool Calendar = false;          // Keeps a written calendar of the year.
+	uint16_t Festival = 0;          // Name of its great yearly festival, 0 none.
+	uint16_t Monuments = 0;         // Temples, tombs and monuments raised from its treasury.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -66,6 +69,7 @@ struct Polity
 		Ar.Io(Founder), Ar.Io(Faith), Ar.Io(Founded), Ar.Io(Treasury), Ar.Io(Enemy), Ar.Io(WarYears), Ar.Io(Conquests), Ar.Io(Allies), Ar.Io(Laws);
 		if (Ar.Version >= 16) Ar.Io(Partners), Ar.Io(Wealth);
 		if (Ar.Version >= 21) Ar.Io(Schools), Ar.Io(Libraries), Ar.Io(Universities), Ar.Io(Written);
+		if (Ar.Version >= 24) Ar.Io(Calendar), Ar.Io(Festival), Ar.Io(Monuments);
 	}
 };
 
@@ -83,6 +87,19 @@ struct Battle
 	void Serialize(A& Ar)
 	{
 		Ar.Io(Year), Ar.Io(Lat), Ar.Io(Lon), Ar.Io(Place), Ar.Io(Winner), Ar.Io(Loser), Ar.Io(WinnerDead), Ar.Io(LoserDead), Ar.Io(Refugees), Ar.Io(Siege);
+	}
+};
+
+// Something a thinking mind wrote down for others to read: a prayer, a poem, a story or a record.
+struct Writing
+{
+	double Year = 0.0;
+	std::string Author, Place, Kind, Text;
+
+	template <class A>
+	void Serialize(A& Ar)
+	{
+		Ar.Io(Year), Ar.Io(Author), Ar.Io(Place), Ar.Io(Kind), Ar.Io(Text);
 	}
 };
 

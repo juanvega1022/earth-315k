@@ -571,6 +571,25 @@ public:
 		Polity* S = StateById(StateId);
 		return S && Voyage(*S, Range);
 	}
+	// What the minds have written, and all of it as one text, oldest first.
+	const std::vector<Writing>& Writings() const { return Library; }
+	std::string LibraryText() const
+	{
+		std::string Out = std::to_string(Library.size()) + " writings\n\n";
+		char Buf[40];
+		for (const Writing& W : Library)
+		{
+			std::snprintf(Buf, sizeof(Buf), "Year %.0f: ", W.Year);
+			Out += Buf + W.Kind + " by " + W.Author + ", of " + W.Place + "\n  " + W.Text + "\n\n";
+		}
+		return Out;
+	}
+	int MonumentsBuilt() const
+	{
+		int N = 0;
+		for (const Polity& S : States) N += S.Monuments;
+		return N;
+	}
 	// Bands settled across the open sea so far.
 	int ColoniesFounded() const { return Colonies; }
 	// Over the last year: mean age at death, and births and deaths for every thousand alive.
@@ -776,6 +795,7 @@ public:
 		if (Ar.Version >= 21) Ar.Io(AnySchool), Ar.Io(AnyLibrary), Ar.Io(AnyUniversity);
 		if (Ar.Version >= 22) Ar.Io(NextLifeMark);
 		if (Ar.Version >= 23) Ar.Io(Colonies), Ar.Io(AnyVoyage);
+		if (Ar.Version >= 24) Ar.Io(AnyCalendar), Ar.Io(AnyFestival), Ar.Io(AnyMonument), Ar.Io(Library);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1498,6 +1518,8 @@ public:
 			{
 				Deeds = "\"found\" (unite the bands near you under your rule) or \"\"";
 			}
+			static const int WritingSkill = SkillNamed("writing");
+			const bool Writes = Has(C.Known, WritingSkill) && P.AgeYears() >= 12.0;
 			std::vector<std::string>& Past = PastThoughts[P.Id];
 			std::string Before;
 			for (const std::string& T : Past) Before += "\n- \"" + T + "\"";
@@ -1514,6 +1536,7 @@ public:
 				"plainly, as someone of your time would, with no modern words. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
 				"your own voice), \"way\" (the number of one way of working to try), \"material\" (a material you have come across, "
 				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\")" +
+				(Writes ? std::string(", \"writing\" (if you wish, a few sentences you write down for others to read, or \"\") and \"kind\" (prayer, poem, story, law or record)") : std::string()) +
 				(Deeds.empty() ? std::string(".") : ", and \"deed\": one of " + Deeds + ".");
 			++MindCounts.Asked;
 			const std::string Answer = Mind(Prompt);
@@ -1625,6 +1648,19 @@ public:
 				Line += " | works toward " + Aim + ", not yet";
 			}
 			if (!Deeds.empty()) Line += DoDeed(P, static_cast<int>(Order[t]), Lower(minds::JsonString(Answer, "deed")), minds::JsonString(Answer, "law"), Thought);
+			if (std::string Text = minds::JsonString(Answer, "writing"); Writes && Text.size() >= 10)
+			{
+				if (Text.size() > 600) Text.resize(600);
+				std::string Kind = Lower(minds::JsonString(Answer, "kind"));
+				if (Kind != "prayer" && Kind != "poem" && Kind != "story" && Kind != "law" && Kind != "record") Kind = "writing";
+				const Polity* Home = C.State ? StateById(C.State) : nullptr;
+				Writing Piece;
+				Piece.Year = Eco->Years(), Piece.Author = Name, Piece.Place = Home ? StateName(*Home) : "a band that calls its land " + LandName(C, RegionOf(C.Lat, C.Lon));
+				Piece.Kind = Kind, Piece.Text = Text;
+				if (Library.empty()) AddEvent(Name + " writes the first " + Kind + " anyone has written down: \"" + Text.substr(0, 160) + "\"");
+				Library.push_back(Piece);
+				Line += " | WRITES a " + Kind;
+			}
 			Log += Line + "\n";
 		}
 		return Log;
@@ -1701,6 +1737,8 @@ private:
 	bool AnySchool = false, AnyLibrary = false, AnyUniversity = false;
 	int NextLifeMark = 40;
 	int Colonies = 0; // Bands settled across the open sea.
+	bool AnyCalendar = false, AnyFestival = false, AnyMonument = false;
+	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
 	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
@@ -4837,6 +4875,47 @@ private:
 		if (S.Libraries) S.Written |= S.Known;
 	}
 
+	// Once a year: states that read the sky keep a calendar, their faith gets a great festival, and
+	// a rich treasury raises temples and monuments in the capital.
+	void Culture(Polity& S)
+	{
+		static const int Astronomy = SkillNamed("astronomy"), Writing = SkillNamed("writing");
+		const std::string Name = StateName(S);
+		if (!S.Calendar && Has(S.Known, Astronomy) && Has(S.Known, Writing))
+		{
+			S.Calendar = true;
+			if (!AnyCalendar) AnyCalendar = true, AddEvent("The first calendar: the sky-watchers of " + Name + " write down a year of 365 days");
+		}
+		if (S.Faith && !S.Festival && Dice.Chance(0.05))
+		{
+			const Camp* Seat = nullptr;
+			if (auto It = CampSlots.find(S.Capital); It != CampSlots.end()) Seat = &Camps[static_cast<size_t>(It->second)];
+			S.Festival = static_cast<uint16_t>((Seat ? Seat->Words[5] : 1u) * 131u + S.Id * 7u + 1u);
+			if (!AnyFestival || S.Tier >= Kingdom)
+			{
+				std::string T = Name + " holds its first festival of " + PersonName(S.Festival) + " for its gods";
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				AddEvent(T);
+			}
+			AnyFestival = true;
+		}
+		const float Cost = 2000.0f * static_cast<float>(S.Monuments + 1);
+		if (S.City && S.Treasury > Cost && Dice.Chance(0.1))
+		{
+			S.Treasury -= Cost;
+			++S.Monuments;
+			static const char* Kinds[] = {"a great temple", "a tomb for its rulers", "a tall monument", "a palace", "great walls"};
+			const std::string What = Kinds[(S.Id + S.Monuments) % 5];
+			if (!AnyMonument || S.Tier >= Kingdom)
+			{
+				std::string T = Name + " raises " + What + " in the city of " + PersonName(S.City) + (AnyMonument ? "" : ", the first great building in the world");
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				AddEvent(T);
+			}
+			AnyMonument = true;
+		}
+	}
+
 	// How much likelier than others someone in a camp is to find new things: those who can read,
 	// and above all those near libraries and universities. Shares out the world's finds; the pace
 	// stays history's.
@@ -5181,6 +5260,7 @@ private:
 				NoteState(S, PersonName(S.RulerName) + " makes the city of " + PersonName(S.City) + " the capital of " + StateName(S));
 			}
 			Institutions(S);
+			Culture(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
 			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()));

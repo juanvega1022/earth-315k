@@ -670,6 +670,14 @@ static void TestStates()
 	bool Kept = false;
 	for (const earth::Polity& S : Folk.AllStates()) Kept = Kept || (S.Libraries > 0 && S.Written.Count() > 0);
 	EXPECT(Kept || HasFirst(Folk, "The first library in the world"));
+	// Minds who can write leave writings in the world's library.
+	const earth::Thinker Poet = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("\"writing\"") != std::string::npos ? "{\"thought\": \"x\", \"writing\": \"The river gives and the river takes.\", \"kind\": \"poem\"}" : "{\"thought\": \"x\"}");
+	};
+	Folk.Think(Poet, static_cast<int>(Folk.AllCamps().size()));
+	EXPECT(!Folk.Writings().empty() && Folk.Writings()[0].Kind == "poem");
+	EXPECT(Folk.LibraryText().find("The river gives") != std::string::npos);
 	// States near each other open trade.
 	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
@@ -704,6 +712,7 @@ static void TestStates()
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
+	EXPECT(Folk2.Writings().size() == Folk.Writings().size());
 	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
 	{
