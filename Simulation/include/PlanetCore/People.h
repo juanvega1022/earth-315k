@@ -565,6 +565,14 @@ public:
 		return Worn.empty() ? 0.0 : T / static_cast<double>(Worn.size());
 	}
 	double ForestClearedKm2() const { return ForestCleared * 750.0; } // shortcut: a quarter-degree square is about 750 km2 at mid latitudes.
+	// Sends settlers from a state across the sea, up to Range km; true if they landed.
+	bool SendVoyage(uint32_t StateId, double Range)
+	{
+		Polity* S = StateById(StateId);
+		return S && Voyage(*S, Range);
+	}
+	// Bands settled across the open sea so far.
+	int ColoniesFounded() const { return Colonies; }
 	// Over the last year: mean age at death, and births and deaths for every thousand alive.
 	double LifeExpectancyYears() const { return LifeExpectancy; }
 	double BirthsPer1000() const { return BirthRate; }
@@ -767,6 +775,7 @@ public:
 		if (Ar.Version >= 20) Ar.Io(Worn), Ar.Io(ForestCleared), Ar.Io(AnyCollapse);
 		if (Ar.Version >= 21) Ar.Io(AnySchool), Ar.Io(AnyLibrary), Ar.Io(AnyUniversity);
 		if (Ar.Version >= 22) Ar.Io(NextLifeMark);
+		if (Ar.Version >= 23) Ar.Io(Colonies), Ar.Io(AnyVoyage);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1691,6 +1700,8 @@ private:
 	bool AnyCollapse = false;
 	bool AnySchool = false, AnyLibrary = false, AnyUniversity = false;
 	int NextLifeMark = 40;
+	int Colonies = 0; // Bands settled across the open sea.
+	bool AnyVoyage = false;
 	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	bool FuelRunningOut = false;
@@ -4721,6 +4732,66 @@ private:
 	}
 	static bool Shares(const Camp& C, uint32_t Faith) { return Faith && std::find(C.Faith.begin(), C.Faith.end(), Faith) != C.Faith.end(); }
 
+	// Once a year: kingdoms with ocean-going ships send a band of settlers to a far shore. Where
+	// they land among strangers, the sicknesses of home come with them, and the people there have
+	// never met them.
+	void Voyages()
+	{
+		static const int Ships = SkillNamed("sailing ships"), Compass = SkillNamed("compass"), Steam = SkillNamed("steam engines");
+		for (size_t s = 0; s < States.size(); ++s)
+		{
+			Polity& S = States[s];
+			if (S.Tier < Kingdom || !Has(S.Known, Ships) || !Dice.Chance(Has(S.Known, Compass) ? 0.04 : 0.02)) continue;
+			Voyage(S, Has(S.Known, Steam) ? 20000.0 : Has(S.Known, Compass) ? 8000.0 : 3000.0);
+		}
+	}
+
+	// One voyage from a state: true if settlers landed somewhere.
+	bool Voyage(Polity& S, double Range)
+	{
+		// A shore band of the state, not its capital, sets sail.
+		std::vector<int> Shore;
+		for (size_t c = 0; c < Camps.size(); ++c)
+			if (Camps[c].State == S.Id && Camps[c].Id != S.Capital && !Camps[c].Members.empty() && ShoreFood(Camps[c].Lat, Camps[c].Lon) > 0.0) Shore.push_back(static_cast<int>(c));
+		const int From = Shore.empty() ? -1 : Shore[std::min(Shore.size() - 1, static_cast<size_t>(Dice.Uniform() * static_cast<double>(Shore.size())))];
+		if (From < 0) return false;
+		Camp& C = Camps[static_cast<size_t>(From)];
+		const int Home = RegionOf(C.Lat, C.Lon);
+		// A far shore where the band can live.
+		double La = 0.0, Lo = 0.0;
+		bool Found = false;
+		for (int Tries = 0; Tries < 60 && !Found; ++Tries)
+		{
+			Offset(C.Lat, C.Lon, Dice.Uniform() * 2.0 * kPi, Range * (0.3 + 0.7 * Dice.Uniform()), La, Lo);
+			Found = std::abs(La) < 70.0 && Eco->IsLand(La, Lo) && ShoreFood(La, Lo) > 0.0 && LivableFor(C.Kind, La, Lo, true) && DistanceKm(C.Lat, C.Lon, La, Lo) > 800.0;
+		}
+		if (!Found) return false;
+		GridRemove(From);
+		C.Lat = La, C.Lon = Lo, C.DaysHere = 0;
+		GridAdd(From);
+		++Colonies;
+		const int There = RegionOf(La, Lo);
+		const std::string Name = StateName(S), Land = PlaceNames[static_cast<size_t>(There)].empty() ? std::string("a new land") : PlaceNames[static_cast<size_t>(There)];
+		if (!AnyVoyage) AnyVoyage = true, AddEvent("The first voyage across the open sea: settlers from " + Name + " sail to " + Land);
+		// First contact: strangers already living near the landing.
+		bool Strangers = false;
+		for (int N : CampSlotsNear(La, Lo, 300.0))
+			if (N != From && !Camps[static_cast<size_t>(N)].Members.empty() && Camps[static_cast<size_t>(N)].State != S.Id && !Understand(Camps[static_cast<size_t>(N)], C)) Strangers = true;
+		if (!Strangers) return true;
+		// The deadliest sickness that ever arose in the settlers' homeland comes ashore with them.
+		const Disease* Worst = nullptr;
+		for (const Disease& D : Diseases)
+			if (RegionOf(D.Lat, D.Lon) == Home && (!Worst || D.Deadliness > Worst->Deadliness)) Worst = &D;
+		std::string Text = "Settlers from " + Name + " land in " + Land + ", among people who have never met them";
+		if (Worst && There != Home && !C.Sick)
+		{
+			C.Sick = Worst->Id, C.SickDays = 0;
+			Text += "; they bring the sickness " + DiseaseName(*Worst) + " with them";
+		}
+		if (There != Home || S.Tier >= Empire) AddEvent(Text);
+		return true;
+	}
+
 	// Once a year: how long people live, and how many are born and die for every thousand alive.
 	void Census()
 	{
@@ -5257,6 +5328,7 @@ private:
 		}
 
 		Trade();
+		Voyages();
 
 		// New chiefdoms, where a band that farms or lives in a village leads others close by that
 		// speak its tongue or share its gods.
