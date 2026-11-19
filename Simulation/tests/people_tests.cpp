@@ -767,6 +767,9 @@ static void TestStates()
 			EXPECT(J == Folk.JobOf(P) && (P.AgeYears() >= 12.0 || J <= earth::People::JobPupil));
 		}
 		EXPECT(Folk.WorldReaders() >= 0.0 && Folk.WorldReaders() <= 1.0);
+		// Stations: the enslaved never read, and shares add up.
+		for (const earth::Npc& P : Folk.All()) EXPECT(P.Status <= 3 && (P.Status > 0 || !Folk.Reads(P)));
+		EXPECT(std::abs(Folk.StationShare(0) + Folk.StationShare(1) + Folk.StationShare(2) + Folk.StationShare(3) - 1.0) < 1e-6 || Folk.PolityCount() == 0);
 		EXPECT(Folk.StatesText().find("  Work: ") != std::string::npos);
 		const double D = earth::People::PersonDraw(7, 2);
 		EXPECT(D >= 0.0 && D < 1.0 && D == earth::People::PersonDraw(7, 2));

@@ -183,6 +183,7 @@ struct Npc
 	uint8_t Kind = 0;         // 0 an NPC (early Homo sapiens); otherwise one of OtherKinds().
 	float OtherShare = 0.0f;  // Share of their ancestry from the other kinds of human.
 	float BabyFatherShare = 0.0f; // The same for the father of the child she carries.
+	uint8_t Status = 1;       // Their place in society: 0 enslaved, 1 common, 2 middling (traders, learned), 3 among the rich and powerful.
 
 	float TrustIn(uint32_t Other) const
 	{
@@ -251,6 +252,7 @@ struct Npc
 		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
 		if (Ar.Version >= 6) Ar.Io(Grief);
 		if (Ar.Version >= 8) Ar.Io(Kind), Ar.Io(OtherShare), Ar.Io(BabyFatherShare);
+		if (Ar.Version >= 49) Ar.Io(Status);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -809,6 +811,7 @@ public:
 		if (Age < 12.0) return S && S->Schools && Age >= 6.0 && PersonDraw(P.Id, 1) < S->Literacy / 0.95 ? JobPupil : JobChild;
 		if (Age >= 65.0 && (!S || !Has(S->Known, SkillNamed("factories")))) return JobElder;
 		if (!S) return P.HuntSkill > P.ForageSkill ? JobHunter : JobGatherer;
+		if (P.Status == 0) return Has(S->Known, SkillNamed("steam engines")) && PersonDraw(P.Id, 4) < 0.3 ? JobMiner : JobFarmer; // The enslaved work fields and mines.
 		const double Draw = PersonDraw(P.Id, 2);
 		if (Draw < S->FarmShare) return Has(S->Known, SkillNamed("farming")) ? JobFarmer : JobHerder;
 		static const std::pair<int, Job> Open[] = {{SkillNamed("pottery"), JobCraftsman}, {SkillNamed("writing"), JobScribe}, {SkillNamed("money"), JobMerchant},
@@ -833,8 +836,17 @@ public:
 		const Polity* S = C.State ? StateById(C.State) : nullptr;
 		if (!S || !Has(C.Known, SkillNamed("writing"))) return false;
 		const double Share = S->Rights >= 2 ? S->Literacy : (P.Female ? 0.3 : 1.7) * S->Literacy;
-		return PersonDraw(P.Id, 3) < Share;
+		return P.Status > 0 && PersonDraw(P.Id, 3) < Share * (P.Status == 3 ? 2.5 : P.Status == 2 ? 1.8 : 1.0); // The well-off are schooled first; the enslaved are kept from letters.
 	}
+	// Share of people in states at each station (0 enslaved .. 3 rich and powerful).
+	double StationShare(int Status) const
+	{
+		long long All = 0, N = 0;
+		for (const Npc& P : Npcs)
+			if (!Camps.empty() && Camps[CampSlot(P.Camp)].State) ++All, N += P.Status == Status;
+		return All ? static_cast<double>(N) / static_cast<double>(All) : 0.0;
+	}
+	int RisesInStation() const { return RisesLastYear; }
 	// Share of grown people (15+) who can read, across the world.
 	double WorldReaders() const
 	{
@@ -1753,6 +1765,7 @@ public:
 				const int J = JobOf(P);
 				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
+				if (Realm) Life += P.Status == 0 ? "You are enslaved: you work for others and cannot leave. " : P.Status == 3 ? "Your family is among the rich and powerful. " : P.Status == 2 ? "Your family is comfortable, neither rich nor poor. " : "";
 			}
 			if (P.Grief > 0.3f) Life += "You are grieving someone you loved. ";
 			if (C.DeathsLately > 2) Life += std::to_string(C.DeathsLately) + " of your people have died lately. ";
@@ -2049,6 +2062,7 @@ private:
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	int RisesLastYear = 0; // People who rose in station last year; not saved.
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	bool FuelRunningOut = false;
@@ -4639,6 +4653,7 @@ private:
 					FatherGeneration = Father->Generation;
 				}
 				Baby.Generation = std::max(P.Generation, FatherGeneration) + 1;
+				Baby.Status = P.Status == 3 ? 3 : P.Status; // Born into the mother's station.
 				P.PregnantDays = -1.0;
 				P.LastBirthDay = Eco->Day();
 				P.BabyFatherGenes.reset();
@@ -5365,8 +5380,33 @@ public:
 	}
 private:
 	// Once a year: how long people live, and how many are born and die for every thousand alive.
+	// Once a year: people rise and fall. Learning, trade and valour raise commoners; hunger and
+	// defeat bring the well-off down; conquerors with slavery enslave, abolition frees; rulers are great.
+	void Stations()
+	{
+		RisesLastYear = 0;
+		for (Npc& P : Npcs)
+		{
+			const Camp& C = Camps[CampSlot(P.Camp)];
+			const Polity* S = C.State ? StateById(C.State) : nullptr;
+			if (!S) { P.Status = 1; continue; }
+			if (P.Id == S->Ruler) { P.Status = 3; continue; }
+			if (P.Status == 0) { if (!S->Slavery) P.Status = 1; continue; }
+			if (P.Status == 1 && S->Slavery && S->Conquests > 0 && Dice.Chance(0.002)) { P.Status = 0; continue; }
+			if (P.AgeYears() < 15.0) continue;
+			const int J = JobOf(P);
+			const bool Learned = Reads(P) && (J == JobMerchant || J == JobScribe || J == JobTeacher || J == JobDoctor || J == JobEngineer || J == JobScientist || J == JobProgrammer);
+			const bool Hungry = S->Price > 3.0f;
+			if (P.Status == 1 && (Learned ? Dice.Chance(0.05) : (J == JobSoldier && S->Enemy && Dice.Chance(0.01)))) ++P.Status, ++RisesLastYear;
+			else if (P.Status == 2 && (J == JobMerchant || J == JobScientist) && S->Inequality > 2.0f && Dice.Chance(0.005)) ++P.Status, ++RisesLastYear;
+			else if (P.Status >= 2 && Hungry && Dice.Chance(0.02)) --P.Status;
+			else if (P.Status == 3 && S->Revolutions > 0 && S->Gov != Monarchy && S->Gov != Aristocracy && Dice.Chance(0.01)) --P.Status; // Old wealth thins out after a revolution.
+		}
+	}
+
 	void Census()
 	{
+		Stations();
 		const double Alive = std::max(1.0, static_cast<double>(Npcs.size()));
 		// Life expectancy at birth from this year's death rate at each age (a period life table), not the mean
 		// age at death, which a growing people with many children pulls far too low.
