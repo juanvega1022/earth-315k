@@ -807,6 +807,8 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
+			std::snprintf(Buf, sizeof(Buf), "  Crime: %.1f a year per 1,000 people%s%s%s\n", S->CrimeRate, S->Justice & 1 ? "; courts" : "", S->Justice & 2 ? ", police" : "", S->Justice & 4 ? ", prisons" : "");
+			Out += Buf;
 			if (S->Style) Out += "  Art: the " + PersonName(S->Style) + " style of " + ArtName(S->Art) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d; wealth from trade: %.0f; richest band has %.1fx the food per head of the poorest\n",
 				S->Treasury, S->Conquests, S->Wealth, S->Inequality);
@@ -923,6 +925,7 @@ public:
 		if (Ar.Version >= 34) Ar.Io(ArtStyles), Ar.Io(ArtsSeen);
 		if (Ar.Version >= 35) Ar.Io(TreatyYear);
 		if (Ar.Version >= 36) Ar.Io(AnyPark);
+		if (Ar.Version >= 37) Ar.Io(Crimes), Ar.Io(CrimeDead), Ar.Io(JusticeSeen);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1878,6 +1881,8 @@ private:
 	int ArtsSeen = 0;  // Bits of ArtName kinds that have appeared.
 	double TreatyYear = 0.0; // When the climate treaty was agreed, 0 not yet.
 	bool AnyPark = false;
+	long long Crimes = 0, CrimeDead = 0; // All crimes and killings so far.
+	int JusticeSeen = 0;                 // Bits of Justice that have appeared anywhere.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5437,6 +5442,15 @@ public:
 		const int K = SkillNamed(Skill);
 		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
 	}
+	long long CrimesSoFar() const { return Crimes; }
+	long long CrimeDeaths() const { return CrimeDead; }
+	// Crimes a year per 1,000 people in states, on average.
+	double WorldCrimeRate() const
+	{
+		double R = 0.0, N = 0.0;
+		for (const Polity& S : States) R += S.CrimeRate * S.Members, N += S.Members;
+		return N > 0.0 ? R / N : 0.0;
+	}
 	int ParksMade() const { int N = 0; for (const Polity& S : States) N += S.Parks; return N; }
 	int ArtStylesSoFar() const { return ArtStyles; }
 	int ArtStylesInUse() const
@@ -5449,6 +5463,37 @@ public:
 	}
 
 private:
+	// Once a year: crime. Want, unfairness and crowded towns breed theft and killing; courts (once a
+	// state has laws and writing), police (once its cities have printing and officials) and prisons
+	// hold it down, and so does living well.
+	void Crime(Polity& S)
+	{
+		static const int Writing = SkillNamed("writing"), Printing = SkillNamed("printing");
+		uint8_t J = 0;
+		if (!S.Laws.empty() && Has(S.Known, Writing)) J |= 1;
+		if ((J & 1) && S.City && Has(S.Known, Printing) && OfficialsPerBand(S.Known) > 0.0) J |= 2;
+		if ((J & 1) && S.City && S.Towns >= 2) J |= 4;
+		static const char* Firsts[] = {"The first court of law sits in ", "The first police keep the peace in the cities of ", "The first prison is built in "};
+		for (int b = 0; b < 3; ++b)
+			if ((J & (1 << b)) && !(JusticeSeen & (1 << b))) AddEvent(Firsts[b] + StateName(S));
+		JusticeSeen |= J, S.Justice = J;
+		const double Towns = S.Members > 0 ? static_cast<double>(S.CityPeople) / S.Members : 0.0;
+		double Rate = 2.0 * std::min(3.0, static_cast<double>(S.Inequality)) / 1.5 * (S.Price > 1.3f ? 1.5 : 1.0) * (1.0 + Towns);
+		Rate *= ((J & 1) ? 0.7 : 1.0) * ((J & 2) ? 0.6 : 1.0) * ((J & 4) ? 0.85 : 1.0) * (1.0 - 0.3 * S.Welfare);
+		S.CrimeRate = static_cast<float>(Rate);
+		const double Count = Rate * S.Members / 1000.0;
+		Crimes += static_cast<long long>(Count + Dice.Uniform());
+		// About one crime in thirty is a killing.
+		int Kill = static_cast<int>(Count / 30.0 + Dice.Uniform());
+		for (Camp& C : Camps)
+		{
+			if (Kill <= 0) break;
+			if (C.State != S.Id || C.Members.empty() || !Dice.Chance(0.2)) continue;
+			Npc& P = Npcs[static_cast<size_t>(C.Members[Dice.Next() % C.Members.size()])];
+			if (P.Health > 0.0f && P.AgeYears() >= 14.0) P.Health = 0.0f, ++CrimeDead, --Kill;
+		}
+	}
+
 	// Once a year: a state whose people care for the land, or whose scholars see the wild animals
 	// going, sets land aside as parks, about one for every ten bands; its hunters take less there.
 	void Nature(Polity& S)
@@ -6035,6 +6080,7 @@ private:
 			Ideas(S, Seat);
 			Faiths(S);
 			Arts(S, Seat);
+			Crime(S);
 			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.

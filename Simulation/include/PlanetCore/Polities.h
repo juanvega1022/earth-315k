@@ -81,6 +81,8 @@ struct Polity
 	float Welfare = 0.0f;        // How well its people live, 0 .. 1: long lives, enough food, reading, freedom, peace and fairness.
 	float Price = 1.0f;      // What food costs against plenty: above 1 it is scarce, or the money is worth less.
 	float Fertility = 1.0f;  // How many children its people have, against the old way: fewer once most read and live in towns.
+	float CrimeRate = 0.0f;  // Crimes a year per 1,000 of its people.
+	uint8_t Justice = 0;     // Bits: 1 courts, 2 police, 4 prisons.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>

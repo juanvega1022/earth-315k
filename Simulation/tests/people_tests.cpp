@@ -748,6 +748,11 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Every state has some crime, less with courts; killings are a small part of it.
+	EXPECT(Folk.StatesText().find("  Crime: ") != std::string::npos);
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.CrimeRate >= 0.0f && S.CrimeRate < 50.0f);
+	EXPECT(Folk.CrimeDeaths() <= Folk.CrimesSoFar() / 10 + 5);
+	std::printf("  Crime: %.2f per 1,000 a year, %lld crimes, %lld killed\n", Folk.WorldCrimeRate(), Folk.CrimesSoFar(), Folk.CrimeDeaths());
 	// Parks: at most one for every ten bands (and one for the smallest).
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Parks <= std::max(1, S.Bands / 10) + 1);
 	// Clean power's share is a share, and only league members sign the climate treaty.
