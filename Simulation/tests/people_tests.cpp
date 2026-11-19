@@ -748,6 +748,10 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Sports follow how people live; medals only come from world games.
+	int Medals = 0;
+	for (const earth::Polity& S : Folk.AllStates()) { EXPECT(S.Sport < 7); Medals += S.Medals; }
+	EXPECT(Medals <= Folk.WorldGamesHeld());
 	// Marriage customs and women's rights stay in range; votes for women only in free states (or once won before a coup).
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Marriage < 4 && S.Rights < 4);
 	EXPECT(Folk.StatesWithRights(3) <= Folk.StatesWithRights(1));

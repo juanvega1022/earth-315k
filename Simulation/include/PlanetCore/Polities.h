@@ -67,6 +67,8 @@ struct Polity
 	uint16_t Parks = 0;        // Wild land it protects from hunters and fields.
 	uint8_t Marriage = 0;      // Its custom: see MarriageName.
 	uint8_t Rights = 0;        // How far women's rights have come: see RightsName.
+	uint8_t Sport = 0;         // Its favourite sport: see SportName.
+	uint16_t Medals = 0;       // Wins at the world games.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -106,6 +108,7 @@ struct Polity
 		if (Ar.Version >= 35) Ar.Io(Treaty);
 		if (Ar.Version >= 36) Ar.Io(Parks);
 		if (Ar.Version >= 38) Ar.Io(Marriage), Ar.Io(Rights);
+		if (Ar.Version >= 39) Ar.Io(Sport), Ar.Io(Medals);
 	}
 };
 
@@ -190,6 +193,12 @@ inline const char* RightsName(int R)
 {
 	static const char* Names[] = {"none of their own", "women may own land and goods", "girls go to school as boys do", "women vote"};
 	return Names[R < 4 ? R : 0];
+}
+
+inline const char* SportName(int S)
+{
+	static const char* Names[] = {"none", "wrestling and foot races", "ball games", "horse races", "chariot races", "team games with written rules", "motor racing"};
+	return Names[S < 7 ? S : 0];
 }
 
 inline float TaxRate(int Gov)
