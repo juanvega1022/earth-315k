@@ -726,6 +726,8 @@ static void TestStates()
 	// States know how long their people live and how well.
 	EXPECT(Folk.StatesText().find("  People live ") != std::string::npos);
 	EXPECT(Folk.WorldWelfare() > 0.0 && Folk.WorldWelfare() <= 1.0);
+	// Each person stands for 100 or more on the real Earth's scale.
+	EXPECT(Folk.RealPopulation() >= 100.0 * Folk.Alive());
 	// Tongues fall into families, and states that write have scripts.
 	EXPECT(Folk.LanguageFamilies() >= 1 && Folk.LanguageFamilies() <= Folk.Languages());
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Script || earth::Knows(S.Known, 33));

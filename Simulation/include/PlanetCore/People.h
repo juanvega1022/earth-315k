@@ -602,6 +602,23 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	// How many people on the real Earth each person here stands for, by how their band feeds itself:
+	// the sim's land holds about a three-hundredth of the real foragers' density, and each way of
+	// farming more. Calibrated so a world that knows it all holds about 8 billion.
+	static double RealPerPerson(SkillSet Known)
+	{
+		static const int Farming = SkillNamed("farming"), Irrigation = SkillNamed("irrigation"), Iron = SkillNamed("iron"), Steam = SkillNamed("steam engines"),
+			Fertilizers = SkillNamed("fertilizers"), Vaccines = SkillNamed("vaccines");
+		const double K = Has(Known, Fertilizers) ? 12000.0 : Has(Known, Steam) ? 5000.0 : Has(Known, Iron) ? 3000.0 : Has(Known, Irrigation) ? 2000.0 : Has(Known, Farming) ? 1000.0 : 100.0;
+		return K * (Has(Known, Vaccines) ? 1.5 : 1.0);
+	}
+	// The world's people on the real Earth's scale.
+	double RealPopulation() const
+	{
+		double N = 0.0;
+		for (const Camp& C : Camps) N += static_cast<double>(C.Members.size()) * RealPerPerson(C.Known);
+		return N;
+	}
 	// Families of languages: tongues that still share a few words (cognates) with each other.
 	int LanguageFamilies() const
 	{
@@ -724,8 +741,9 @@ public:
 		char Buf[200];
 		for (const Polity* S : List)
 		{
-			std::snprintf(Buf, sizeof(Buf), " (%.1f, %.1f): %d people; %d cities in the state, %d people in them (%d%% of its people)\n", S->Lat, S->Lon, S->CapitalPeople, S->Towns,
-				S->CityPeople, static_cast<int>(100.0 * S->CityPeople / std::max(1, S->Members)));
+			const double Scale = S->Members ? S->RealPeople / S->Members : 0.0;
+			std::snprintf(Buf, sizeof(Buf), " (%.1f, %.1f): %d people (about %.0f real); %d cities in the state, %d people in them (%d%% of its people)\n", S->Lat, S->Lon, S->CapitalPeople,
+				S->CapitalPeople * Scale, S->Towns, S->CityPeople, static_cast<int>(100.0 * S->CityPeople / std::max(1, S->Members)));
 			Out += PersonName(S->City) + ", capital of " + StateName(*S) + Buf;
 		}
 		return Out;
@@ -760,7 +778,8 @@ public:
 		{
 			std::string N = StateName(*S);
 			N[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(N[0])));
-			std::snprintf(Buf, sizeof(Buf), ", a %s of %d bands and %d people, founded in year %.0f\n", TierName(S->Tier), S->Bands, S->Members, S->Founded);
+			std::snprintf(Buf, sizeof(Buf), ", a %s of %d bands and %d people (about %.0f on the real Earth's scale), founded in year %.0f\n", TierName(S->Tier), S->Bands, S->Members,
+				S->RealPeople, S->Founded);
 			Out += N + Buf;
 			std::snprintf(Buf, sizeof(Buf), " near %.1f, %.1f in %s\n", S->Lat, S->Lon, Lands[RegionOf(S->Lat, S->Lon)]);
 			Out += "  Capital: " + (S->City ? "the city of " + PersonName(S->City) + " (" + std::to_string(S->CapitalPeople) + " people)" : std::string("the ruler's camp")) + Buf;
@@ -881,6 +900,8 @@ public:
 		if (Ar.Version >= 27) Ar.Io(AnySlavery), Ar.Io(AnyAbolition);
 		if (Ar.Version >= 28) Ar.Io(DisasterDead), Ar.Io(Struck), Ar.Io(DisastersSeen);
 		if (Ar.Version >= 31) Ar.Io(AnyScript);
+		if (Ar.Version >= 32) Ar.Io(NextRealMark);
+		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
@@ -1829,6 +1850,7 @@ private:
 	bool AnyMission = false, AnyRevolution = false;
 	bool AnySlavery = false, AnyAbolition = false;
 	bool AnyScript = false;
+	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
 	double LeagueYear = 0.0;
@@ -5141,6 +5163,19 @@ private:
 				0.15 * S.Literacy + 0.15 * Free + 0.1 * (S.Enemy ? 0.0 : 1.0) + 0.1 / std::max(1.0f, S.Inequality), 0.0, 1.0));
 		}
 		StateAges.clear();
+		if (NextRealMark < 0.0)
+		{
+			NextRealMark = 1e6;
+			while (RealPopulation() >= NextRealMark) NextRealMark = NextRealMark < 1e9 ? NextRealMark * 10.0 : NextRealMark + 1e9;
+		}
+		for (const double Real = RealPopulation(); Real >= NextRealMark;)
+		{
+			char Buf[96];
+			std::snprintf(Buf, sizeof(Buf), NextRealMark >= 1e9 ? "%.0f billion people in the world, on the real Earth's scale" : "%.0f million people in the world, on the real Earth's scale",
+				NextRealMark >= 1e9 ? NextRealMark / 1e9 : NextRealMark / 1e6);
+			AddEvent(Buf);
+			NextRealMark = NextRealMark < 1e9 ? NextRealMark * 10.0 : NextRealMark + 1e9;
+		}
 		while (Enough && LifeExpectancy >= NextLifeMark)
 		{
 			AddEvent("People now live " + std::to_string(NextLifeMark) + " years on average");
@@ -5505,14 +5540,10 @@ private:
 	// Once a year: industry burns coal, oil and gas, warming the world, until the fuel runs low.
 	void BurnFuel()
 	{
-		// shortcut: each person counts for the world's 8 billion shared out by the sim's people, so a
-		// world of factories burns what ours does whatever the sim's head count; scale it if the sim
-		// ever holds real numbers.
-		const double Stand = 8e9 / std::max(1, Alive());
 		double Tonnes = 0.0;
-		for (const Polity& S : States) Tonnes += S.Members * FuelPerHead(S.Known);
+		for (const Polity& S : States) Tonnes += S.RealPeople * FuelPerHead(S.Known); // Real-scale people, so a world of factories burns what ours does.
 		const double Left = std::max(0.0, 1.0 - Eco->FuelBurnedGt() / 18000.0); // About 18,000 Gt of CO2 in all the coal, oil and gas there is.
-		const double Gt = Tonnes * Stand / 1e9 * std::min(1.0, 4.0 * Left);
+		const double Gt = Tonnes / 1e9 * std::min(1.0, 4.0 * Left);
 		FuelThisYear = Gt;
 		if (Gt <= 0.0) return;
 		Eco->Burn(Gt);
@@ -5640,6 +5671,7 @@ private:
 			S.Fertility = 1.0f; // Set with the cities below.
 			S.Literacy = std::min(0.95f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members)));
 			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
+			S.RealPeople = S.Members * RealPerPerson(S.Known);
 			S.CityPeople = S.CapitalPeople = S.Towns = 0;
 			if (!S.City) continue;
 			static const std::pair<int, double> Urbanizing[] = {{SkillNamed("cities"), 0.05}, {SkillNamed("money"), 0.02}, {SkillNamed("roads"), 0.02},
