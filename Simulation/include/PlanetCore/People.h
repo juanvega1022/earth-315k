@@ -4508,6 +4508,42 @@ public:
 	}
 
 private:
+public:
+	// Grown height in cm, from diet and care: tall foragers, shorter early farmers, then taller again
+	// with plenty, medicine and a comfortable station (women about 12 cm shorter).
+	double HeightCm(const Npc& P) const
+	{
+		if (Camps.empty()) return 0.0;
+		const SkillSet K = Camps[CampSlot(P.Camp)].Known;
+		auto H = [&](const char* Skill) { return Has(K, SkillNamed(Skill)); };
+		double Cm = H("fertilizers") ? 174.0 : H("farming") ? (H("medicine") ? 167.0 : 164.0) : 170.0;
+		if (H("antibiotics")) Cm += 3.0;
+		Cm += P.Status >= 2 ? 4.0 : P.Status == 0 ? -4.0 : 0.0;
+		Cm -= P.Female ? 12.0 : 0.0;
+		Cm += (PersonDraw(P.Id, 6) - 0.5) * 16.0;
+		const double Age = P.AgeYears();
+		return Age >= 18.0 ? Cm : Cm * std::max(0.3, Age / 18.0);
+	}
+	// Whether they have been vaccinated: most, where the band knows vaccines.
+	bool Vaccinated(const Npc& P) const
+	{
+		return !Camps.empty() && Has(Camps[CampSlot(P.Camp)].Known, SkillNamed("vaccines")) && PersonDraw(P.Id, 7) < (P.Status == 0 ? 0.4 : 0.85);
+	}
+	// Mean grown (18+) height in cm, and share vaccinated, across the world.
+	double MeanAdultHeight() const
+	{
+		double Sum = 0.0; long long N = 0;
+		for (const Npc& P : Npcs)
+			if (P.AgeYears() >= 18.0) Sum += HeightCm(P), ++N;
+		return N ? Sum / static_cast<double>(N) : 0.0;
+	}
+	double VaccinatedShare() const
+	{
+		long long N = 0;
+		for (const Npc& P : Npcs) N += Vaccinated(P);
+		return Npcs.empty() ? 0.0 : static_cast<double>(N) / static_cast<double>(Npcs.size());
+	}
+private:
 	// ", a farmer of humble birth" and the like, for people in a state; empty otherwise.
 	std::string Station(const Npc& P) const
 	{
