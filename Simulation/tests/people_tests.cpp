@@ -748,6 +748,8 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Clean power's share is a share, and only league members sign the climate treaty.
+	EXPECT(Folk.CleanEnergyShare() >= 0.0 && Folk.CleanEnergyShare() <= 1.0);
 	// A state's rule reaches at least as far as its roads alone carry it; rail states are counted.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(earth::People::StateReachKm(S) >= earth::ReachKm(S.Tier, false));
 	EXPECT(Folk.StatesUsing("railways") <= Folk.PolityCount() && Folk.StatesUsing("no such thing") == 0);
@@ -799,6 +801,12 @@ static void TestFuel()
 	Eco.Burn(2000.0);
 	EXPECT(Eco.Co2Ppm() > 380.0 && Eco.Co2Ppm() < 400.0);
 	EXPECT(Eco.Greenhouse() > 1.0 && Eco.Warming() > Before + 1.0);
+	// A treaty state burns less than one outside it.
+	earth::Polity Mill;
+	Mill.Known = earth::SkillSet(1) << 52 | earth::SkillSet(1) << 57;
+	const double Free = earth::People::StateFuelPerHead(Mill);
+	Mill.Treaty = true;
+	EXPECT(Free > 0.0 && earth::People::StateFuelPerHead(Mill) < Free);
 	const std::string Path = "fuel_test.bin";
 	EXPECT(earth::SaveWorld(Path, Eco, Folk));
 	earth::Ecosystem Eco2(&Grid, earth::DefaultSpecies(), 9);

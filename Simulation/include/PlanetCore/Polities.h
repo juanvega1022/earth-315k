@@ -63,6 +63,7 @@ struct Polity
 	uint16_t Style = 0;        // Its art's style (a word), 0 none yet.
 	uint8_t Art = 0;           // What the style is mostly: see ArtName.
 	float Fame = 0.0f;         // How widely its art is admired, from the states that took it up.
+	bool Treaty = false;       // Signed the climate treaty: burns less fuel.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -97,6 +98,7 @@ struct Polity
 		if (Ar.Version >= 31) Ar.Io(Script);
 		if (Ar.Version >= 33) Ar.Io(Secular);
 		if (Ar.Version >= 34) Ar.Io(Style), Ar.Io(Art), Ar.Io(Fame);
+		if (Ar.Version >= 35) Ar.Io(Treaty);
 	}
 };
 

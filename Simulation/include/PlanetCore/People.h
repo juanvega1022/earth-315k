@@ -921,6 +921,7 @@ public:
 		if (Ar.Version >= 32) Ar.Io(NextRealMark);
 		if (Ar.Version >= 33) Ar.Io(HolyBooks), Ar.Io(AnySecular);
 		if (Ar.Version >= 34) Ar.Io(ArtStyles), Ar.Io(ArtsSeen);
+		if (Ar.Version >= 35) Ar.Io(TreatyYear);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1874,6 +1875,7 @@ private:
 	bool AnySecular = false;
 	int ArtStyles = 0; // Styles of art ever begun.
 	int ArtsSeen = 0;  // Bits of ArtName kinds that have appeared.
+	double TreatyYear = 0.0; // When the climate treaty was agreed, 0 not yet.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5408,6 +5410,18 @@ private:
 		S.Fame *= 0.99f;
 	}
 public:
+	// What a state burns per head, with the treaty's cuts.
+	static double StateFuelPerHead(const Polity& S) { return FuelPerHead(S.Known) * (S.Treaty ? 0.6 : 1.0); }
+	int TreatyStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Treaty; })); }
+	// Share of industry's power that comes from clean sources (sun, atoms, dams, the treaty's cuts), weighted by people.
+	double CleanEnergyShare() const
+	{
+		static const SkillSet Dirty = [] { SkillSet M = 0; for (const char* N : {"steam engines", "factories", "railways", "engines", "electricity", "flight", "computers"}) M |= SkillSet(1) << SkillNamed(N); return M; }();
+		double Burnt = 0.0, Could = 0.0;
+		for (const Polity& S : States)
+			if (const double Full = FuelPerHead(S.Known & Dirty); Full > 0.0) Burnt += S.RealPeople * StateFuelPerHead(S), Could += S.RealPeople * Full;
+		return Could > 0.0 ? 1.0 - Burnt / Could : 0.0;
+	}
 	// How far a state's rule reaches from its capital: roads, then railways and motor roads move
 	// soldiers and officials faster, and the telegraph carries orders at once.
 	static double StateReachKm(const Polity& S)
@@ -5671,17 +5685,38 @@ private:
 		static const std::pair<int, double> Burners[] = {{SkillNamed("steam engines"), 0.5}, {SkillNamed("factories"), 1.0}, {SkillNamed("railways"), 0.5},
 			{SkillNamed("engines"), 1.5}, {SkillNamed("electricity"), 1.5}, {SkillNamed("flight"), 0.5}, {SkillNamed("computers"), 0.5}};
 		static const std::pair<int, double> Clean[] = {{SkillNamed("solar power"), 0.6}, {SkillNamed("nuclear power"), 0.8}, {SkillNamed("fusion power"), 0.1}};
+		static const int Mills = SkillNamed("water mills"), Power = SkillNamed("electricity");
 		double T = 0.0;
 		for (const auto& [K, More] : Burners) T += Has(Known, K) ? More : 0.0;
 		for (const auto& [K, Times] : Clean) T *= Has(Known, K) ? Times : 1.0;
+		if (Has(Known, Mills) && Has(Known, Power)) T *= 0.85; // Dams turn rivers into power.
 		return T;
+	}
+
+	// Once the world has warmed a degree and the league of nations meets, its members agree to burn
+	// less; states join year by year, first those whose people care for the land or choose their rulers.
+	void ClimateTreaty()
+	{
+		if (TreatyYear <= 0.0)
+		{
+			if (Eco->Greenhouse() < 1.0 || LeagueYear <= 0.0) return;
+			TreatyYear = Eco->Years();
+			AddEvent("The world's states agree a treaty to burn less coal, oil and gas, after the world has warmed a degree");
+		}
+		for (Polity& S : States)
+			if (!S.Treaty && InLeague(S) && FuelPerHead(S.Known) > 0.0 && Dice.Chance(S.Ideology == Environmentalism ? 0.3 : S.Gov == Democracy ? 0.1 : 0.03))
+			{
+				S.Treaty = true;
+				if (S.Tier >= Empire) AddEvent(StateName(S) + " signs the climate treaty");
+			}
 	}
 
 	// Once a year: industry burns coal, oil and gas, warming the world, until the fuel runs low.
 	void BurnFuel()
 	{
 		double Tonnes = 0.0;
-		for (const Polity& S : States) Tonnes += S.RealPeople * FuelPerHead(S.Known); // Real-scale people, so a world of factories burns what ours does.
+		ClimateTreaty();
+		for (const Polity& S : States) Tonnes += S.RealPeople * StateFuelPerHead(S); // Real-scale people, so a world of factories burns what ours does.
 		const double Left = std::max(0.0, 1.0 - Eco->FuelBurnedGt() / 18000.0); // About 18,000 Gt of CO2 in all the coal, oil and gas there is.
 		const double Gt = Tonnes / 1e9 * std::min(1.0, 4.0 * Left);
 		FuelThisYear = Gt;
