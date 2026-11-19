@@ -723,6 +723,9 @@ static void TestStates()
 	for (const earth::Polity& S : Folk.AllStates()) ByStates += S.Discoveries;
 	EXPECT(Finds >= ByStates);
 	std::printf("  Discoveries in the library: %d\n", Finds);
+	// States know how long their people live and how well.
+	EXPECT(Folk.StatesText().find("  People live ") != std::string::npos);
+	EXPECT(Folk.WorldWelfare() > 0.0 && Folk.WorldWelfare() <= 1.0);
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.

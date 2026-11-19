@@ -602,6 +602,13 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	// How well the world's people in states live on average, 0 .. 1.
+	double WorldWelfare() const
+	{
+		double W = 0.0, N = 0.0;
+		for (const Polity& S : States) W += S.Welfare * S.Members, N += S.Members;
+		return N > 0.0 ? W / N : 0.0;
+	}
 	int WorldWarsSoFar() const { return WorldWars; }
 	int NuclearStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return Nuclear(S); })); }
 	int ThinkerSchools() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Discoveries >= 3; })); }
@@ -746,6 +753,8 @@ public:
 			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Food costs %.2fx a good year; %.0f in coins; debts %.0f%s; %d guilds\n", S->Price, S->Coins, S->Debt,
 				S->Slavery ? "; keeps slaves" : S->Abolished ? "; has abolished slavery" : "", Guilds(*S));
+			Out += Buf;
+			std::snprintf(Buf, sizeof(Buf), "  People live %.0f years; welfare %.2f; %d hospitals%s\n", S->LifeExpectancy, S->Welfare, Hospitals(*S), Sanitation(*S) ? "; clean water and sewers" : "");
 			Out += Buf;
 			if (S->Ideology || S->Revolutions) Out += "  Idea most hold: " + std::string(IdeologyName(S->Ideology)) + "; revolutions: " + std::to_string(S->Revolutions) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Government: %s; taxes %.0f%% a year; %.0f officials; %d coups and %d civil wars so far\n", GovName(S->Gov), 100.0 * TaxRate(S->Gov),
@@ -1801,6 +1810,7 @@ private:
 	bool AnyVoyage = false;
 	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
+	std::unordered_map<uint32_t, std::pair<double, int>> StateAges; // Ages at death this year by state; not saved.
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -4607,6 +4617,12 @@ private:
 		++Deaths;
 		AgeAtDeath += P.AgeYears(), ++DeathsThisYear;
 		if (!Camps.empty())
+			if (const uint32_t St = Camps[CampSlot(P.Camp)].State)
+			{
+				auto& A = StateAges[St];
+				A.first += P.AgeYears(), A.second += 1;
+			}
+		if (!Camps.empty())
 		{
 			Camp& C = Camps[CampSlot(P.Camp)];
 			C.DeathsLately += 1;
@@ -4711,7 +4727,9 @@ private:
 			Camp& C = Camps[c];
 			if (!C.Sick) continue;
 			Disease& D = Diseases[C.Sick - 1u];
-			const double Cure = (Has(C.Known, Medicine) ? 0.75 : 1.0) * (Has(C.Known, Antibiotics) ? 0.4 : 1.0) * (Has(C.Known, Vaccines) ? 0.5 : 1.0);
+			const Polity* Home = C.State ? StateById(C.State) : nullptr;
+			const double Cure = (Has(C.Known, Medicine) ? 0.75 : 1.0) * (Has(C.Known, Antibiotics) ? 0.4 : 1.0) * (Has(C.Known, Vaccines) ? 0.5 : 1.0) *
+				(Home && Hospitals(*Home) ? 0.7 : 1.0);
 			const double Toll = D.Deadliness * ResistanceTo(C, D.Id, Year) * Cure * std::min(1.0, static_cast<double>(Days) / D.Days);
 			for (int i : C.Members)
 			{
@@ -4726,7 +4744,7 @@ private:
 				}
 			}
 			// It passes to bands nearby, along the state's roads to its capital, and with armies to the enemy.
-			const double Pass = OverDays(0.02 * D.Spread, Days);
+			const double Pass = OverDays(0.02 * D.Spread * (Home && Sanitation(*Home) ? 0.4 : 1.0), Days); // Clean water and sewers stop much of it.
 			for (int N : CampSlotsNear(C.Lat, C.Lon, Has(C.Known, Roads) ? 150.0 : 80.0))
 				if (static_cast<size_t>(N) != c && Dice.Chance(Pass)) Passed.push_back({static_cast<size_t>(N), C.Sick});
 			if (const Polity* S = C.State ? StateById(C.State) : nullptr)
@@ -4968,6 +4986,19 @@ private:
 		}
 	}
 
+	// Hospitals in a state's towns, once medicine and writing are known.
+	static int Hospitals(const Polity& S)
+	{
+		static const int Medicine = SkillNamed("medicine"), Writing = SkillNamed("writing");
+		return Has(S.Known, Medicine) && Has(S.Known, Writing) ? std::max(1, S.Towns) : 0;
+	}
+	// Clean water and sewers: cities with medicine and steam pumps.
+	static bool Sanitation(const Polity& S)
+	{
+		static const int Medicine = SkillNamed("medicine"), Steam = SkillNamed("steam engines");
+		return S.City && Has(S.Known, Medicine) && Has(S.Known, Steam);
+	}
+
 	// Whether a state has nuclear weapons: atomic power and rockets to carry them.
 	static bool Nuclear(const Polity& S)
 	{
@@ -5052,6 +5083,16 @@ private:
 		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
 		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
 		AgeAtDeath = 0.0, DeathsThisYear = 0, BirthsAtCensus = Births;
+		for (Polity& S : States)
+		{
+			auto A = StateAges.find(S.Id);
+			if (A != StateAges.end() && A->second.second >= 5) S.LifeExpectancy = static_cast<float>(A->second.first / A->second.second);
+			// Welfare: long lives, enough food, reading, a say in who rules, peace and fairness.
+			const double Free = S.Gov == Democracy ? 1.0 : S.Gov == Republic ? 0.7 : S.Gov == Dictatorship ? 0.1 : 0.3;
+			S.Welfare = static_cast<float>(std::clamp(0.3 * std::min(1.0, S.LifeExpectancy / 80.0) + 0.2 * std::min(1.0, 1.0 / std::max(0.2, static_cast<double>(S.Price))) +
+				0.15 * S.Literacy + 0.15 * Free + 0.1 * (S.Enemy ? 0.0 : 1.0) + 0.1 / std::max(1.0f, S.Inequality), 0.0, 1.0));
+		}
+		StateAges.clear();
 		while (Enough && LifeExpectancy >= NextLifeMark)
 		{
 			AddEvent("People now live " + std::to_string(NextLifeMark) + " years on average");
