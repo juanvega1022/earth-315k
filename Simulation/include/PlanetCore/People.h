@@ -963,6 +963,7 @@ public:
 		if (Ar.Version >= 43) Ar.Io(Dynasties), Ar.Io(RoyalWeddings), Ar.Io(SuccessionWars);
 		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
 		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
+		if (Ar.Version >= 47) Ar.Io(AnyCompulsory);
 		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
@@ -1939,6 +1940,7 @@ private:
 	int HolyWars = 0, Conversions = 0, Reformations = 0; // Wars over gods, states won by missionaries, breaks with a state faith.
 	int Persecuted = 0;           // Bands made to give up their faith.
 	bool AnyTolerance = false;
+	bool AnyCompulsory = false;
 	bool AnyAbolishedDeath = false;
 	double WorldCourt = 0.0;      // Year the world court first sat; 0 before.
 	double NextRealMark = 1e6;
@@ -5328,11 +5330,18 @@ private:
 		if (!Has(S.Known, Writing)) return;
 		const std::string Name = StateName(S);
 		// shortcut: the sim holds far fewer people than Earth did, so a school here stands for many; about 10 of the sim's pupils each.
-		const int PerSchool = Has(S.Known, Power) ? 10 : Has(S.Known, Printing) ? 20 : Has(S.Known, Paper) ? 100 : 300;
+		// A printing state that sees itself as a nation, or whose citizens rule, sends every child to a free school.
+		if (!S.Compulsory && Has(S.Known, Printing) && S.Literacy > 0.2f && (S.Tier >= Nation || S.Gov == Republic || S.Gov == Democracy || S.Ideology == Nationalism) && Dice.Chance(0.02))
+		{
+			S.Compulsory = true;
+			if (!AnyCompulsory || S.Tier >= Empire) AddEvent(Name + " makes school free and a duty for every child" + (AnyCompulsory ? "" : ", the first state to do so"));
+			AnyCompulsory = true;
+		}
+		const int PerSchool = std::max(10, (Has(S.Known, Power) ? 10 : Has(S.Known, Printing) ? 20 : Has(S.Known, Paper) ? 100 : 300) / (S.Compulsory ? 2 : 1));
 		if (S.Schools < S.Members / PerSchool && Dice.Chance(0.5))
 		{
 			if (!S.Schools && !AnySchool) AnySchool = true, AddEvent("The first school in the world opens in " + Name + ", teaching children to read and write");
-			S.Schools += std::max(1, (S.Members / PerSchool - S.Schools) / 10); // A tenth of the shortfall a year.
+			S.Schools += std::max(1, (S.Members / PerSchool - S.Schools) / (S.Compulsory ? 3 : 10)); // Part of the shortfall a year.
 		}
 		else if (S.Schools > S.Members / PerSchool + 1) --S.Schools; // Too few pupils left to keep it open.
 		if (S.City && S.Libraries < std::max(1, S.Towns) && Dice.Chance(0.02))
@@ -5861,6 +5870,7 @@ public:
 	int ConversionsSoFar() const { return Conversions; }
 	int ReformationsSoFar() const { return Reformations; }
 	int PersecutedSoFar() const { return Persecuted; }
+	int CompulsoryStates() const { int N = 0; for (const Polity& S : States) N += S.Compulsory; return N; }
 	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
 	int SecularStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Secular > 0.5f && !S.Faith; })); }
 
@@ -6284,7 +6294,7 @@ private:
 			auto R = Rich.find(S.Id);
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
 			S.Fertility = 1.0f; // Set with the cities below.
-			S.Literacy = std::min(0.95f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members)));
+			S.Literacy = std::min(S.Rights >= 2 ? 0.95f : 0.55f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members))); // Until girls go to school, most women can't read.
 			// Knowing of a thing is not being able to build it: factories need cities and readers,
 			// and the newest things universities and a mostly reading people as well.
 			const bool Industry = S.City && S.Literacy >= 0.15f;
