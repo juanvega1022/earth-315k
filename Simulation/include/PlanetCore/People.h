@@ -602,6 +602,33 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	// Families of languages: tongues that still share a few words (cognates) with each other.
+	int LanguageFamilies() const
+	{
+		std::vector<const Camp*> Firsts;
+		for (const Camp* L : LanguageCamps())
+		{
+			bool Related = false;
+			for (const Camp* F : Firsts)
+			{
+				int Shared = 0;
+				for (int w = 0; w < kWords; ++w) Shared += L->Words[static_cast<size_t>(w)] == F->Words[static_cast<size_t>(w)];
+				if (L->Kind == F->Kind && Shared >= 3) Related = true;
+				if (Related) break;
+			}
+			if (!Related) Firsts.push_back(L);
+		}
+		return static_cast<int>(Firsts.size());
+	}
+	// Scripts in use by states.
+	int ScriptsInUse() const
+	{
+		std::vector<uint16_t> Used;
+		for (const Polity& S : States)
+			if (S.Script) Used.push_back(S.Script);
+		std::sort(Used.begin(), Used.end());
+		return static_cast<int>(std::unique(Used.begin(), Used.end()) - Used.begin());
+	}
 	// How well the world's people in states live on average, 0 .. 1.
 	double WorldWelfare() const
 	{
@@ -754,6 +781,7 @@ public:
 			std::snprintf(Buf, sizeof(Buf), "  Food costs %.2fx a good year; %.0f in coins; debts %.0f%s; %d guilds\n", S->Price, S->Coins, S->Debt,
 				S->Slavery ? "; keeps slaves" : S->Abolished ? "; has abolished slavery" : "", Guilds(*S));
 			Out += Buf;
+			if (S->Script) Out += "  Writes in the " + PersonName(S->Script) + " script\n";
 			std::snprintf(Buf, sizeof(Buf), "  People live %.0f years; welfare %.2f; %d hospitals%s\n", S->LifeExpectancy, S->Welfare, Hospitals(*S), Sanitation(*S) ? "; clean water and sewers" : "");
 			Out += Buf;
 			if (S->Ideology || S->Revolutions) Out += "  Idea most hold: " + std::string(IdeologyName(S->Ideology)) + "; revolutions: " + std::to_string(S->Revolutions) + "\n";
@@ -852,6 +880,7 @@ public:
 		if (Ar.Version >= 26) Ar.Io(IdeasSeen), Ar.Io(AnyMission), Ar.Io(AnyRevolution);
 		if (Ar.Version >= 27) Ar.Io(AnySlavery), Ar.Io(AnyAbolition);
 		if (Ar.Version >= 28) Ar.Io(DisasterDead), Ar.Io(Struck), Ar.Io(DisastersSeen);
+		if (Ar.Version >= 31) Ar.Io(AnyScript);
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
@@ -1799,6 +1828,7 @@ private:
 	int IdeasSeen = 1;
 	bool AnyMission = false, AnyRevolution = false;
 	bool AnySlavery = false, AnyAbolition = false;
+	bool AnyScript = false;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
 	double LeagueYear = 0.0;
@@ -4986,6 +5016,24 @@ private:
 		}
 	}
 
+	// A state that has learned to write takes up the script of a state it trades with, or makes its own.
+	void TakeScript(Polity& S)
+	{
+		static const int Writing = SkillNamed("writing");
+		if (S.Script || !Has(S.Known, Writing)) return;
+		for (uint32_t P : S.Partners)
+			if (const Polity* T = StateById(P); T && T->Script && Dice.Chance(0.7))
+			{
+				S.Script = T->Script;
+				return;
+			}
+		S.Script = static_cast<uint16_t>(S.Word * 389u + S.Id * 11u + 1u);
+		std::string T = StateName(S) + " makes a script of its own, the " + PersonName(S.Script) + " letters";
+		T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+		if (!AnyScript || S.Tier >= Kingdom) AddEvent(AnyScript ? T : "The first script: " + StateName(S) + " makes its own, the " + PersonName(S.Script) + " letters");
+		AnyScript = true;
+	}
+
 	// Hospitals in a state's towns, once medicine and writing are known.
 	static int Hospitals(const Polity& S)
 	{
@@ -5716,6 +5764,12 @@ private:
 				Seat.Store += 0.8f * Paid; // Some is lost on the way.
 				S.Treasury += Paid;
 				if (S.Faith && !Shares(C, S.Faith) && C.Faith.size() < 3 && Dice.Chance(0.1)) C.Faith.push_back(S.Faith);
+				// The capital's speech spreads through a kingdom: a word at a time, bands far off come to speak it.
+				if (S.Tier >= Kingdom && C.Kind == Seat.Kind && Dice.Chance(0.2))
+				{
+					const int w = static_cast<int>(Dice.Next() % kWords);
+					C.Words[static_cast<size_t>(w)] = Seat.Words[static_cast<size_t>(w)];
+				}
 			}
 			if (!S.Faith && !Seat.Faith.empty()) S.Faith = Seat.Faith.front();
 			if (S.Bands == 1 && S.Tier == Chiefdom && Split < 0 && Dice.Chance(0.2)) // One band alone is no chiefdom for long.
@@ -5740,6 +5794,7 @@ private:
 				NoteState(S, PersonName(S.RulerName) + " makes the city of " + PersonName(S.City) + " the capital of " + StateName(S));
 			}
 			Institutions(S);
+			TakeScript(S);
 			Culture(S);
 			Politics(S, Seat);
 			Ideas(S, Seat);
