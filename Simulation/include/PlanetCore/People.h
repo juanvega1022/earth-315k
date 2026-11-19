@@ -871,6 +871,8 @@ public:
 		for (const Polity& S : States) K |= S.Known;
 		return K;
 	}
+	// Great plagues so far: years in which one sickness killed one in fifty of the world.
+	int Pandemics() const { int N = 0; for (const Disease& D : Diseases) N += D.Waves; return N; }
 	int DynastiesSoFar() const { return Dynasties; }
 	int RoyalWeddingsSoFar() const { return RoyalWeddings; }
 	int SuccessionWarsSoFar() const { return SuccessionWars; }
@@ -4849,7 +4851,7 @@ private:
 	void Sicken(int Days)
 	{
 		static const int Medicine = SkillNamed("medicine"), Vaccines = SkillNamed("vaccines"), Antibiotics = SkillNamed("antibiotics"),
-			Roads = SkillNamed("roads"), Cities = SkillNamed("cities");
+			Roads = SkillNamed("roads"), Cities = SkillNamed("cities"), Flight = SkillNamed("flight"), Rail = SkillNamed("railways");
 		const double Year = Eco->Years();
 		bool AnyDied = false;
 		std::vector<std::pair<size_t, uint16_t>> Passed;
@@ -4882,11 +4884,15 @@ private:
 			{
 				auto It = CampSlots.find(S->Capital);
 				if (It != CampSlots.end() && Dice.Chance(OverDays(0.01 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(It->second), C.Sick});
+				// Along trade routes, faster by rail and far faster by air; a state that can watch for it by
+				// telegraph and knows medicine quarantines travellers.
+				const double Travel = Has(S->Known, Flight) ? 5.0 : Has(S->Known, Rail) ? 2.0 : 1.0;
 				for (uint32_t T : S->Partners)
 					if (const Polity* P = StateById(T))
 					{
+						const double Shut = Quarantines(*P) ? 0.3 : 1.0;
 						auto Ip = CampSlots.find(P->Capital);
-						if (Ip != CampSlots.end() && C.Id == S->Capital && Dice.Chance(OverDays(0.01 * D.Spread, Days))) Passed.push_back({static_cast<size_t>(Ip->second), C.Sick});
+						if (Ip != CampSlots.end() && C.Id == S->Capital && Dice.Chance(OverDays(0.01 * D.Spread * Travel * Shut, Days))) Passed.push_back({static_cast<size_t>(Ip->second), C.Sick});
 					}
 				if (const Polity* E = StateById(S->Enemy))
 				{
@@ -4948,6 +4954,11 @@ private:
 		}
 	}
 
+	static bool Quarantines(const Polity& S)
+	{
+		static const int Medicine = SkillNamed("medicine"), Telegraph = SkillNamed("telegraph");
+		return Has(S.Known, Medicine) && Has(S.Known, Telegraph);
+	}
 	void NewDisease(size_t Slot, int Source)
 	{
 		const Camp& C = Camps[Slot];

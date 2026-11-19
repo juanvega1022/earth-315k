@@ -888,6 +888,7 @@ static void TestDiseases()
 	earth::People Folk2(&Eco2, 8, Settings);
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.AllDiseases().size() == Folk.AllDiseases().size() && Folk2.DiseasesText() == Folk.DiseasesText());
+	EXPECT(Folk2.Pandemics() == Folk.Pandemics() && Folk.Pandemics() >= 0);
 	std::remove(Path.c_str());
 }
 
