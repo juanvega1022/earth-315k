@@ -38,6 +38,7 @@ namespace
 		TArray<bool> InRegion;
 		TArray<FVector2D> LatLon;
 		TArray<bool> CanGrowPlants;
+		TArray<bool> WasSea;
 
 		// Adds the triangle facing both ways so it renders regardless of winding convention.
 		void AddTriangle(int32 A, int32 B, int32 C)
@@ -191,6 +192,7 @@ void APlanetGlobe::BuildPlanet()
 		Data.InRegion.Add(bHaveRegion && RegionGrid.Contains(P.Lat, P.Lon));
 		Data.LatLon.Add(FVector2D(P.Lat, P.Lon));
 		Data.CanGrowPlants.Add(H > SeaLevelMeters && H - SeaLevelMeters < 3000.0 && FMath::Abs(P.Lat) < 72.0);
+		Data.WasSea.Add(H <= SeaLevelMeters);
 	};
 	auto KeepSection = [this](const FMeshData& Data)
 	{
@@ -201,6 +203,7 @@ void APlanetGlobe::BuildPlanet()
 		S.BaseColors = Data.Colors;
 		S.LatLon = Data.LatLon;
 		S.CanGrowPlants = Data.CanGrowPlants;
+		S.WasSea = Data.WasSea;
 	};
 
 	// Six cube faces at globe resolution, skipping triangles the region patch covers.
@@ -318,7 +321,8 @@ FVector APlanetGlobe::SurfacePoint(double Lat, double Lon, double LiftUnits) con
 	return GetActorTransform().TransformPosition(ToUnreal(earth::LatLonToDirection(Lat, Lon)) * Radius);
 }
 
-void APlanetGlobe::TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover)
+void APlanetGlobe::TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover, TFunctionRef<bool(double Lat, double Lon)> IsLandNow,
+	TFunctionRef<FLinearColor(double Lat, double Lon)> Overlay)
 {
 	if (!Mesh)
 	{
@@ -326,6 +330,8 @@ void APlanetGlobe::TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantC
 	}
 	const FLinearColor Bare(0.60f, 0.52f, 0.38f);
 	const FLinearColor Lush(0.13f, 0.38f, 0.10f);
+	const FLinearColor Shelf(0.62f, 0.58f, 0.45f);
+	const FLinearColor Flooded(0.05f, 0.18f, 0.42f);
 	TArray<FLinearColor> Colors;
 	for (int32 Index = 0; Index < Sections.Num(); ++Index)
 	{
@@ -333,12 +339,33 @@ void APlanetGlobe::TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantC
 		Colors = S.BaseColors;
 		for (int32 v = 0; v < Colors.Num(); ++v)
 		{
-			if (S.CanGrowPlants[v])
+			const double Lat = S.LatLon[v].X;
+			const double Lon = S.LatLon[v].Y;
+			const bool bLand = IsLandNow(Lat, Lon);
+			if (!bLand)
 			{
-				const float Cover = FMath::Clamp(PlantCover(S.LatLon[v].X, S.LatLon[v].Y), 0.f, 1.f);
+				// Sea now: keep the depth colours of the old sea, drown the old land.
+				if (!S.WasSea[v])
+				{
+					Colors[v] = Flooded;
+				}
+				continue;
+			}
+			// Land now, either as built or a shelf the sea has left (drawn flat at the old shore).
+			const bool bGrows = S.CanGrowPlants[v] || (S.WasSea[v] && FMath::Abs(Lat) < 72.0);
+			const FLinearColor Base = S.WasSea[v] ? Shelf : S.BaseColors[v];
+			Colors[v] = Base;
+			if (bGrows)
+			{
+				const float Cover = FMath::Clamp(PlantCover(Lat, Lon), 0.f, 1.f);
 				// Ground shows through where plants are thin; dense growth is deep green.
-				const FLinearColor Ground = FMath::Lerp(S.BaseColors[v], Bare, 0.5f);
+				const FLinearColor Ground = FMath::Lerp(Base, Bare, 0.5f);
 				Colors[v] = FMath::Lerp(Ground, Lush, Cover);
+			}
+			const FLinearColor Over = Overlay(Lat, Lon);
+			if (Over.A > 0.f)
+			{
+				Colors[v] = FMath::Lerp(Colors[v], FLinearColor(Over.R, Over.G, Over.B), FMath::Clamp(Over.A, 0.f, 1.f));
 			}
 		}
 		Mesh->UpdateMeshSection_LinearColor(Index, S.Vertices, S.Normals, S.UVs, Colors, TArray<FProcMeshTangent>());

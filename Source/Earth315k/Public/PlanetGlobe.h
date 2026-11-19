@@ -19,6 +19,7 @@ struct FPlanetSection
 	TArray<FLinearColor> BaseColors;
 	TArray<FVector2D> LatLon;
 	TArray<bool> CanGrowPlants;
+	TArray<bool> WasSea; // Under the sea the mesh was built for.
 };
 
 /**
@@ -91,8 +92,13 @@ public:
 	/** World position on the ground (or sea surface) at a latitude/longitude, raised by LiftUnits. */
 	FVector SurfacePoint(double Lat, double Lon, double LiftUnits = 0.0) const;
 
-	/** Recolour land by plant cover (0 bare .. 1 lush) from the life simulation. */
-	void TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover);
+	/**
+	 * Recolour the globe from the life simulation: land by plant cover (0 bare .. 1 lush), the sea
+	 * where IsLandNow says so (so ice-age shelves dry out and drowned coasts go blue), then Overlay
+	 * on top, mixed in by its alpha (for example the nations map).
+	 */
+	void TintPlants(TFunctionRef<float(double Lat, double Lon)> PlantCover, TFunctionRef<bool(double Lat, double Lon)> IsLandNow,
+		TFunctionRef<FLinearColor(double Lat, double Lon)> Overlay);
 
 	/** Builds the planet now if it hasn't been built in this world yet (for example, a copy made for Play). */
 	void EnsureBuilt();
