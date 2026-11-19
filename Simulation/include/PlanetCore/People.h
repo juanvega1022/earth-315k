@@ -605,18 +605,35 @@ public:
 	// How many people on the real Earth each person here stands for, by how their band feeds itself:
 	// the sim's land holds about a three-hundredth of the real foragers' density, and each way of
 	// farming more. Calibrated so a world that knows it all holds about 8 billion.
-	static double RealPerPerson(SkillSet Known)
+	// How many real people each sim person stands for: what feeds them, scaled by how long they
+	// live (LifeYears 0 means not yet counted). Long lives and modern farming give today's 8 billion;
+	// short lives on old farms give the few hundred million of the farming ages.
+	static double RealPerPerson(SkillSet Known, double LifeYears = 0.0)
 	{
 		static const int Farming = SkillNamed("farming"), Irrigation = SkillNamed("irrigation"), Iron = SkillNamed("iron"), Steam = SkillNamed("steam engines"),
-			Fertilizers = SkillNamed("fertilizers"), Vaccines = SkillNamed("vaccines");
+			Fertilizers = SkillNamed("fertilizers");
 		const double K = Has(Known, Fertilizers) ? 12000.0 : Has(Known, Steam) ? 5000.0 : Has(Known, Iron) ? 3000.0 : Has(Known, Irrigation) ? 2000.0 : Has(Known, Farming) ? 1000.0 : 100.0;
-		return K * (Has(Known, Vaccines) ? 1.5 : 1.0);
+		return K * (LifeYears > 0.0 ? std::clamp(LifeYears / 45.0, 0.5, 1.6) : 1.0);
+	}
+	// Skills from the steam engine on, and from the last century or so: a state can use them only
+	// with cities and readers, and the newest only with universities too. Bands outside states can't.
+	static SkillSet IndustrialSkills()
+	{
+		static const SkillSet Mask = [] { SkillSet M = 0; for (size_t k = 0; k < AllSkills().size(); ++k) if (AllSkills()[k].YearsAgo <= 300.0) M |= SkillSet(1) << k; return M; }();
+		return Mask;
+	}
+	static SkillSet ModernSkills()
+	{
+		static const SkillSet Mask = [] { SkillSet M = 0; for (size_t k = 0; k < AllSkills().size(); ++k) if (AllSkills()[k].YearsAgo <= 130.0) M |= SkillSet(1) << k; return M; }();
+		return Mask;
 	}
 	// The world's people on the real Earth's scale.
 	double RealPopulation() const
 	{
 		double N = 0.0;
-		for (const Camp& C : Camps) N += static_cast<double>(C.Members.size()) * RealPerPerson(C.Known);
+		for (const Polity& S : States) N += S.RealPeople;
+		for (const Camp& C : Camps)
+			if (!C.State) N += static_cast<double>(C.Members.size()) * RealPerPerson(C.Known & ~IndustrialSkills(), LifeExpectancy);
 		return N;
 	}
 	// Families of languages: tongues that still share a few words (cognates) with each other.
@@ -2313,8 +2330,11 @@ private:
 			{
 				C.Known |= Npcs[i].Skills;
 			}
-			C.Effects = EffectsOf(C.Known);
-			AddInventionEffects(C.Inventions, C.Known, C.Effects);
+			// Industrial know-how works only where the band's state can build with it.
+			const Polity* Mine = C.State ? StateById(C.State) : nullptr;
+			const SkillSet Usable = C.Known & ~(IndustrialSkills() & ~(Mine ? Mine->Known : SkillSet(0)));
+			C.Effects = EffectsOf(Usable);
+			AddInventionEffects(C.Inventions, Usable, C.Effects);
 			AddBeliefEffects(C);
 		});
 		WeighReputations();
@@ -5075,8 +5095,8 @@ private:
 	// Whether a state has nuclear weapons: atomic power and rockets to carry them.
 	static bool Nuclear(const Polity& S)
 	{
-		static const int Atom = SkillNamed("nuclear power"), Rockets = SkillNamed("rockets");
-		return Has(S.Known, Atom) && Has(S.Known, Rockets);
+		static const int Atom = SkillNamed("nuclear power"), Rockets = SkillNamed("rockets"), Factories = SkillNamed("factories");
+		return Has(S.Known, Atom) && Has(S.Known, Rockets) && Has(S.Known, Factories) && S.Universities > 0 && S.Literacy >= 0.4f;
 	}
 	// Two nuclear states seldom dare to fight.
 	bool Deterred(const Polity& A, const Polity& B) { return Nuclear(A) && Nuclear(B) && !Dice.Chance(0.1); }
@@ -5094,11 +5114,13 @@ private:
 	{
 		static const int Telegraph = SkillNamed("telegraph"), Internet = SkillNamed("the internet"), AI = SkillNamed("artificial intelligence"), Engines = SkillNamed("engines");
 		const double World = std::max(1, Alive());
-		// World war: industrial states holding a third of the world's people fight at once.
-		int Fighting = 0, Sides = 0;
+		// World war: industrial states holding a third of the world's people fight industrial
+		// enemies at once, on three or more continents.
+		int Fighting = 0, Sides = 0, Lands = 0;
 		for (const Polity& S : States)
-			if (S.Enemy && Has(S.Known, Engines)) Fighting += S.Members, ++Sides;
-		const bool Big = Sides >= 4 && Fighting >= World / 3.0;
+			if (const Polity* E = S.Enemy ? StateById(S.Enemy) : nullptr; E && Has(S.Known, Engines) && Has(E->Known, Engines))
+				Fighting += S.Members, ++Sides, Lands |= 1 << RegionOf(S.Lat, S.Lon);
+		const bool Big = Sides >= 4 && Fighting >= World / 3.0 && std::bitset<32>(static_cast<unsigned>(Lands)).count() >= 3;
 		if (Big && !InWorldWar)
 		{
 			InWorldWar = true, ++WorldWars;
@@ -5196,10 +5218,10 @@ private:
 		const std::string Name = StateName(S);
 		// shortcut: the sim holds far fewer people than Earth did, so a school here stands for many; about 10 of the sim's pupils each.
 		const int PerSchool = Has(S.Known, Power) ? 10 : Has(S.Known, Printing) ? 20 : Has(S.Known, Paper) ? 100 : 300;
-		if (S.Schools < S.Members / PerSchool && Dice.Chance(0.3))
+		if (S.Schools < S.Members / PerSchool && Dice.Chance(0.5))
 		{
 			if (!S.Schools && !AnySchool) AnySchool = true, AddEvent("The first school in the world opens in " + Name + ", teaching children to read and write");
-			++S.Schools;
+			S.Schools += std::max(1, (S.Members / PerSchool - S.Schools) / 10); // A tenth of the shortfall a year.
 		}
 		else if (S.Schools > S.Members / PerSchool + 1) --S.Schools; // Too few pupils left to keep it open.
 		if (S.City && S.Libraries < std::max(1, S.Towns) && Dice.Chance(0.02))
@@ -5238,6 +5260,8 @@ private:
 			S.Literacy > 0.1f && Dice.Chance(0.005 * (1.0 + static_cast<double>(S.Laws.size()))))
 			S.Gov = Republic;
 		else if (S.Gov == Republic && Has(S.Known, Printing) && S.Literacy > 0.5f && Dice.Chance(0.02)) S.Gov = Democracy;
+		else if ((S.Gov == Monarchy || S.Gov == Chieftain) && S.Faith && HasHolyBook(S.Faith) && S.Secular < 0.1f && Dice.Chance(0.004)) S.Gov = Theocracy;
+		else if (S.Gov == Theocracy && S.Secular > 0.4f && Dice.Chance(0.03)) S.Gov = Republic;
 		else if (S.Gov == Dictatorship && Dice.Chance(S.Literacy > 0.6f ? 0.03 : 0.01)) S.Gov = S.Literacy > 0.6f ? Democracy : Monarchy;
 		else if (S.Gov >= Monarchy && S.Gov != Dictatorship && Dice.Chance((S.WarYears > 3 ? 0.02 : 0.003) * (S.Gov == Democracy ? 0.3 : 1.0)))
 		{
@@ -5723,8 +5747,13 @@ private:
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
 			S.Fertility = 1.0f; // Set with the cities below.
 			S.Literacy = std::min(0.95f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members)));
+			// Knowing of a thing is not being able to build it: factories need cities and readers,
+			// and the newest things universities and a mostly reading people as well.
+			const bool Industry = S.City && S.Literacy >= 0.15f;
+			if (!Industry) S.Known &= ~IndustrialSkills();
+			else if (S.Literacy < 0.4f || !S.Universities) S.Known &= ~ModernSkills();
 			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
-			S.RealPeople = S.Members * RealPerPerson(S.Known);
+			S.RealPeople = S.Members * RealPerPerson(S.Known, S.LifeExpectancy);
 			S.CityPeople = S.CapitalPeople = S.Towns = 0;
 			if (!S.City) continue;
 			static const std::pair<int, double> Urbanizing[] = {{SkillNamed("cities"), 0.05}, {SkillNamed("money"), 0.02}, {SkillNamed("roads"), 0.02},
