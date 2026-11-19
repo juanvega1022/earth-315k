@@ -702,7 +702,7 @@ static void TestStates()
 	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
 	// Every state is ruled some way, and says how.
 	EXPECT(Folk.StatesText().find("  Government: ") != std::string::npos);
-	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Gov <= earth::Dictatorship && (S.Tier == earth::Chiefdom || S.Gov != earth::Chieftain));
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Gov <= earth::Theocracy && (S.Tier == earth::Chiefdom || S.Gov != earth::Chieftain));
 	// Minds rise against unequal rulers.
 	const earth::Thinker Rebel = [](const std::string& Prompt)
 	{
@@ -726,8 +726,15 @@ static void TestStates()
 	// States know how long their people live and how well.
 	EXPECT(Folk.StatesText().find("  People live ") != std::string::npos);
 	EXPECT(Folk.WorldWelfare() > 0.0 && Folk.WorldWelfare() <= 1.0);
-	// Each person stands for 100 or more on the real Earth's scale.
-	EXPECT(Folk.RealPopulation() >= 100.0 * Folk.Alive());
+	// Each person stands for 50 or more on the real Earth's scale (100 for foragers, halved for short lives).
+	EXPECT(Folk.RealPopulation() >= 50.0 * Folk.Alive());
+	// A state can use industrial know-how only with a city and readers, the newest only with universities; nuclear arms likewise.
+	for (const earth::Polity& S : Folk.AllStates())
+	{
+		EXPECT((S.Known & earth::People::IndustrialSkills()) == 0 || (S.City && S.Literacy >= 0.15f));
+		EXPECT((S.Known & earth::People::ModernSkills()) == 0 || (S.Universities > 0 && S.Literacy >= 0.4f));
+	}
+	EXPECT(Folk.NuclearStates() == 0 || Folk.WorldUniversities() > 0);
 	// Tongues fall into families, and states that write have scripts.
 	EXPECT(Folk.LanguageFamilies() >= 1 && Folk.LanguageFamilies() <= Folk.Languages());
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Script || earth::Knows(S.Known, 33));

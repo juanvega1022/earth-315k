@@ -133,13 +133,14 @@ enum Government : uint8_t
 	Aristocracy, // Nobles rule with, or over, the monarch.
 	Republic,    // Leading citizens choose who rules, for a time.
 	Democracy,   // Everyone chooses.
-	Dictatorship
+	Dictatorship,
+	Theocracy    // Priests rule in the name of the state faith.
 };
 
 inline const char* GovName(int Gov)
 {
-	static const char* Names[] = {"rule by a chieftain", "monarchy", "aristocracy", "republic", "democracy", "dictatorship"};
-	return Names[Gov < 6 ? Gov : 0];
+	static const char* Names[] = {"rule by a chieftain", "monarchy", "aristocracy", "republic", "democracy", "dictatorship", "theocracy"};
+	return Names[Gov < 7 ? Gov : 0];
 }
 
 enum IdeaKind : uint8_t
@@ -161,8 +162,8 @@ inline const char* IdeologyName(int Idea)
 // Share of what each band puts by that the state takes each year.
 inline float TaxRate(int Gov)
 {
-	static const float Rates[] = {0.05f, 0.08f, 0.06f, 0.07f, 0.10f, 0.12f};
-	return Rates[Gov < 6 ? Gov : 0];
+	static const float Rates[] = {0.05f, 0.08f, 0.06f, 0.07f, 0.10f, 0.12f, 0.09f};
+	return Rates[Gov < 7 ? Gov : 0];
 }
 
 inline const char* TierName(int Tier)
