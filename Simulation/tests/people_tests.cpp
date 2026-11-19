@@ -745,6 +745,10 @@ static void TestStates()
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Secular >= 0.0f && S.Secular <= 1.0f);
 	EXPECT(Folk.Nonbelievers() >= 0.0 && Folk.Nonbelievers() <= 1.0);
 	std::printf("  Holy books: %d, secular states: %d\n", Folk.HolyBookCount(), Folk.SecularStates());
+	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
+	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	std::printf("  Art styles: %d begun, %d in use\n", Folk.ArtStylesSoFar(), Folk.ArtStylesInUse());
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.
@@ -764,7 +768,7 @@ static void TestStates()
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
-	EXPECT(Folk2.Writings().size() == Folk.Writings().size() && Folk2.HolyBookCount() == Folk.HolyBookCount());
+	EXPECT(Folk2.Writings().size() == Folk.Writings().size() && Folk2.HolyBookCount() == Folk.HolyBookCount() && Folk2.ArtStylesSoFar() == Folk.ArtStylesSoFar() && Folk2.ArtStylesInUse() == Folk.ArtStylesInUse());
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Secular == Folk.AllStates()[i].Secular);
 	bool Bomb = false;
 	for (const earth::EcoEvent& E : Folk.Firsts()) Bomb = Bomb || E.Text.find("builds the first nuclear weapon") != std::string::npos;

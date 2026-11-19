@@ -807,6 +807,7 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
+			if (S->Style) Out += "  Art: the " + PersonName(S->Style) + " style of " + ArtName(S->Art) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d; wealth from trade: %.0f; richest band has %.1fx the food per head of the poorest\n",
 				S->Treasury, S->Conquests, S->Wealth, S->Inequality);
 			Out += Buf;
@@ -919,6 +920,7 @@ public:
 		if (Ar.Version >= 31) Ar.Io(AnyScript);
 		if (Ar.Version >= 32) Ar.Io(NextRealMark);
 		if (Ar.Version >= 33) Ar.Io(HolyBooks), Ar.Io(AnySecular);
+		if (Ar.Version >= 34) Ar.Io(ArtStyles), Ar.Io(ArtsSeen);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1870,6 +1872,8 @@ private:
 	bool AnyScript = false;
 	std::vector<uint32_t> HolyBooks; // Faiths whose teachings have been written down.
 	bool AnySecular = false;
+	int ArtStyles = 0; // Styles of art ever begun.
+	int ArtsSeen = 0;  // Bits of ArtName kinds that have appeared.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5369,6 +5373,52 @@ private:
 			}
 	}
 
+	// Once a year: a state with a city and spare wealth begins a style of its own, in what its people
+	// can make (statues with metal tools, painting, music, then plays, novels, films and records);
+	// styles travel along trade routes, and a state that takes up another's adds to its fame.
+	void Arts(Polity& S, const Camp& Seat)
+	{
+		static const int Bronze = SkillNamed("bronze"), Writing = SkillNamed("writing"), Printing = SkillNamed("printing"), Electricity = SkillNamed("electricity"),
+			Pottery = SkillNamed("pottery");
+		uint8_t Kind = 0;
+		if (Has(S.Known, Electricity)) Kind = Dice.Chance(0.5) ? 6 : 7;
+		else if (Has(S.Known, Printing)) Kind = Dice.Chance(0.5) ? 5 : 3;
+		else if (Has(S.Known, Writing)) Kind = Dice.Chance(0.5) ? 4 : 2;
+		else if (Has(S.Known, Bronze) || Has(S.Known, Pottery)) Kind = 1;
+		const bool Fresh = !S.Style || (Kind > S.Art && Dice.Chance(0.1)); // New means of making things bring new styles.
+		if (S.City && Fresh && S.Treasury > 500.0f && Dice.Chance(S.Literacy > 0.2f ? 0.05 : 0.02))
+		{
+			S.Style = static_cast<uint16_t>(Seat.Words[(S.Id + ArtStyles) % kWords] * 37u + S.Id + 1u);
+			S.Art = Kind;
+			++ArtStyles;
+			const int Bit = 1 << Kind;
+			if (!(ArtsSeen & Bit) || S.Tier >= Empire)
+			{
+				std::string T = "A new style of " + std::string(ArtName(Kind)) + ", " + PersonName(S.Style) + ", begins in " + StateName(S) + (ArtsSeen & Bit ? "" : ": the first of its kind");
+				AddEvent(T);
+			}
+			ArtsSeen |= Bit;
+		}
+		for (uint32_t P : S.Partners)
+			if (const Polity* T = StateById(P); T && T->Style && T->Style != S.Style && T->Art >= S.Art && T->Fame >= S.Fame && Dice.Chance(0.02))
+			{
+				S.Style = T->Style, S.Art = T->Art;
+				if (Polity* Maker = StateById(P)) Maker->Fame += 1.0f;
+			}
+		S.Fame *= 0.99f;
+	}
+public:
+	int ArtStylesSoFar() const { return ArtStyles; }
+	int ArtStylesInUse() const
+	{
+		std::vector<uint16_t> Used;
+		for (const Polity& S : States)
+			if (S.Style) Used.push_back(S.Style);
+		std::sort(Used.begin(), Used.end());
+		return static_cast<int>(std::unique(Used.begin(), Used.end()) - Used.begin());
+	}
+
+private:
 	bool HasHolyBook(uint32_t Faith) const { return std::find(HolyBooks.begin(), HolyBooks.end(), Faith) != HolyBooks.end(); }
 
 	// Once a year: a state that writes puts its faith's teachings in a holy book (which then
@@ -5913,6 +5963,7 @@ private:
 			Politics(S, Seat);
 			Ideas(S, Seat);
 			Faiths(S);
+			Arts(S, Seat);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));

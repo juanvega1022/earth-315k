@@ -60,6 +60,9 @@ struct Polity
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
 	uint16_t Script = 0;       // The name of the script it writes in, 0 none.
 	float Secular = 0.0f;      // How far its people have drifted from faith, 0 .. 1.
+	uint16_t Style = 0;        // Its art's style (a word), 0 none yet.
+	uint8_t Art = 0;           // What the style is mostly: see ArtName.
+	float Fame = 0.0f;         // How widely its art is admired, from the states that took it up.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -93,6 +96,7 @@ struct Polity
 		if (Ar.Version >= 29) Ar.Io(Discoveries);
 		if (Ar.Version >= 31) Ar.Io(Script);
 		if (Ar.Version >= 33) Ar.Io(Secular);
+		if (Ar.Version >= 34) Ar.Io(Style), Ar.Io(Art), Ar.Io(Fame);
 	}
 };
 
@@ -160,6 +164,13 @@ inline const char* IdeologyName(int Idea)
 }
 
 // Share of what each band puts by that the state takes each year.
+// What an art style is mostly made of, by what its people can make and where they live.
+inline const char* ArtName(int Art)
+{
+	static const char* Names[] = {"songs and dances", "carvings and statues", "painting", "music", "poetry and plays", "novels", "photographs and films", "recorded music"};
+	return Names[Art < 8 ? Art : 0];
+}
+
 inline float TaxRate(int Gov)
 {
 	static const float Rates[] = {0.05f, 0.08f, 0.06f, 0.07f, 0.10f, 0.12f, 0.09f};
