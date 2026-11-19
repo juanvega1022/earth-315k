@@ -684,7 +684,11 @@ static void TestStates()
 	Folk.Think(Poet, static_cast<int>(Folk.AllCamps().size()));
 	EXPECT(!Folk.Writings().empty() && Folk.Writings()[0].Kind == "poem");
 	EXPECT(Folk.LibraryText().find("The river gives") != std::string::npos);
-	// States near each other open trade.
+	// States near each other open trade (once there are two to trade).
+	auto Living = [&Folk] { int N = 0; for (const earth::Polity& S : Folk.AllStates()) N += S.Bands > 0; return N; };
+	for (int y = 0; y < 80 && Living() < 2; ++y)
+		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	std::printf("  States before trade: %d living of %d\n", Living(), Folk.PolityCount());
 	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.TradeRoutes() > 0 && HasFirst(Folk, "The first trade route"));
