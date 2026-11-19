@@ -775,6 +775,7 @@ static void TestStates()
 			EXPECT(std::accumulate(Votes.begin(), Votes.end(), 0) <= std::accumulate(V.begin(), V.end(), 0) && std::accumulate(V.begin(), V.end(), 0) <= S.Members);
 		}
 		EXPECT(Folk.ProtestsSoFar() >= 0);
+		for (const earth::Npc& P : Folk.All()) EXPECT(Folk.DailyLife(P).find("You live in ") == 0);
 		// Stations: the enslaved never read, and shares add up.
 		for (const earth::Npc& P : Folk.All()) EXPECT(P.Status <= 3 && (P.Status > 0 || !Folk.Reads(P)));
 		EXPECT(std::abs(Folk.StationShare(0) + Folk.StationShare(1) + Folk.StationShare(2) + Folk.StationShare(3) - 1.0) < 1e-6 || Folk.PolityCount() == 0);
