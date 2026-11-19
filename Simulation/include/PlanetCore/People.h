@@ -602,6 +602,9 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	// Everyone killed by quakes, tsunamis, storms, floods and droughts; and how many of each there have been.
+	long long DisasterDeaths() const { return DisasterDead; }
+	const std::array<int, 5>& DisasterCounts() const { return Struck; }
 	int SlaveStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Slavery; })); }
 	int RevolutionsSoFar() const
 	{
@@ -836,6 +839,7 @@ public:
 		if (Ar.Version >= 25) Ar.Io(GovSeen);
 		if (Ar.Version >= 26) Ar.Io(IdeasSeen), Ar.Io(AnyMission), Ar.Io(AnyRevolution);
 		if (Ar.Version >= 27) Ar.Io(AnySlavery), Ar.Io(AnyAbolition);
+		if (Ar.Version >= 28) Ar.Io(DisasterDead), Ar.Io(Struck), Ar.Io(DisastersSeen);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1782,6 +1786,9 @@ private:
 	int IdeasSeen = 1;
 	bool AnyMission = false, AnyRevolution = false;
 	bool AnySlavery = false, AnyAbolition = false;
+	long long DisasterDead = 0;
+	std::array<int, 5> Struck{}; // Earthquakes, tsunamis, hurricanes, floods and droughts that hit anyone or not.
+	int DisastersSeen = 0;
 	int GovSeen = 3; // Bits of the kinds of government that have ever existed; chieftains and monarchs are noted as tiers.
 	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
@@ -4875,6 +4882,68 @@ private:
 		return true;
 	}
 
+	// Once a year: earthquakes where the plates meet (with tsunamis on the coast), hurricanes in
+	// the warm-sea belts, river floods and droughts strike the bands there. Cities suffer most from
+	// quakes; warning systems and weather forecasts cut the toll in the computer age.
+	void Disasters()
+	{
+		struct Zone { double La0, La1, Lo0, Lo1; };
+		static const Zone Faults[] = {{30, 45, 130, 146}, {-10, 5, 95, 130}, {5, 20, 118, 127}, {-45, 5, -80, -68}, {10, 20, -105, -83}, {32, 42, -125, -115},
+			{52, 62, -165, -140}, {34, 40, 26, 60}, {26, 36, 70, 95}, {36, 46, 10, 28}, {26, 40, 98, 106}, {-46, -35, 166, 179}};
+		static const Zone Storms[] = {{10, 30, -98, -60}, {8, 30, 110, 150}, {12, 23, 80, 95}, {-25, -10, 110, 155}, {-25, -12, 35, 55}};
+		static const int Computers = SkillNamed("computers"), Farming = SkillNamed("farming");
+		auto Strike = [&](double La, double Lo, double Km, double Share, double Spoil, bool ShoreOnly, int Kind, const char* What)
+		{
+			int Dead = 0;
+			const Polity* HitCity = nullptr;
+			for (int N : CampSlotsNear(La, Lo, Km))
+			{
+				Camp& C = Camps[static_cast<size_t>(N)];
+				if (C.Members.empty() || (ShoreOnly && ShoreFood(C.Lat, C.Lon) <= 0.0)) continue;
+				Polity* S = C.State ? StateById(C.State) : nullptr;
+				const bool InCity = S && S->City && S->Capital == C.Id;
+				if (InCity) HitCity = S, S->Treasury *= Kind == 0 ? 0.7f : 0.9f;
+				const double Rate = Share * (InCity && Kind == 0 ? 2.0 : 1.0) * (Has(C.Known, Computers) ? 0.3 : 1.0);
+				for (int i : C.Members)
+				{
+					Npc& P = Npcs[static_cast<size_t>(i)];
+					if (P.Health > 0.0f && Dice.Chance(Rate)) P.Health = 0.0f, ++Dead;
+				}
+				C.Store *= static_cast<float>(1.0 - Spoil);
+			}
+			DisasterDead += Dead;
+			Struck[static_cast<size_t>(Kind)] += 1;
+			char Buf[96];
+			std::snprintf(Buf, sizeof(Buf), " near %.1f, %.1f kills %d", La, Lo, Dead);
+			if (HitCity && HitCity->Tier >= Kingdom) AddEvent(std::string(What) + Buf + " and strikes the city of " + PersonName(HitCity->City) + " in " + StateName(*HitCity));
+			else if (Dead >= 50 || (Dead > 0 && !(DisastersSeen & (1 << Kind)))) AddEvent(std::string(What) + Buf);
+			if (Dead > 0) DisastersSeen |= 1 << Kind;
+		};
+		for (const Zone& Z : Faults)
+		{
+			if (!Dice.Chance(0.3)) continue;
+			const double La = Z.La0 + Dice.Uniform() * (Z.La1 - Z.La0), Lo = Z.Lo0 + Dice.Uniform() * (Z.Lo1 - Z.Lo0);
+			Strike(La, Lo, 100.0, 0.05, 0.3, false, 0, "An earthquake");
+			if (ShoreFood(La, Lo) > 0.0 && Dice.Chance(0.3)) Strike(La, Lo, 500.0, 0.1, 0.5, true, 1, "A tsunami");
+		}
+		for (const Zone& Z : Storms)
+			if (Dice.Chance(0.5)) Strike(Z.La0 + Dice.Uniform() * (Z.La1 - Z.La0), Z.Lo0 + Dice.Uniform() * (Z.Lo1 - Z.Lo0), 200.0, 0.02, 0.5, true, 2, "A hurricane");
+		// River floods: farmers live on the rich flood plains.
+		for (size_t c = 0; c < Camps.size(); ++c)
+		{
+			const Camp& C = Camps[c];
+			if (C.Members.empty() || !Has(C.Known, Farming) || !Dice.Chance(0.002) || Eco->RiverAt(C.Lat, C.Lon) < 0.5) continue;
+			Strike(C.Lat, C.Lon, 30.0, 0.03, 0.6, false, 3, "A great river flood");
+		}
+		// Droughts: a season or more without rain somewhere on land.
+		for (int k = 0; k < 3; ++k)
+		{
+			const double La = -40.0 + Dice.Uniform() * 100.0, Lo = -180.0 + Dice.Uniform() * 360.0;
+			if (!Eco->IsLand(La, Lo) || !Dice.Chance(0.3)) continue;
+			Strike(La, Lo, 500.0, 0.0, 0.7, false, 4, "A drought");
+		}
+	}
+
 	// Once a year: how long people live, and how many are born and die for every thousand alive.
 	void Census()
 	{
@@ -5422,6 +5491,7 @@ private:
 		if (StateDays < 365) return;
 		StateDays -= 365;
 		Census();
+		Disasters();
 		static const int Villages = SkillNamed("villages"), Farming = SkillNamed("farming"), Writing = SkillNamed("writing"),
 			Cities = SkillNamed("cities"), LawSkill = SkillNamed("laws"), Money = SkillNamed("money"), Roads = SkillNamed("roads"),
 			Printing = SkillNamed("printing");
