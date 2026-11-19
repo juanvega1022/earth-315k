@@ -57,6 +57,7 @@ struct Polity
 	double Debt = 0.0;         // What it owes its lenders, in kg of food.
 	float LastPrice = 1.0f;    // Last year's price of food.
 	bool Slavery = false, Abolished = false;
+	bool NoDeathPenalty = false; // It has ended putting people to death for crimes.
 	float Market = 0.0f;       // Its share market's worth against when it opened; 0 before it has one.
 	int Crashes = 0;           // Times its market crashed.
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
@@ -95,7 +96,7 @@ struct Polity
 	float MoneyWorth = 0.0f; // What a coin buys against when money began; 0 before it does.
 	float Inflation = 0.0f;  // How much the money's worth fell last year, as a fraction.
 	float CrimeRate = 0.0f;  // Crimes a year per 1,000 of its people.
-	uint8_t Justice = 0;     // Bits: 1 courts, 2 police, 4 prisons.
+	uint8_t Justice = 0;     // Bits: 1 courts, 2 police, 4 prisons, 8 a written constitution, 16 juries and rights of the accused.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
 	template <class A>
@@ -122,6 +123,7 @@ struct Polity
 		if (Ar.Version >= 41) Ar.Io(Orbit);
 		if (Ar.Version >= 43) Ar.Io(House), Ar.Io(HouseFrom), Ar.Io(Wed);
 		if (Ar.Version >= 44) Ar.Io(Market), Ar.Io(Crashes);
+		if (Ar.Version >= 45) Ar.Io(NoDeathPenalty);
 		else if (Ar.IsReading()) Market = 0.0f;
 	}
 };
