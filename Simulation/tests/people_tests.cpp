@@ -716,6 +716,13 @@ static void TestStates()
 	// Every state prices its food, and the world's inequality is a fair Gini index.
 	EXPECT(Folk.StatesText().find("  Food costs ") != std::string::npos);
 	EXPECT(Folk.WorldGini() >= 0.0 && Folk.WorldGini() <= 1.0);
+	// First finds by people who write go into the library.
+	int Finds = 0;
+	for (const earth::Writing& W : Folk.Writings()) Finds += W.Kind == "discovery";
+	int ByStates = 0;
+	for (const earth::Polity& S : Folk.AllStates()) ByStates += S.Discoveries;
+	EXPECT(Finds >= ByStates);
+	std::printf("  Discoveries in the library: %d\n", Finds);
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.

@@ -57,6 +57,7 @@ struct Polity
 	double Debt = 0.0;         // What it owes its lenders, in kg of food.
 	float LastPrice = 1.0f;    // Last year's price of food.
 	bool Slavery = false, Abolished = false;
+	uint16_t Discoveries = 0;  // First-ever finds made by its people.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -84,6 +85,7 @@ struct Polity
 		else if (Ar.IsReading()) Gov = Tier >= Kingdom ? 1 : 0;
 		if (Ar.Version >= 26) Ar.Io(Ideology), Ar.Io(Revolutions);
 		if (Ar.Version >= 27) Ar.Io(Coins), Ar.Io(Debt), Ar.Io(LastPrice), Ar.Io(Slavery), Ar.Io(Abolished);
+		if (Ar.Version >= 29) Ar.Io(Discoveries);
 	}
 };
 
