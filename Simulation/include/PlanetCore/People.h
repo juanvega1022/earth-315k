@@ -930,6 +930,7 @@ public:
 		if (Ar.Version >= 37) Ar.Io(Crimes), Ar.Io(CrimeDead), Ar.Io(JusticeSeen);
 		if (Ar.Version >= 38) Ar.Io(FamilySeen);
 		if (Ar.Version >= 39) Ar.Io(SportsSeen), Ar.Io(WorldGames), Ar.Io(LastGames);
+		if (Ar.Version >= 40) Ar.Io(FaminesAll), Ar.Io(ReliefKg), Ar.Io(AnyRelief), Ar.Io(AnyGreen);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1891,6 +1892,9 @@ private:
 	int SportsSeen = 0;                  // Bits of SportName kinds played anywhere.
 	int WorldGames = 0;                  // World games held so far.
 	double LastGames = 0.0;              // Year of the last.
+	int FaminesAll = 0;                  // Famines anywhere so far.
+	double ReliefKg = 0.0;               // Food sent by one state to another's famine.
+	bool AnyRelief = false, AnyGreen = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5450,6 +5454,8 @@ public:
 		const int K = SkillNamed(Skill);
 		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
 	}
+	int FaminesSoFar() const { return FaminesAll; }
+	double FamineReliefKg() const { return ReliefKg; }
 	int WorldGamesHeld() const { return WorldGames; }
 	int StatesWithRights(int R) const { return static_cast<int>(std::count_if(States.begin(), States.end(), [R](const Polity& S) { return S.Rights >= R; })); }
 	long long CrimesSoFar() const { return Crimes; }
@@ -5637,6 +5643,25 @@ public:
 
 private:
 
+	// Trading partners with food to spare send some to a state in famine: a twentieth of what their
+	// best-fed bands hold, to its hungriest bands.
+	void SendRelief(Polity& S, std::vector<Camp*>& Mine)
+	{
+		std::sort(Mine.begin(), Mine.end(), [](const Camp* A, const Camp* B) { return A->Store / (A->Members.size() + 1.0f) < B->Store / (B->Members.size() + 1.0f); });
+		for (uint32_t P : S.Partners)
+		{
+			const Polity* T = StateById(P);
+			if (!T || T->Enemy == S.Id || T->Price > 1.0f) continue;
+			float Sent = 0.0f;
+			for (Camp& C : Camps)
+				if (C.State == P && C.Store > 20.0f * static_cast<float>(C.Members.size())) Sent += 0.05f * C.Store, C.Store *= 0.95f;
+			if (Sent <= 0.0f) continue;
+			for (size_t k = 0; k < std::min<size_t>(3, Mine.size()); ++k) Mine[k]->Store += Sent / static_cast<float>(std::min<size_t>(3, Mine.size()));
+			ReliefKg += Sent;
+			if (!AnyRelief) AnyRelief = true, AddEvent(StateName(*T) + " sends food to the famine in " + StateName(S) + ", the first help of its kind");
+		}
+	}
+
 	// Once a year: food prices from stores and coins; states with money mint coins (more in war,
 	// which drives prices up), borrow for wars once they can bank, and default when debts grow too
 	// big. Conquering farm states take slaves until ideas of rights abolish it. When food is dear the
@@ -5655,7 +5680,17 @@ private:
 		const double MoneyLevel = 1.0 + S.Coins / (std::max(1, S.Members) * 50.0);
 		S.Price = static_cast<float>(std::clamp(30.0 / (PerHead + 5.0) * MoneyLevel, 0.05, 1000.0));
 		const std::string Name = StateName(S);
-		if (S.Price > 3.0f && S.LastPrice <= 3.0f && S.Tier >= Kingdom) AddEvent("Famine in " + Name + ": food costs " + std::to_string(static_cast<int>(S.Price)) + " times what it does in good years");
+		// Famine: food itself is short (prices without the money's own fall in worth).
+		if (S.Price / MoneyLevel > 3.0 && S.LastPrice / MoneyLevel <= 3.0)
+		{
+			++S.Famines, ++FaminesAll;
+			if (S.Tier >= Kingdom) AddEvent("Famine in " + Name + ": food costs " + std::to_string(static_cast<int>(S.Price)) + " times what it does in good years");
+		}
+		if (S.Price / MoneyLevel > 3.0) SendRelief(S, Mine);
+		// The green revolution: new seeds, fertilizers and watering feed far more from the same fields.
+		static const int Fertilizers = SkillNamed("fertilizers"), Genetics = SkillNamed("genetics"), Irrigation = SkillNamed("irrigation");
+		if (!AnyGreen && Has(S.Known, Fertilizers) && Has(S.Known, Genetics) && Has(S.Known, Irrigation))
+			AnyGreen = true, AddEvent("The green revolution begins in " + Name + ": new seeds, fertilizers and watering feed far more from the same fields");
 		// Relief from the treasury when food is dear.
 		if (S.Price > 2.0f && S.Treasury > 0.0f)
 		{

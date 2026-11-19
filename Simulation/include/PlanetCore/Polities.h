@@ -69,6 +69,7 @@ struct Polity
 	uint8_t Rights = 0;        // How far women's rights have come: see RightsName.
 	uint8_t Sport = 0;         // Its favourite sport: see SportName.
 	uint16_t Medals = 0;       // Wins at the world games.
+	uint16_t Famines = 0;      // Famines it has suffered.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -109,6 +110,7 @@ struct Polity
 		if (Ar.Version >= 36) Ar.Io(Parks);
 		if (Ar.Version >= 38) Ar.Io(Marriage), Ar.Io(Rights);
 		if (Ar.Version >= 39) Ar.Io(Sport), Ar.Io(Medals);
+		if (Ar.Version >= 40) Ar.Io(Famines);
 	}
 };
 
