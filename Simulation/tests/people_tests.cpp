@@ -743,6 +743,10 @@ static void TestStates()
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
 	EXPECT(Folk2.Writings().size() == Folk.Writings().size());
+	bool Bomb = false;
+	for (const earth::EcoEvent& E : Folk.Firsts()) Bomb = Bomb || E.Text.find("builds the first nuclear weapon") != std::string::npos;
+	EXPECT(Folk.NuclearStates() == 0 || Bomb);
+	EXPECT(Folk2.WorldWarsSoFar() == Folk.WorldWarsSoFar()); // What states know is counted afresh, so not compared.
 	EXPECT(Folk2.DisasterCounts() == Folk.DisasterCounts() && Folk2.DisasterDeaths() == Folk.DisasterDeaths());
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Gov == Folk.AllStates()[i].Gov);
 	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);

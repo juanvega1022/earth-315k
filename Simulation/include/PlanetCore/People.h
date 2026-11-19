@@ -602,6 +602,8 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	int WorldWarsSoFar() const { return WorldWars; }
+	int NuclearStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return Nuclear(S); })); }
 	int ThinkerSchools() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Discoveries >= 3; })); }
 	// Everyone killed by quakes, tsunamis, storms, floods and droughts; and how many of each there have been.
 	long long DisasterDeaths() const { return DisasterDead; }
@@ -841,6 +843,7 @@ public:
 		if (Ar.Version >= 26) Ar.Io(IdeasSeen), Ar.Io(AnyMission), Ar.Io(AnyRevolution);
 		if (Ar.Version >= 27) Ar.Io(AnySlavery), Ar.Io(AnyAbolition);
 		if (Ar.Version >= 28) Ar.Io(DisasterDead), Ar.Io(Struck), Ar.Io(DisastersSeen);
+		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1787,6 +1790,9 @@ private:
 	int IdeasSeen = 1;
 	bool AnyMission = false, AnyRevolution = false;
 	bool AnySlavery = false, AnyAbolition = false;
+	int WorldWars = 0, NuclearWars = 0;
+	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
+	double LeagueYear = 0.0;
 	long long DisasterDead = 0;
 	std::array<int, 5> Struck{}; // Earthquakes, tsunamis, hurricanes, floods and droughts that hit anyone or not.
 	int DisastersSeen = 0;
@@ -4962,6 +4968,81 @@ private:
 		}
 	}
 
+	// Whether a state has nuclear weapons: atomic power and rockets to carry them.
+	static bool Nuclear(const Polity& S)
+	{
+		static const int Atom = SkillNamed("nuclear power"), Rockets = SkillNamed("rockets");
+		return Has(S.Known, Atom) && Has(S.Known, Rockets);
+	}
+	// Two nuclear states seldom dare to fight.
+	bool Deterred(const Polity& A, const Polity& B) { return Nuclear(A) && Nuclear(B) && !Dice.Chance(0.1); }
+	// Members of the league of nations: states with the telegraph once the league exists.
+	bool InLeague(const Polity& S) const
+	{
+		static const int Telegraph = SkillNamed("telegraph");
+		return LeagueYear > 0.0 && S.Tier >= Kingdom && Has(S.Known, Telegraph);
+	}
+
+	// Once a year, the world as a whole: wars between alliances big enough to be world wars;
+	// nuclear weapons, their use in war and their accidents; a league of nations once the
+	// telegraph ties states together; the internet sharing all knowledge; and thinking machines.
+	void GlobalAge()
+	{
+		static const int Telegraph = SkillNamed("telegraph"), Internet = SkillNamed("the internet"), AI = SkillNamed("artificial intelligence"), Engines = SkillNamed("engines");
+		const double World = std::max(1, Alive());
+		// World war: industrial states holding a third of the world's people fight at once.
+		int Fighting = 0, Sides = 0;
+		for (const Polity& S : States)
+			if (S.Enemy && Has(S.Known, Engines)) Fighting += S.Members, ++Sides;
+		const bool Big = Sides >= 4 && Fighting >= World / 3.0;
+		if (Big && !InWorldWar)
+		{
+			InWorldWar = true, ++WorldWars;
+			AddEvent("World war " + std::to_string(WorldWars) + ": " + std::to_string(Sides) + " industrial states, with " + std::to_string(Fighting) + " people, are at war at once");
+		}
+		else if (!Big && InWorldWar && Fighting < World / 6.0) InWorldWar = false, AddEvent("World war " + std::to_string(WorldWars) + " ends");
+		// Nuclear weapons: the first, their use in a war, and accidents.
+		for (Polity& S : States)
+		{
+			if (!Nuclear(S)) continue;
+			if (!AnyBomb)
+			{
+				std::string T = StateName(S) + " builds the first nuclear weapon";
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				AnyBomb = true, AddEvent(T);
+			}
+			Polity* E = StateById(S.Enemy);
+			if (E && Dice.Chance(Nuclear(*E) ? 0.002 : 0.01))
+			{
+				AddEvent("Nuclear war: " + StateName(S) + " destroys the capital of " + StateName(*E) + (Nuclear(*E) ? ", and is destroyed in turn" : ""));
+				Eco->Strike("A nuclear strike", E->Lat, E->Lon, 0.1, 3.0, 60.0, 0.0);
+				if (Nuclear(*E)) Eco->Strike("A nuclear strike", S.Lat, S.Lon, 0.3, 5.0, 60.0, 0.0);
+				++NuclearWars;
+			}
+			else if (Dice.Chance(0.0005)) AddEvent("A nuclear accident in " + StateName(S) + " poisons the land around it"), Eco->Strike("A nuclear accident", S.Lat, S.Lon, 0.0, 0.0, 15.0, 0.0);
+		}
+		// The league of nations.
+		if (LeagueYear <= 0.0)
+		{
+			int Wired = 0;
+			for (const Polity& S : States) Wired += S.Tier >= Kingdom && Has(S.Known, Telegraph);
+			if (Wired >= 5) LeagueYear = Eco->Years(), AddEvent("The league of nations: " + std::to_string(Wired) + " states agree to settle quarrels by talking");
+		}
+		// The internet: once half the world is online, everyone online can learn what anyone online knows.
+		SkillSet Online = 0;
+		double OnlinePeople = 0.0;
+		for (const Polity& S : States)
+			if (Has(S.Known, Internet)) Online |= S.Known, OnlinePeople += S.Members;
+		if (OnlinePeople >= World / 2.0)
+		{
+			if (!AnyWeb) AnyWeb = true, AddEvent("Half the world is online: anyone connected can learn what anyone connected knows");
+			for (Polity& S : States)
+				if (Has(S.Known, Internet)) S.Heard |= Online;
+		}
+		for (const Polity& S : States)
+			if (Has(S.Known, AI) && !AnyAI) AnyAI = true, AddEvent("In " + StateName(S) + ", thinking machines begin to work beside people");
+	}
+
 	// Once a year: how long people live, and how many are born and die for every thousand alive.
 	void Census()
 	{
@@ -5130,7 +5211,7 @@ private:
 				}
 		// Holy war against a neighbour of another faith.
 		if (S.Faith && !S.Enemy && S.Tier >= Kingdom && Dice.Chance(0.01))
-			if (Polity* O = NearestOther(S); O && O->Faith && O->Faith != S.Faith && !O->Enemy && std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end())
+			if (Polity* O = NearestOther(S); O && O->Faith && O->Faith != S.Faith && !O->Enemy && !Deterred(S, *O) && std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end())
 			{
 				AddEvent("A holy war: " + Name + " fights " + StateName(*O) + " over their gods");
 				StartWar(S, *O);
@@ -5738,7 +5819,7 @@ private:
 				if (Win.Tier >= Kingdom || Lose.Tier >= Kingdom) AddEvent(T);
 				if (const Npc* R = Find(Win.Ruler); R && Win.Tier >= Kingdom) Remember(*R, "led " + WinName + " to conquer " + LoseName);
 			}
-			else if (A.WarYears >= 2 && Dice.Chance((A.Laws.empty() && B->Laws.empty()) ? 0.15 : 0.3))
+			else if (A.WarYears >= 2 && Dice.Chance(((A.Laws.empty() && B->Laws.empty()) ? 0.15 : 0.3) * (InLeague(A) && InLeague(*B) ? 2.0 : 1.0)))
 			{
 				A.Enemy = 0, B->Enemy = 0, A.WarYears = 0, B->WarYears = 0;
 				if (A.Tier >= Kingdom && B->Tier >= Kingdom) AddEvent("Peace between " + StateName(A) + " and " + StateName(*B));
@@ -5760,7 +5841,7 @@ private:
 				if (!B || B->Bands == 0) continue;
 				const bool Allied = std::find(A.Allies.begin(), A.Allies.end(), B->Id) != A.Allies.end();
 				const bool Kin = Understand(Edge, O), SameGods = A.Faith && A.Faith == B->Faith;
-				if (!A.Enemy && !B->Enemy && !Allied && Dice.Chance(0.04 * (Kin ? 1.0 : 2.0) * (SameGods ? 1.0 : 2.0) * (A.Laws.empty() ? 1.0 : 0.5)))
+				if (!A.Enemy && !B->Enemy && !Allied && !Deterred(A, *B) && Dice.Chance(0.04 * (Kin ? 1.0 : 2.0) * (SameGods ? 1.0 : 2.0) * (A.Laws.empty() ? 1.0 : 0.5) * (InLeague(A) && InLeague(*B) ? 0.5 : 1.0)))
 					StartWar(A, *B);
 				else if (!Allied && A.Enemy != B->Id && (Kin || SameGods) && A.Allies.size() < 4 && B->Allies.size() < 4 && Dice.Chance(0.03))
 					Ally(A, *B);
@@ -5770,6 +5851,7 @@ private:
 
 		Trade();
 		Voyages();
+		GlobalAge();
 
 		// New chiefdoms, where a band that farms or lives in a village leads others close by that
 		// speak its tongue or share its gods.
@@ -6048,9 +6130,18 @@ private:
 		WorldTrade = TradeThisYear, TradeThisYear = 0.0;
 	}
 
-	void StartWar(Polity& A, Polity& B)
+	void StartWar(Polity& A, Polity& B, bool Bloc = true)
 	{
 		A.Enemy = B.Id, B.Enemy = A.Id, A.WarYears = B.WarYears = 0;
+		// Alliances drag their members in: each free ally of one side takes on a free ally of the other.
+		if (Bloc)
+			for (uint32_t XA : A.Allies)
+				for (uint32_t YB : B.Allies)
+				{
+					Polity* X = StateById(XA);
+					Polity* Y = StateById(YB);
+					if (X && Y && X != Y && !X->Enemy && !Y->Enemy && X != &B && Y != &A) StartWar(*X, *Y, false);
+				}
 		if (A.Tier >= Kingdom || B.Tier >= Kingdom)
 		{
 			std::string T = StateName(A) + " goes to war with " + StateName(B);
