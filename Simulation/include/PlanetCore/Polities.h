@@ -59,6 +59,7 @@ struct Polity
 	bool Slavery = false, Abolished = false;
 	bool NoDeathPenalty = false; // It has ended putting people to death for crimes.
 	bool Tolerant = false;       // It has promised freedom of worship to those of other faiths.
+	bool Compulsory = false;     // Its law sends every child to a free school.
 	float Market = 0.0f;       // Its share market's worth against when it opened; 0 before it has one.
 	int Crashes = 0;           // Times its market crashed.
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
@@ -126,6 +127,7 @@ struct Polity
 		if (Ar.Version >= 44) Ar.Io(Market), Ar.Io(Crashes);
 		if (Ar.Version >= 45) Ar.Io(NoDeathPenalty);
 		if (Ar.Version >= 46) Ar.Io(Tolerant);
+		if (Ar.Version >= 47) Ar.Io(Compulsory);
 		else if (Ar.IsReading()) Market = 0.0f;
 	}
 };
