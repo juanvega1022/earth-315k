@@ -71,6 +71,9 @@ struct Polity
 	uint16_t Medals = 0;       // Wins at the world games.
 	uint16_t Famines = 0;      // Famines it has suffered.
 	uint8_t Orbit = 0;         // How far into space it has gone: see SpaceStepName.
+	uint16_t House = 0;        // Name of its ruling family, 0 none.
+	int HouseFrom = 0;         // Ruler number with whom that house began.
+	uint32_t Wed = 0;          // The state its rulers are joined to by marriage, 0 none.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -113,6 +116,7 @@ struct Polity
 		if (Ar.Version >= 39) Ar.Io(Sport), Ar.Io(Medals);
 		if (Ar.Version >= 40) Ar.Io(Famines);
 		if (Ar.Version >= 41) Ar.Io(Orbit);
+		if (Ar.Version >= 43) Ar.Io(House), Ar.Io(HouseFrom), Ar.Io(Wed);
 	}
 };
 

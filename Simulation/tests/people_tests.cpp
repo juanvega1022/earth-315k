@@ -748,6 +748,12 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Royal marriages pair states both ways; houses are counted.
+	for (const earth::Polity& S : Folk.AllStates())
+		if (S.Wed)
+			for (const earth::Polity& O : Folk.AllStates())
+				if (O.Id == S.Wed) EXPECT(O.Wed == S.Id || O.Wed == 0 || O.Enemy == S.Id);
+	EXPECT(Folk.SuccessionWarsSoFar() <= Folk.DynastiesSoFar());
 	// Migrants and diasporas are counted; diaspora bands are bands.
 	EXPECT(Folk.MigrantsSoFar() >= 0 && Folk.DiasporaBands() <= Folk.BandCount());
 	// Space steps stay in range.
