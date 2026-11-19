@@ -584,6 +584,25 @@ public:
 		}
 		return Out;
 	}
+	// Craft guilds in a state's towns: from money and writing until factories take their work.
+	static int Guilds(const Polity& S)
+	{
+		static const int Money = SkillNamed("money"), Writing = SkillNamed("writing"), Factories = SkillNamed("factories");
+		return Has(S.Known, Money) && Has(S.Known, Writing) && !Has(S.Known, Factories) ? S.Towns : 0;
+	}
+	// How unequal the world is: the Gini index of food put by per head across all bands, 0 equal .. 1.
+	double WorldGini() const
+	{
+		std::vector<double> V;
+		for (const Camp& C : Camps)
+			if (!C.Members.empty()) V.push_back(C.Store / static_cast<double>(C.Members.size()));
+		if (V.size() < 2) return 0.0;
+		std::sort(V.begin(), V.end());
+		double Sum = 0.0, Weighted = 0.0;
+		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
+		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
+	}
+	int SlaveStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Slavery; })); }
 	int RevolutionsSoFar() const
 	{
 		int N = 0;
@@ -719,6 +738,9 @@ public:
 			for (uint32_t P : S->Partners)
 				if (const Polity* T = StateById(P)) Traders += (Traders.empty() ? "" : ", ") + StateName(*T);
 			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
+			std::snprintf(Buf, sizeof(Buf), "  Food costs %.2fx a good year; %.0f in coins; debts %.0f%s; %d guilds\n", S->Price, S->Coins, S->Debt,
+				S->Slavery ? "; keeps slaves" : S->Abolished ? "; has abolished slavery" : "", Guilds(*S));
+			Out += Buf;
 			if (S->Ideology || S->Revolutions) Out += "  Idea most hold: " + std::string(IdeologyName(S->Ideology)) + "; revolutions: " + std::to_string(S->Revolutions) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Government: %s; taxes %.0f%% a year; %.0f officials; %d coups and %d civil wars so far\n", GovName(S->Gov), 100.0 * TaxRate(S->Gov),
 				OfficialsPerBand(S->Known) * S->Bands, S->Coups, S->CivilWars);
@@ -813,6 +835,7 @@ public:
 		if (Ar.Version >= 24) Ar.Io(AnyCalendar), Ar.Io(AnyFestival), Ar.Io(AnyMonument), Ar.Io(Library);
 		if (Ar.Version >= 25) Ar.Io(GovSeen);
 		if (Ar.Version >= 26) Ar.Io(IdeasSeen), Ar.Io(AnyMission), Ar.Io(AnyRevolution);
+		if (Ar.Version >= 27) Ar.Io(AnySlavery), Ar.Io(AnyAbolition);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1758,6 +1781,7 @@ private:
 	bool AnyCalendar = false, AnyFestival = false, AnyMonument = false;
 	int IdeasSeen = 1;
 	bool AnyMission = false, AnyRevolution = false;
+	bool AnySlavery = false, AnyAbolition = false;
 	int GovSeen = 3; // Bits of the kinds of government that have ever existed; chieftains and monarchs are noted as tiers.
 	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
@@ -5026,6 +5050,64 @@ private:
 			}
 	}
 
+	// Once a year: food prices from stores and coins; states with money mint coins (more in war,
+	// which drives prices up), borrow for wars once they can bank, and default when debts grow too
+	// big. Conquering farm states take slaves until ideas of rights abolish it. When food is dear the
+	// treasury feeds the hungriest bands.
+	void Economy(Polity& S)
+	{
+		static const int Money = SkillNamed("money"), Maths = SkillNamed("mathematics"), Farming = SkillNamed("farming");
+		double Food = 0.0;
+		std::vector<Camp*> Mine;
+		for (Camp& C : Camps)
+			if (C.State == S.Id) Food += C.Store, Mine.push_back(&C);
+		if (Mine.empty()) return;
+		const double PerHead = Food / std::max(1, S.Members);
+		const bool Coined = Has(S.Known, Money), Banks = Coined && Has(S.Known, Maths) && S.City;
+		if (Coined) S.Coins += (S.Enemy ? 0.1 : 0.02) * S.Treasury * 0.01; // Rulers pay soldiers by minting.
+		const double MoneyLevel = 1.0 + S.Coins / (std::max(1, S.Members) * 50.0);
+		S.Price = static_cast<float>(std::clamp(30.0 / (PerHead + 5.0) * MoneyLevel, 0.05, 1000.0));
+		const std::string Name = StateName(S);
+		if (S.Price > 3.0f && S.LastPrice <= 3.0f && S.Tier >= Kingdom) AddEvent("Famine in " + Name + ": food costs " + std::to_string(static_cast<int>(S.Price)) + " times what it does in good years");
+		// Relief from the treasury when food is dear.
+		if (S.Price > 2.0f && S.Treasury > 0.0f)
+		{
+			std::sort(Mine.begin(), Mine.end(), [](const Camp* A, const Camp* B) { return A->Store / (A->Members.size() + 1.0f) < B->Store / (B->Members.size() + 1.0f); });
+			for (size_t k = 0; k < std::min<size_t>(3, Mine.size()) && S.Treasury > 0.0f; ++k)
+			{
+				const float Give = std::min(S.Treasury, 2.0f * static_cast<float>(Mine[k]->Members.size()));
+				Mine[k]->Store += Give, S.Treasury -= Give;
+			}
+		}
+		S.LastPrice = S.Price;
+		// Debts: wars are paid for on credit, repaid from the treasury.
+		if (Banks && S.Enemy) S.Debt += S.Members * 0.5;
+		const float Repay = static_cast<float>(std::min<double>(S.Debt, 0.05 * S.Treasury));
+		S.Debt -= Repay, S.Treasury -= Repay;
+		if (S.Debt > 20.0 * std::max(1, S.Members))
+		{
+			std::string T = Name + " cannot pay its debts and defaults";
+			T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+			if (S.Tier >= Kingdom) AddEvent(T);
+			S.Debt = 0.0, S.Wealth *= 0.5, S.Partners.clear();
+		}
+		// Slavery and its end.
+		if (!S.Slavery && !S.Abolished && S.Conquests > 0 && Has(S.Known, Farming) && S.Ideology != Liberalism && Dice.Chance(0.05))
+		{
+			S.Slavery = true;
+			if (!AnySlavery || S.Tier >= Empire) AddEvent(Name + " puts the people it conquered to forced work: slavery");
+			AnySlavery = true;
+		}
+		if (S.Slavery && (S.Ideology == Liberalism || S.Gov == Democracy || S.Revolutions > 0) && S.Literacy > 0.3f && Dice.Chance(0.05))
+		{
+			S.Slavery = false, S.Abolished = true;
+			std::string T = Name + " abolishes slavery" + (AnyAbolition ? "" : ", the first state to do so");
+			T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+			AddEvent(T);
+			AnyAbolition = true;
+		}
+	}
+
 	// The people rise and overthrow their rulers; the state becomes a republic, or a dictatorship of
 	// the revolutionaries, and the rich bands' stores are shared out.
 	void Revolt(Polity& S, const Camp& Seat, const Npc* Leader)
@@ -5408,7 +5490,7 @@ private:
 			{
 				Camp& C = Camps[static_cast<size_t>(c)];
 				if (c == Capital) continue;
-				const float Paid = TaxRate(S.Gov) * C.Store;
+				const float Paid = TaxRate(S.Gov) * (S.Slavery ? 1.2f : 1.0f) * C.Store;
 				C.Store -= Paid;
 				Seat.Store += 0.8f * Paid; // Some is lost on the way.
 				S.Treasury += Paid;
@@ -5440,6 +5522,7 @@ private:
 			Culture(S);
 			Politics(S, Seat);
 			Ideas(S, Seat);
+			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
 			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()) + 0.15 * OfficialsPerBand(S.Known));
