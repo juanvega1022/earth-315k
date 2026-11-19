@@ -70,6 +70,7 @@ struct Polity
 	int CapitalPeople = 0;   // How many live in its capital city.
 	int Towns = 0;           // How many cities it has.
 	float Literacy = 0.0f;   // Share of its people who can read.
+	double RealPeople = 0.0;     // How many people it stands for on the real Earth's scale.
 	float LifeExpectancy = 0.0f; // Mean age at death last year.
 	float Welfare = 0.0f;        // How well its people live, 0 .. 1: long lives, enough food, reading, freedom, peace and fairness.
 	float Price = 1.0f;      // What food costs against plenty: above 1 it is scarce, or the money is worth less.
