@@ -59,6 +59,7 @@ struct Polity
 	bool Slavery = false, Abolished = false;
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
 	uint16_t Script = 0;       // The name of the script it writes in, 0 none.
+	float Secular = 0.0f;      // How far its people have drifted from faith, 0 .. 1.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -91,6 +92,7 @@ struct Polity
 		if (Ar.Version >= 27) Ar.Io(Coins), Ar.Io(Debt), Ar.Io(LastPrice), Ar.Io(Slavery), Ar.Io(Abolished);
 		if (Ar.Version >= 29) Ar.Io(Discoveries);
 		if (Ar.Version >= 31) Ar.Io(Script);
+		if (Ar.Version >= 33) Ar.Io(Secular);
 	}
 };
 

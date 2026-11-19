@@ -731,6 +731,13 @@ static void TestStates()
 	// Tongues fall into families, and states that write have scripts.
 	EXPECT(Folk.LanguageFamilies() >= 1 && Folk.LanguageFamilies() <= Folk.Languages());
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Script || earth::Knows(S.Known, 33));
+	// Holy books are written only for state faiths by states that write, and each is in the library; faith drift stays in 0 .. 1.
+	int Scriptures = 0;
+	for (const earth::Writing& W : Folk.Writings()) Scriptures += W.Kind == "scripture";
+	EXPECT(Scriptures == Folk.HolyBookCount());
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Secular >= 0.0f && S.Secular <= 1.0f);
+	EXPECT(Folk.Nonbelievers() >= 0.0 && Folk.Nonbelievers() <= 1.0);
+	std::printf("  Holy books: %d, secular states: %d\n", Folk.HolyBookCount(), Folk.SecularStates());
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.
@@ -750,7 +757,8 @@ static void TestStates()
 	EXPECT(earth::LoadWorld(Path, Eco2, Folk2));
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
-	EXPECT(Folk2.Writings().size() == Folk.Writings().size());
+	EXPECT(Folk2.Writings().size() == Folk.Writings().size() && Folk2.HolyBookCount() == Folk.HolyBookCount());
+	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Secular == Folk.AllStates()[i].Secular);
 	bool Bomb = false;
 	for (const earth::EcoEvent& E : Folk.Firsts()) Bomb = Bomb || E.Text.find("builds the first nuclear weapon") != std::string::npos;
 	EXPECT(Folk.NuclearStates() == 0 || Bomb);

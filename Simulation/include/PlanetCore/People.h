@@ -901,6 +901,7 @@ public:
 		if (Ar.Version >= 28) Ar.Io(DisasterDead), Ar.Io(Struck), Ar.Io(DisastersSeen);
 		if (Ar.Version >= 31) Ar.Io(AnyScript);
 		if (Ar.Version >= 32) Ar.Io(NextRealMark);
+		if (Ar.Version >= 33) Ar.Io(HolyBooks), Ar.Io(AnySecular);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1850,6 +1851,8 @@ private:
 	bool AnyMission = false, AnyRevolution = false;
 	bool AnySlavery = false, AnyAbolition = false;
 	bool AnyScript = false;
+	std::vector<uint32_t> HolyBooks; // Faiths whose teachings have been written down.
+	bool AnySecular = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5320,7 +5323,7 @@ private:
 		// Missionaries carry the faith along the trade routes.
 		if (S.Faith)
 			for (uint32_t P : S.Partners)
-				if (Polity* T = StateById(P); T && T->Faith != S.Faith && Dice.Chance(0.03))
+				if (Polity* T = StateById(P); T && T->Faith != S.Faith && T->Secular < 0.5f && Dice.Chance(HasHolyBook(S.Faith) ? 0.06 : 0.03))
 				{
 					auto It = CampSlots.find(T->Capital);
 					if (It == CampSlots.end()) continue;
@@ -5334,13 +5337,63 @@ private:
 					}
 				}
 		// Holy war against a neighbour of another faith.
-		if (S.Faith && !S.Enemy && S.Tier >= Kingdom && Dice.Chance(0.01))
+		if (S.Faith && !S.Enemy && S.Tier >= Kingdom && S.Secular < 0.3f && Dice.Chance(0.01))
 			if (Polity* O = NearestOther(S); O && O->Faith && O->Faith != S.Faith && !O->Enemy && !Deterred(S, *O) && std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end())
 			{
 				AddEvent("A holy war: " + Name + " fights " + StateName(*O) + " over their gods");
 				StartWar(S, *O);
 			}
 	}
+
+	bool HasHolyBook(uint32_t Faith) const { return std::find(HolyBooks.begin(), HolyBooks.end(), Faith) != HolyBooks.end(); }
+
+	// Once a year: a state that writes puts its faith's teachings in a holy book (which then
+	// travels twice as well with missionaries). Where people read, study and choose their rulers,
+	// faith slowly loosens: bands drop their beliefs, and in time the state stops having one.
+	void Faiths(Polity& S)
+	{
+		static const int Letters = SkillNamed("writing"), Printing = SkillNamed("printing");
+		const std::string Name = StateName(S);
+		if (S.Faith && S.Faith <= BeliefLog.size() && Has(S.Known, Letters) && !HasHolyBook(S.Faith) && Dice.Chance(0.05))
+		{
+			const BeliefRecord& B = BeliefLog[S.Faith - 1];
+			HolyBooks.push_back(S.Faith);
+			Writing Book;
+			Book.Year = Eco->Years(), Book.Author = S.Ruler ? PersonName(S.RulerName) : Name, Book.Place = Name, Book.Kind = "scripture";
+			Book.Text = "The book of " + SayWord(B.Word) + ": " + BeliefGloss(B.Subject, B.Claim, B.Practice) + ".";
+			Library.push_back(Book);
+			if (HolyBooks.size() == 1 || S.Tier >= Kingdom)
+				AddEvent(Name + " writes down the holy book of " + SayWord(B.Word) + (HolyBooks.size() == 1 ? ", the first scripture in the world" : ""));
+		}
+		if (!Has(S.Known, Printing)) return;
+		float Target = 0.4f * S.Literacy + (S.Universities ? 0.2f : 0.0f) + 0.02f * std::min<int>(S.Discoveries, 10);
+		if (S.Gov == Republic || S.Gov == Democracy) Target += 0.1f;
+		if (S.Ideology == Socialism) Target += 0.2f;
+		S.Secular += 0.05f * (std::min(Target, 0.9f) - S.Secular);
+		if (S.Secular > 0.05f)
+			for (Camp& C : Camps)
+				if (C.State == S.Id && !C.Faith.empty() && Dice.Chance(0.02 * S.Secular)) C.Faith.pop_back();
+		if (S.Faith && S.Secular > 0.5f && Dice.Chance(0.05))
+		{
+			S.Faith = 0;
+			if (!AnySecular || S.Tier >= Kingdom) AddEvent(Name + " parts faith from the state" + (AnySecular ? "" : ": the first state with no religion of its own"));
+			AnySecular = true;
+		}
+	}
+
+public:
+	// Share of people in states whose band holds no belief at all.
+	double Nonbelievers() const
+	{
+		long long All = 0, None = 0;
+		for (const Camp& C : Camps)
+			if (C.State) All += static_cast<long long>(C.Members.size()), None += C.Faith.empty() ? static_cast<long long>(C.Members.size()) : 0;
+		return All ? static_cast<double>(None) / static_cast<double>(All) : 0.0;
+	}
+	int HolyBookCount() const { return static_cast<int>(HolyBooks.size()); }
+	int SecularStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Secular > 0.5f && !S.Faith; })); }
+
+private:
 
 	// Once a year: food prices from stores and coins; states with money mint coins (more in war,
 	// which drives prices up), borrow for wars once they can bank, and default when debts grow too
@@ -5830,6 +5883,7 @@ private:
 			Culture(S);
 			Politics(S, Seat);
 			Ideas(S, Seat);
+			Faiths(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
