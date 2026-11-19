@@ -584,6 +584,11 @@ public:
 		}
 		return Out;
 	}
+	// How many states are ruled each way (see GovName).
+	int StatesRuledBy(int Gov) const
+	{
+		return static_cast<int>(std::count_if(States.begin(), States.end(), [Gov](const Polity& S) { return S.Gov == Gov; }));
+	}
 	int MonumentsBuilt() const
 	{
 		int N = 0;
@@ -708,6 +713,9 @@ public:
 			for (uint32_t P : S->Partners)
 				if (const Polity* T = StateById(P)) Traders += (Traders.empty() ? "" : ", ") + StateName(*T);
 			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
+			std::snprintf(Buf, sizeof(Buf), "  Government: %s; taxes %.0f%% a year; %.0f officials; %d coups and %d civil wars so far\n", GovName(S->Gov), 100.0 * TaxRate(S->Gov),
+				OfficialsPerBand(S->Known) * S->Bands, S->Coups, S->CivilWars);
+			Out += Buf;
 			if (S->Schools || S->Libraries || S->Universities)
 				Out += "  Schools: " + std::to_string(S->Schools) + ", libraries: " + std::to_string(S->Libraries) + ", universities: " + std::to_string(S->Universities) + "; " +
 					std::to_string(static_cast<int>(100.0f * S->Literacy)) + "% can read\n";
@@ -796,6 +804,7 @@ public:
 		if (Ar.Version >= 22) Ar.Io(NextLifeMark);
 		if (Ar.Version >= 23) Ar.Io(Colonies), Ar.Io(AnyVoyage);
 		if (Ar.Version >= 24) Ar.Io(AnyCalendar), Ar.Io(AnyFestival), Ar.Io(AnyMonument), Ar.Io(Library);
+		if (Ar.Version >= 25) Ar.Io(GovSeen);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1508,6 +1517,7 @@ public:
 			{
 				Life += "Your band belongs to " + StateName(*Realm) + ", " + std::to_string(Realm->Bands) + " bands and " + std::to_string(Realm->Members) +
 					" people" + (Rules ? ", and you are its ruler. " : Realm->Ruler ? ", ruled by " + PersonName(Realm->RulerName) + ". " : ". ");
+				if (Realm->Gov >= Aristocracy) Life += "It is a " + std::string(GovName(Realm->Gov)) + ". ";
 				if (const Polity* E = StateById(Realm->Enemy)) Life += "It is at war with " + StateName(*E) + ". ";
 				for (const std::string& L : Realm->Laws) Life += "One of its laws: " + L + ". ";
 				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), \"trade\" (send merchants to a new state), "
@@ -1738,6 +1748,7 @@ private:
 	int NextLifeMark = 40;
 	int Colonies = 0; // Bands settled across the open sea.
 	bool AnyCalendar = false, AnyFestival = false, AnyMonument = false;
+	int GovSeen = 3; // Bits of the kinds of government that have ever existed; chieftains and monarchs are noted as tiers.
 	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
 	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
@@ -4875,6 +4886,70 @@ private:
 		if (S.Libraries) S.Written |= S.Known;
 	}
 
+	// Clerks, scribes and officials a state keeps for each band: none without writing, more with paper, printing and computers.
+	static double OfficialsPerBand(SkillSet Known)
+	{
+		static const int Writing = SkillNamed("writing"), Paper = SkillNamed("paper"), Printing = SkillNamed("printing"), Computers = SkillNamed("computers");
+		if (!Has(Known, Writing)) return 0.0;
+		return 1.0 + (Has(Known, Paper) ? 1.0 : 0.0) + (Has(Known, Printing) ? 1.0 : 0.0) + (Has(Known, Computers) ? 2.0 : 0.0);
+	}
+
+	// Once a year: how a state is ruled changes. Kingdoms crown monarchs; nobles curb them; with
+	// laws, money and readers, citizens choose their rulers; with printing, everyone does; and in a
+	// long war or hard times a general may seize power, until the people take it back.
+	void Politics(Polity& S, const Camp& Seat)
+	{
+		static const int LawSkill = SkillNamed("laws"), Money = SkillNamed("money"), Printing = SkillNamed("printing"), Writing = SkillNamed("writing");
+		const uint8_t Was = S.Gov;
+		const double Year = Eco->Years();
+		const bool Free = S.Gov == Republic || S.Gov == Democracy;
+		if (S.Gov == Chieftain && S.Tier >= Kingdom) S.Gov = Monarchy;
+		else if (S.Gov == Monarchy && S.Inequality > 3.0f && !S.Laws.empty() && Dice.Chance(0.01)) S.Gov = Aristocracy;
+		else if ((S.Gov == Monarchy || S.Gov == Aristocracy) && S.City && Has(S.Known, LawSkill) && Has(S.Known, Money) && Has(S.Known, Writing) &&
+			S.Literacy > 0.1f && Dice.Chance(0.005 * (1.0 + static_cast<double>(S.Laws.size()))))
+			S.Gov = Republic;
+		else if (S.Gov == Republic && Has(S.Known, Printing) && S.Literacy > 0.5f && Dice.Chance(0.02)) S.Gov = Democracy;
+		else if (S.Gov == Dictatorship && Dice.Chance(S.Literacy > 0.6f ? 0.03 : 0.01)) S.Gov = S.Literacy > 0.6f ? Democracy : Monarchy;
+		else if (S.Gov >= Monarchy && S.Gov != Dictatorship && Dice.Chance((S.WarYears > 3 ? 0.02 : 0.003) * (S.Gov == Democracy ? 0.3 : 1.0)))
+		{
+			S.Gov = Dictatorship;
+			S.Coups += 1;
+			// The general who takes power: the most trusted grown man or woman in the capital.
+			const Npc* Strong = nullptr;
+			for (int i : Seat.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (P.Id != S.Ruler && P.AgeYears() >= 25.0 && P.AgeYears() < 60.0 && (!Strong || P.Reputation > Strong->Reputation)) Strong = &P;
+			}
+			if (Strong)
+			{
+				S.Ruler = Strong->Id, S.RulerName = Strong->Name, S.Rulers += 1;
+				Remember(*Strong, "seized power over " + StateName(S));
+			}
+			if (S.Tier >= Kingdom) AddEvent((Strong ? PersonName(Strong->Name) + " seizes power in a coup: " : std::string("A coup: ")) + StateName(S) + " becomes a dictatorship");
+		}
+		S.Rule = S.Gov == Monarchy || S.Gov == Aristocracy || S.Gov == Chieftain ? 0 : 1;
+		// Republics choose every few years, democracies every four.
+		if (Free && Year - S.Elected >= (S.Gov == Democracy ? 4.0 : 5.0))
+		{
+			S.Elected = static_cast<int>(Year);
+			const Npc* Best = nullptr;
+			for (int i : Seat.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (P.AgeYears() >= 30.0 && (!Best || P.Reputation > Best->Reputation)) Best = &P;
+			}
+			if (Best && Best->Id != S.Ruler) S.Ruler = Best->Id, S.RulerName = Best->Name, S.Rulers += 1, Remember(*Best, "was chosen to lead " + StateName(S));
+		}
+		if (S.Gov == Was) return;
+		const int Bit = 1 << S.Gov;
+		std::string T = StateName(S) + " becomes a " + GovName(S.Gov);
+		if (S.Gov == Aristocracy) T = "The nobles of " + StateName(S) + " take a share of power from its ruler";
+		T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+		if (!(GovSeen & Bit)) GovSeen |= Bit, AddEvent("The first " + std::string(GovName(S.Gov)) + " in the world: " + T);
+		else if (S.Tier >= Empire && S.Gov != Dictatorship) AddEvent(T);
+	}
+
 	// Once a year: states that read the sky keep a calendar, their faith gets a great festival, and
 	// a rich treasury raises temples and monuments in the capital.
 	void Culture(Polity& S)
@@ -5204,7 +5279,7 @@ private:
 							if ((P.Mother == S.Ruler || P.Father == S.Ruler) && P.AgeYears() >= 14.0 && (!Next || P.AgeDays > Next->AgeDays)) Next = &P;
 						}
 				// Without an heir, or now and then anyway, a big state fights over who rules, and splits.
-				if (S.Bands >= 6 && Mine.size() >= 6 && ((S.Rule == 0 && !Next) || Dice.Chance(0.04)))
+				if (S.Bands >= 6 && Mine.size() >= 6 && S.Gov != Republic && S.Gov != Democracy && ((S.Rule == 0 && !Next) || Dice.Chance(0.04)))
 				{
 					int Far = -1;
 					double FarKm = 0.0;
@@ -5214,7 +5289,8 @@ private:
 						const double Km = DistanceKm(C.Lat, C.Lon, Seat.Lat, Seat.Lon);
 						if (c != Capital && C.Leader && Km > FarKm) Far = c, FarKm = Km;
 					}
-					if (Far >= 0) Split = Far, Why = "claims the throne";
+					if (Far >= 0) Split = Far, Why = S.Bands >= 20 ? "starts a civil war and claims the throne" : "claims the throne";
+					if (Far >= 0 && S.Bands >= 20) S.CivilWars += 1;
 				}
 				if (!Next) Next = Find(Seat.Leader);
 				if (!Next)
@@ -5231,7 +5307,7 @@ private:
 			{
 				Camp& C = Camps[static_cast<size_t>(c)];
 				if (c == Capital) continue;
-				const float Paid = 0.05f * C.Store;
+				const float Paid = TaxRate(S.Gov) * C.Store;
 				C.Store -= Paid;
 				Seat.Store += 0.8f * Paid; // Some is lost on the way.
 				S.Treasury += Paid;
@@ -5261,9 +5337,10 @@ private:
 			}
 			Institutions(S);
 			Culture(S);
+			Politics(S, Seat);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
-			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()));
+			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()) + 0.15 * OfficialsPerBand(S.Known));
 			for (int c : Mine)
 			{
 				if (c == Capital) continue;

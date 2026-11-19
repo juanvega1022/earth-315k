@@ -48,6 +48,9 @@ struct Polity
 	bool Calendar = false;          // Keeps a written calendar of the year.
 	uint16_t Festival = 0;          // Name of its great yearly festival, 0 none.
 	uint16_t Monuments = 0;         // Temples, tombs and monuments raised from its treasury.
+	uint8_t Gov = 0;                // How it is ruled: see GovName.
+	int Coups = 0, CivilWars = 0;
+	int Elected = 0;                // Year of its last election, for republics and democracies.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -70,6 +73,8 @@ struct Polity
 		if (Ar.Version >= 16) Ar.Io(Partners), Ar.Io(Wealth);
 		if (Ar.Version >= 21) Ar.Io(Schools), Ar.Io(Libraries), Ar.Io(Universities), Ar.Io(Written);
 		if (Ar.Version >= 24) Ar.Io(Calendar), Ar.Io(Festival), Ar.Io(Monuments);
+		if (Ar.Version >= 25) Ar.Io(Gov), Ar.Io(Coups), Ar.Io(CivilWars), Ar.Io(Elected);
+		else if (Ar.IsReading()) Gov = Tier >= Kingdom ? 1 : 0;
 	}
 };
 
@@ -102,6 +107,29 @@ struct Writing
 		Ar.Io(Year), Ar.Io(Author), Ar.Io(Place), Ar.Io(Kind), Ar.Io(Text);
 	}
 };
+
+enum Government : uint8_t
+{
+	Chieftain,
+	Monarchy,
+	Aristocracy, // Nobles rule with, or over, the monarch.
+	Republic,    // Leading citizens choose who rules, for a time.
+	Democracy,   // Everyone chooses.
+	Dictatorship
+};
+
+inline const char* GovName(int Gov)
+{
+	static const char* Names[] = {"rule by a chieftain", "monarchy", "aristocracy", "republic", "democracy", "dictatorship"};
+	return Names[Gov < 6 ? Gov : 0];
+}
+
+// Share of what each band puts by that the state takes each year.
+inline float TaxRate(int Gov)
+{
+	static const float Rates[] = {0.05f, 0.08f, 0.06f, 0.07f, 0.10f, 0.12f};
+	return Rates[Gov < 6 ? Gov : 0];
+}
 
 inline const char* TierName(int Tier)
 {

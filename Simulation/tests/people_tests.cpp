@@ -695,6 +695,9 @@ static void TestStates()
 	}
 	EXPECT(!Folk.AllBattles().empty());
 	EXPECT(Folk.BattlesText().find(" beats ") != std::string::npos);
+	// Every state is ruled some way, and says how.
+	EXPECT(Folk.StatesText().find("  Government: ") != std::string::npos);
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Gov <= earth::Dictatorship && (S.Tier == earth::Chiefdom || S.Gov != earth::Chieftain));
 	// The yearly census counts how long people live and how many are born and die.
 	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
 	// Settlers sail from a state's shore bands to a far shore; each landing is counted. (The test states lie inland, so this only checks the count.)
@@ -713,6 +716,7 @@ static void TestStates()
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
 	EXPECT(Folk2.Writings().size() == Folk.Writings().size());
+	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Gov == Folk.AllStates()[i].Gov);
 	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
 	{
