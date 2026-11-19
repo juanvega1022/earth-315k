@@ -807,6 +807,7 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
+			if (S->House) Out += "  Ruling house: " + PersonName(S->House) + ", since ruler number " + std::to_string(S->HouseFrom) + (S->Wed && StateById(S->Wed) ? "; joined by marriage to " + StateName(*StateById(S->Wed)) : std::string()) + "\n";
 			if (S->Orbit) Out += std::string("  Space: ") + SpaceStepName(S->Orbit) + "\n";
 			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
 			if (S->Marriage || S->Rights) Out += std::string("  Family: ") + MarriageName(S->Marriage) + "; women's rights: " + RightsName(S->Rights) + "\n";
@@ -870,6 +871,9 @@ public:
 		for (const Polity& S : States) K |= S.Known;
 		return K;
 	}
+	int DynastiesSoFar() const { return Dynasties; }
+	int RoyalWeddingsSoFar() const { return RoyalWeddings; }
+	int SuccessionWarsSoFar() const { return SuccessionWars; }
 	long long MigrantsSoFar() const { return Migrants; }
 	// Bands living in a state whose capital they can't understand: peoples far from their homeland's tongue.
 	int DiasporaBands() const
@@ -952,6 +956,7 @@ public:
 		if (Ar.Version >= 40) Ar.Io(FaminesAll), Ar.Io(ReliefKg), Ar.Io(AnyRelief), Ar.Io(AnyGreen);
 		if (Ar.Version >= 41) Ar.Io(SpaceSeen), Ar.Io(AnySpaceRace);
 		if (Ar.Version >= 42) Ar.Io(Migrants), Ar.Io(AnyMigration);
+		if (Ar.Version >= 43) Ar.Io(Dynasties), Ar.Io(RoyalWeddings), Ar.Io(SuccessionWars);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1920,6 +1925,7 @@ private:
 	bool AnySpaceRace = false;
 	long long Migrants = 0; // People who moved to another state for a better life.
 	bool AnyMigration = false;
+	int Dynasties = 0, RoyalWeddings = 0, SuccessionWars = 0;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5504,6 +5510,43 @@ public:
 	}
 
 private:
+	// A new ruler: a child of the old one carries on the house; anyone else founds a new one. In a
+	// monarchy whose house dies out, a state joined to it by marriage may claim the throne by war.
+	void Succeed(Polity& S, const Npc* Next, uint32_t Old)
+	{
+		if (S.Tier < Kingdom || !Next) return;
+		const bool Child = Old && (Next->Mother == Old || Next->Father == Old);
+		if (Child && S.House) return;
+		const uint16_t Was = S.House;
+		S.House = Next->Name, S.HouseFrom = S.Rulers;
+		++Dynasties;
+		if (Was && S.Tier >= Empire) AddEvent("The house of " + PersonName(Was) + " ends in " + StateName(S) + "; the house of " + PersonName(S.House) + " begins");
+		const bool Crowned = S.Gov == Monarchy || S.Gov == Aristocracy;
+		if (Was && Crowned && S.Wed)
+			if (Polity* W = StateById(S.Wed); W && !W->Enemy && !S.Enemy && Dice.Chance(0.3))
+			{
+				++SuccessionWars;
+				AddEvent("A war of succession: " + StateName(*W) + ", joined by marriage to the old house, claims the throne of " + StateName(S));
+				StartWar(*W, S);
+			}
+	}
+
+	// Once a year: crowned rulers marry their children into a neighbouring crowned house, binding
+	// the two states as allies.
+	void RoyalMarriage(Polity& S)
+	{
+		if (S.Wed)
+			if (const Polity* W = StateById(S.Wed); !W || W->Enemy == S.Id) S.Wed = 0;
+		const bool Crowned = S.Gov == Monarchy || S.Gov == Aristocracy;
+		if (!Crowned || S.Wed || S.Enemy || S.Tier < Kingdom || !Dice.Chance(0.02)) return;
+		Polity* O = NearestOther(S);
+		if (!O || O->Wed || O->Enemy || O->Tier < Kingdom || (O->Gov != Monarchy && O->Gov != Aristocracy)) return;
+		S.Wed = O->Id, O->Wed = S.Id;
+		if (std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end()) S.Allies.push_back(O->Id), O->Allies.push_back(S.Id);
+		if (RoyalWeddings++ == 0 || S.Tier >= Empire || O->Tier >= Empire)
+			AddEvent("A royal wedding joins the rulers of " + StateName(S) + " and " + StateName(*O) + (RoyalWeddings == 1 ? ", the first marriage between two states" : ""));
+	}
+
 	// Once a year: from a state in famine, at war or living badly, a band may move to a trading
 	// partner that lives far better, settling near its capital and joining it, keeping its own
 	// tongue (a diaspora) until the words mix.
@@ -6214,9 +6257,11 @@ private:
 				if (!Next)
 					for (int i : Seat.Members)
 						if (Npcs[static_cast<size_t>(i)].AgeYears() >= 16.0 && (!Next || Npcs[static_cast<size_t>(i)].AgeDays > Next->AgeDays)) Next = &Npcs[static_cast<size_t>(i)];
+				const uint32_t Old = S.Ruler;
 				S.Ruler = Next ? Next->Id : 0;
 				S.RulerName = Next ? Next->Name : 0;
 				S.Rulers += 1;
+				Succeed(S, Next, Old);
 				if (Next && S.Tier >= Empire)
 					AddEvent(PersonName(Next->Name) + " becomes ruler number " + std::to_string(S.Rulers) + " of " + StateName(S));
 			}
@@ -6271,6 +6316,7 @@ private:
 			Sports(S);
 			SpaceRace(S);
 			Migrate(S);
+			RoyalMarriage(S);
 			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
