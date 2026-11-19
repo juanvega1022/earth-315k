@@ -782,6 +782,8 @@ static void TestStates()
 	EXPECT(Folk.StatesText().find("  Crime: ") != std::string::npos);
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.CrimeRate >= 0.0f && S.CrimeRate < 50.0f);
 	EXPECT(Folk.CrimeDeaths() <= Folk.CrimesSoFar() / 10 + 5);
+	EXPECT(Folk.ExecutionsSoFar() <= Folk.CrimeDeaths() + 10 && Folk.NoDeathPenaltyStates() <= Folk.PolityCount());
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!(S.Justice & 8) || (S.Justice & 1)); // A constitution needs courts.
 	std::printf("  Crime: %.2f per 1,000 a year, %lld crimes, %lld killed\n", Folk.WorldCrimeRate(), Folk.CrimesSoFar(), Folk.CrimeDeaths());
 	// Parks: at most one for every ten bands (and one for the smallest).
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Parks <= std::max(1, S.Bands / 10) + 1);

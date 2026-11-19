@@ -813,7 +813,7 @@ public:
 			if (S->Orbit) Out += std::string("  Space: ") + SpaceStepName(S->Orbit) + "\n";
 			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
 			if (S->Marriage || S->Rights) Out += std::string("  Family: ") + MarriageName(S->Marriage) + "; women's rights: " + RightsName(S->Rights) + "\n";
-			std::snprintf(Buf, sizeof(Buf), "  Crime: %.1f a year per 1,000 people%s%s%s\n", S->CrimeRate, S->Justice & 1 ? "; courts" : "", S->Justice & 2 ? ", police" : "", S->Justice & 4 ? ", prisons" : "");
+			std::snprintf(Buf, sizeof(Buf), "  Crime: %.1f a year per 1,000 people%s%s%s%s%s%s\n", S->CrimeRate, S->Justice & 1 ? "; courts" : "", S->Justice & 2 ? ", police" : "", S->Justice & 4 ? ", prisons" : "", S->Justice & 8 ? ", a constitution" : "", S->Justice & 16 ? ", juries" : "", S->NoDeathPenalty ? ", no death penalty" : "");
 			Out += Buf;
 			if (S->Style) Out += "  Art: the " + PersonName(S->Style) + " style of " + ArtName(S->Art) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Tribute paid so far: %.0f kg of food; conquests: %d; wealth from trade: %.0f; richest band has %.1fx the food per head of the poorest\n",
@@ -962,6 +962,7 @@ public:
 		if (Ar.Version >= 42) Ar.Io(Migrants), Ar.Io(AnyMigration);
 		if (Ar.Version >= 43) Ar.Io(Dynasties), Ar.Io(RoyalWeddings), Ar.Io(SuccessionWars);
 		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
+		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1933,6 +1934,9 @@ private:
 	int Dynasties = 0, RoyalWeddings = 0, SuccessionWars = 0;
 	int CrashesAll = 0, Hyperinflations = 0; // Market crashes and runaway prices anywhere so far.
 	bool AnyExchange = false;
+	long long Executions = 0;     // People put to death for crimes so far.
+	bool AnyAbolishedDeath = false;
+	double WorldCourt = 0.0;      // Year the world court first sat; 0 before.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	double WorldWarEnded = -1e9; // shortcut: not saved, so a load right after a world war may allow the next one sooner.
@@ -5229,6 +5233,8 @@ private:
 			for (const Polity& S : States) Wired += S.Tier >= Kingdom && Has(S.Known, Telegraph);
 			if (Wired >= 5) LeagueYear = Eco->Years(), AddEvent("The league of nations: " + std::to_string(Wired) + " states agree to settle quarrels by talking");
 		}
+		if (LeagueYear > 0.0 && WorldCourt == 0.0 && ConstitutionStates() >= 5)
+			WorldCourt = Eco->Years(), AddEvent("A world court sits: states with constitutions agree to judge war crimes and quarrels between them by law");
 		// The internet: once half the world is online, everyone online can learn what anyone online knows.
 		SkillSet Online = 0;
 		double OnlinePeople = 0.0;
@@ -5364,7 +5370,7 @@ private:
 		else if ((S.Gov == Monarchy || S.Gov == Chieftain) && S.Faith && HasHolyBook(S.Faith) && S.Secular < 0.1f && Dice.Chance(0.004)) S.Gov = Theocracy;
 		else if (S.Gov == Theocracy && S.Secular > 0.4f && Dice.Chance(0.03)) S.Gov = Republic;
 		else if (S.Gov == Dictatorship && Dice.Chance(S.Literacy > 0.6f ? 0.03 : 0.01)) S.Gov = S.Literacy > 0.6f ? Democracy : Monarchy;
-		else if (S.Gov >= Monarchy && S.Gov != Dictatorship && Dice.Chance((S.WarYears > 3 ? 0.02 : 0.003) * (S.Gov == Democracy ? 0.3 : 1.0)))
+		else if (S.Gov >= Monarchy && S.Gov != Dictatorship && Dice.Chance((S.WarYears > 3 ? 0.02 : 0.003) * (S.Gov == Democracy ? 0.3 : 1.0) * (S.Justice & 8 ? 0.5 : 1.0))) // A constitution makes coups harder.
 		{
 			S.Gov = Dictatorship;
 			S.Coups += 1;
@@ -5546,6 +5552,10 @@ public:
 	int WorldGamesHeld() const { return WorldGames; }
 	int StatesWithRights(int R) const { return static_cast<int>(std::count_if(States.begin(), States.end(), [R](const Polity& S) { return S.Rights >= R; })); }
 	long long CrimesSoFar() const { return Crimes; }
+	long long ExecutionsSoFar() const { return Executions; }
+	int ConstitutionStates() const { int N = 0; for (const Polity& S : States) N += (S.Justice & 8) != 0; return N; }
+	int NoDeathPenaltyStates() const { int N = 0; for (const Polity& S : States) N += S.NoDeathPenalty; return N; }
+	bool HasWorldCourt() const { return WorldCourt > 0.0; }
 	long long CrimeDeaths() const { return CrimeDead; }
 	// Crimes a year per 1,000 people in states, on average.
 	double WorldCrimeRate() const
@@ -5729,8 +5739,11 @@ private:
 		if (!S.Laws.empty() && Has(S.Known, Writing)) J |= 1;
 		if ((J & 1) && S.City && Has(S.Known, Printing) && OfficialsPerBand(S.Known) > 0.0) J |= 2;
 		if ((J & 1) && S.City && S.Towns >= 2) J |= 4;
-		static const char* Firsts[] = {"The first court of law sits in ", "The first police keep the peace in the cities of ", "The first prison is built in "};
-		for (int b = 0; b < 3; ++b)
+		if ((J & 1) && (S.Gov == Republic || S.Gov == Democracy)) J |= 8;
+		if ((J & 8) && S.Gov == Democracy && Has(S.Known, Printing)) J |= 16;
+		static const char* Firsts[] = {"The first court of law sits in ", "The first police keep the peace in the cities of ", "The first prison is built in ",
+			"The first written constitution binds the rulers of ", "Juries of citizens and rights for the accused begin in "};
+		for (int b = 0; b < 5; ++b)
 			if ((J & (1 << b)) && !(JusticeSeen & (1 << b))) AddEvent(Firsts[b] + StateName(S));
 		JusticeSeen |= J, S.Justice = J;
 		const double Towns = S.Members > 0 ? static_cast<double>(S.CityPeople) / S.Members : 0.0;
@@ -5741,6 +5754,14 @@ private:
 		Crimes += static_cast<long long>(Count + Dice.Uniform());
 		// About one crime in thirty is a killing.
 		int Kill = static_cast<int>(Count / 30.0 + Dice.Uniform());
+		// Courts put some killers to death, until rights and readers turn the people against it.
+		if ((J & 16) && !S.NoDeathPenalty && S.Literacy > 0.6f && Dice.Chance(0.02))
+		{
+			S.NoDeathPenalty = true;
+			if (!AnyAbolishedDeath || S.Tier >= Empire) AddEvent(StateName(S) + " ends the death penalty" + (AnyAbolishedDeath ? "" : ", the first state to do so"));
+			AnyAbolishedDeath = true;
+		}
+		if ((J & 1) && !S.NoDeathPenalty) Executions += static_cast<long long>(Kill * 0.3 + Dice.Uniform());
 		for (Camp& C : Camps)
 		{
 			if (Kill <= 0) break;
