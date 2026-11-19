@@ -748,6 +748,10 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Every state's famines are counted in the world's.
+	int Famines = 0;
+	for (const earth::Polity& S : Folk.AllStates()) Famines += S.Famines;
+	EXPECT(Famines <= Folk.FaminesSoFar() && Folk.FamineReliefKg() >= 0.0);
 	// Sports follow how people live; medals only come from world games.
 	int Medals = 0;
 	for (const earth::Polity& S : Folk.AllStates()) { EXPECT(S.Sport < 7); Medals += S.Medals; }
