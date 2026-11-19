@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <cctype>
 #include <bitset>
 #include <cmath>
@@ -808,6 +809,7 @@ public:
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
 			if (S->House) Out += "  Ruling house: " + PersonName(S->House) + ", since ruler number " + std::to_string(S->HouseFrom) + (S->Wed && StateById(S->Wed) ? "; joined by marriage to " + StateName(*StateById(S->Wed)) : std::string()) + "\n";
+			if (S->Market > 0.0f) Out += "  Share market: worth " + std::to_string(static_cast<int>(S->Market * 100.0f)) + "% of when it opened; crashed " + std::to_string(S->Crashes) + " times\n";
 			if (S->Orbit) Out += std::string("  Space: ") + SpaceStepName(S->Orbit) + "\n";
 			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
 			if (S->Marriage || S->Rights) Out += std::string("  Family: ") + MarriageName(S->Marriage) + "; women's rights: " + RightsName(S->Rights) + "\n";
@@ -959,6 +961,7 @@ public:
 		if (Ar.Version >= 41) Ar.Io(SpaceSeen), Ar.Io(AnySpaceRace);
 		if (Ar.Version >= 42) Ar.Io(Migrants), Ar.Io(AnyMigration);
 		if (Ar.Version >= 43) Ar.Io(Dynasties), Ar.Io(RoyalWeddings), Ar.Io(SuccessionWars);
+		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1928,8 +1931,11 @@ private:
 	long long Migrants = 0; // People who moved to another state for a better life.
 	bool AnyMigration = false;
 	int Dynasties = 0, RoyalWeddings = 0, SuccessionWars = 0;
+	int CrashesAll = 0, Hyperinflations = 0; // Market crashes and runaway prices anywhere so far.
+	bool AnyExchange = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
+	double WorldWarEnded = -1e9; // shortcut: not saved, so a load right after a world war may allow the next one sooner.
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
 	double LeagueYear = 0.0;
 	long long DisasterDead = 0;
@@ -1938,9 +1944,11 @@ private:
 	int GovSeen = 3; // Bits of the kinds of government that have ever existed; chieftains and monarchs are noted as tiers.
 	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
-	double AgeAtDeath = 0.0, LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
+	double LifeExpectancy = 0.0, BirthRate = 0.0, DeathRate = 0.0; // Not saved: counted afresh each year.
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
-	std::unordered_map<uint32_t, std::pair<double, int>> StateAges; // Ages at death this year by state; not saved.
+	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
+	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -4563,7 +4571,9 @@ private:
 			// Infancy and childhood were dangerous: about four in ten children died before 15.
 			const SkillEffects& Known = Camps[CampSlot(P.Camp)].Effects;
 			const double Young = (Age < 1.0 ? 0.15 : (Age < 5.0 ? 0.06 : (Age < 15.0 ? 0.01 : 0.0))) * Known.ChildDeaths;
-			const double Yearly = 0.0004 * std::exp(0.08 * Age) + Young + 0.005;
+			// Medicine, vaccines and antibiotics also spare grown-ups: 0.656 is what the old-world skills give children.
+			const double Care = std::pow(std::min(1.0, Known.ChildDeaths / 0.656), 0.8);
+			const double Yearly = (0.0004 * std::exp(0.08 * Age) + 0.005) * Care + Young;
 			// Predators take the lone more than people in a big camp, and miss those who hide.
 			const double Alone = 1.0 / (1.0 + 0.3 * std::min(P.BandSize - 1, 20));
 			const double Hidden = P.LastAction == static_cast<int>(Action::Hide) ? 0.3 : 1.0;
@@ -4748,13 +4758,11 @@ private:
 			"First NPC died of thirst", "First NPC died of an injury"};
 		P.Alive = false;
 		++Deaths;
-		AgeAtDeath += P.AgeYears(), ++DeathsThisYear;
+		++DeathsThisYear;
+		const size_t Band = std::min<size_t>(19, static_cast<size_t>(std::max(0.0, P.AgeYears()) / 5.0));
+		WorldDead[Band] += 1.0;
 		if (!Camps.empty())
-			if (const uint32_t St = Camps[CampSlot(P.Camp)].State)
-			{
-				auto& A = StateAges[St];
-				A.first += P.AgeYears(), A.second += 1;
-			}
+			if (const uint32_t St = Camps[CampSlot(P.Camp)].State) StateDead[St][Band] += 1.0;
 		if (!Camps.empty())
 		{
 			Camp& C = Camps[CampSlot(P.Camp)];
@@ -5188,12 +5196,12 @@ private:
 			if (const Polity* E = S.Enemy ? StateById(S.Enemy) : nullptr; E && Has(S.Known, Engines) && Has(E->Known, Engines))
 				Fighting += S.Members, ++Sides, Lands |= 1 << RegionOf(S.Lat, S.Lon);
 		const bool Big = Sides >= 4 && Fighting >= World / 3.0 && std::bitset<32>(static_cast<unsigned>(Lands)).count() >= 3;
-		if (Big && !InWorldWar)
+		if (Big && !InWorldWar && Eco->Years() - WorldWarEnded > 20.0) // Fighting that flares again within 20 years is the same war.
 		{
 			InWorldWar = true, ++WorldWars;
 			AddEvent("World war " + std::to_string(WorldWars) + ": " + std::to_string(Sides) + " industrial states, with " + std::to_string(Fighting) + " people, are at war at once");
 		}
-		else if (!Big && InWorldWar && Fighting < World / 6.0) InWorldWar = false, AddEvent("World war " + std::to_string(WorldWars) + " ends");
+		else if (!Big && InWorldWar && Fighting < World / 6.0) InWorldWar = false, WorldWarEnded = Eco->Years(), AddEvent("World war " + std::to_string(WorldWars) + " ends");
 		// Nuclear weapons: the first, their use in a war, and accidents.
 		for (Polity& S : States)
 		{
@@ -5236,25 +5244,51 @@ private:
 			if (Has(S.Known, AI) && !AnyAI) AnyAI = true, AddEvent("In " + StateName(S) + ", thinking machines begin to work beside people");
 	}
 
+public:
+	// Years a newborn would live if this year's death rate at each age held all its life.
+	static double PeriodLife(const std::array<double, 20>& Dead, const std::array<double, 20>& Alive)
+	{
+		double Years = 0.0, Surviving = 1.0, Rate = 0.0;
+		for (size_t b = 0; b < 20; ++b)
+		{
+			if (Alive[b] > 0.0) Rate = Dead[b] / Alive[b]; // An empty age group keeps the rate of the one before.
+			if (b == 19) return Years + Surviving / std::max(Rate, 0.2);
+			const double Dies = 1.0 - std::exp(-5.0 * Rate);
+			Years += 5.0 * Surviving * (1.0 - Dies / 2.0), Surviving *= 1.0 - Dies;
+		}
+		return Years;
+	}
+private:
 	// Once a year: how long people live, and how many are born and die for every thousand alive.
 	void Census()
 	{
 		const double Alive = std::max(1.0, static_cast<double>(Npcs.size()));
-		if (DeathsThisYear > 0) LifeExpectancy = AgeAtDeath / static_cast<double>(DeathsThisYear); // shortcut: mean age at death, right for a steady population.
+		// Life expectancy at birth from this year's death rate at each age (a period life table), not the mean
+		// age at death, which a growing people with many children pulls far too low.
+		AgeBands WorldAlive{};
+		std::unordered_map<uint32_t, AgeBands> StateAlive;
+		for (const Npc& P : Npcs)
+		{
+			const size_t Band = std::min<size_t>(19, static_cast<size_t>(std::max(0.0, P.AgeYears()) / 5.0));
+			WorldAlive[Band] += 1.0;
+			if (!Camps.empty())
+				if (const uint32_t St = Camps[CampSlot(P.Camp)].State) StateAlive[St][Band] += 1.0;
+		}
+		if (DeathsThisYear > 0) LifeExpectancy = PeriodLife(WorldDead, WorldAlive);
 		BirthRate = BirthsAtCensus < 0 ? 0.0 : 1000.0 * static_cast<double>(Births - BirthsAtCensus) / Alive; // The first year after a start or a load is partial.
 		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
 		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
-		AgeAtDeath = 0.0, DeathsThisYear = 0, BirthsAtCensus = Births;
+		DeathsThisYear = 0, BirthsAtCensus = Births, WorldDead = AgeBands{};
 		for (Polity& S : States)
 		{
-			auto A = StateAges.find(S.Id);
-			if (A != StateAges.end() && A->second.second >= 5) S.LifeExpectancy = static_cast<float>(A->second.first / A->second.second);
+			auto A = StateDead.find(S.Id);
+			if (A != StateDead.end() && std::accumulate(A->second.begin(), A->second.end(), 0.0) >= 5.0) S.LifeExpectancy = static_cast<float>(PeriodLife(A->second, StateAlive[S.Id]));
 			// Welfare: long lives, enough food, reading, a say in who rules, peace and fairness.
 			const double Free = S.Gov == Democracy ? 1.0 : S.Gov == Republic ? 0.7 : S.Gov == Dictatorship ? 0.1 : 0.3;
 			S.Welfare = static_cast<float>(std::clamp(0.3 * std::min(1.0, S.LifeExpectancy / 80.0) + 0.2 * std::min(1.0, 1.0 / std::max(0.2, static_cast<double>(S.Price))) +
 				0.15 * S.Literacy + 0.15 * Free + 0.1 * (S.Enemy ? 0.0 : 1.0) + 0.1 / std::max(1.0f, S.Inequality), 0.0, 1.0));
 		}
-		StateAges.clear();
+		StateDead.clear();
 		if (NextRealMark < 0.0)
 		{
 			NextRealMark = 1e6;
@@ -5321,10 +5355,10 @@ private:
 		const uint8_t Was = S.Gov;
 		const double Year = Eco->Years();
 		const bool Free = S.Gov == Republic || S.Gov == Democracy;
-		if (S.Gov == Chieftain && S.Tier >= Kingdom) S.Gov = Monarchy;
+		if (S.Gov == Chieftain && (S.Tier >= Kingdom || (S.City && Has(S.Known, Writing)))) S.Gov = Monarchy; // City-states crown kings too.
 		else if (S.Gov == Monarchy && S.Inequality > 3.0f && !S.Laws.empty() && Dice.Chance(0.01)) S.Gov = Aristocracy;
 		else if ((S.Gov == Monarchy || S.Gov == Aristocracy) && S.City && Has(S.Known, LawSkill) && Has(S.Known, Money) && Has(S.Known, Writing) &&
-			S.Literacy > 0.1f && Dice.Chance(0.005 * (1.0 + static_cast<double>(S.Laws.size()))))
+			S.Literacy > 0.1f && Dice.Chance((Has(S.Known, Printing) && S.Literacy > 0.4f ? 0.02 : 0.005) * (1.0 + static_cast<double>(S.Laws.size())))) // Readers of printed ideas want a say.
 			S.Gov = Republic;
 		else if (S.Gov == Republic && Has(S.Known, Printing) && S.Literacy > 0.5f && Dice.Chance(0.02)) S.Gov = Democracy;
 		else if ((S.Gov == Monarchy || S.Gov == Chieftain) && S.Faith && HasHolyBook(S.Faith) && S.Secular < 0.1f && Dice.Chance(0.004)) S.Gov = Theocracy;
@@ -5497,6 +5531,17 @@ public:
 		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
 	}
 	int FaminesSoFar() const { return FaminesAll; }
+	int CrashesSoFar() const { return CrashesAll; }
+	int HyperinflationsSoFar() const { return Hyperinflations; }
+	int MarketStates() const { int N = 0; for (const Polity& S : States) N += S.Market > 0.0f; return N; }
+	// Mean yearly rise in prices across states with money, as a fraction (0.03 = 3%).
+	float WorldInflation() const
+	{
+		double Sum = 0.0; int N = 0;
+		for (const Polity& S : States)
+			if (S.Coins > 0.0) Sum += S.Inflation, ++N;
+		return N ? static_cast<float>(Sum / N) : 0.0f;
+	}
 	double FamineReliefKg() const { return ReliefKg; }
 	int WorldGamesHeld() const { return WorldGames; }
 	int StatesWithRights(int R) const { return static_cast<int>(std::count_if(States.begin(), States.end(), [R](const Polity& S) { return S.Rights >= R; })); }
@@ -5833,6 +5878,7 @@ private:
 				Mine[k]->Store += Give, S.Treasury -= Give;
 			}
 		}
+		Markets(S, Name, Banks, MoneyLevel);
 		S.LastPrice = S.Price;
 		// Debts: wars are paid for on credit, repaid from the treasury.
 		if (Banks && S.Enemy) S.Debt += S.Members * 0.5;
@@ -5860,6 +5906,46 @@ private:
 			AddEvent(T);
 			AnyAbolition = true;
 		}
+	}
+
+	// Inflation from minting, runaway prices, and a share market that booms and crashes.
+	void Markets(Polity& S, const std::string& Name, bool Banks, double MoneyLevel)
+	{
+		static const int Printing = SkillNamed("printing"), Computers = SkillNamed("computers");
+		const float Before = S.MoneyWorth;
+		S.MoneyWorth = static_cast<float>(1.0 / MoneyLevel);
+		S.Inflation = Before > 0.0f ? std::max(0.0f, Before / S.MoneyWorth - 1.0f) : 0.0f;
+		if (S.Inflation > 1.0f && S.Tier >= Kingdom)
+		{
+			++Hyperinflations;
+			AddEvent("Prices in " + Name + " more than double in a year: its money is printed faster than goods are made");
+			S.Coins *= 0.1; // A new money replaces the old.
+		}
+		if (S.Market <= 0.0f)
+		{
+			if (!Banks || !Has(S.Known, Printing) || S.Literacy < 0.1f) return;
+			S.Market = 1.0f;
+			if (!AnyExchange || S.Tier >= Empire) AddEvent(Name + " opens a share market where traders buy parts of companies" + (AnyExchange ? "" : ", the first stock exchange"));
+			AnyExchange = true;
+			return;
+		}
+		// Shares grow with trade and peace and swing on rumor; the higher they float above the real economy, the likelier a crash.
+		const float Trend = 0.02f + 0.01f * std::min<size_t>(S.Partners.size(), 3) - (S.Enemy ? 0.03f : 0.0f);
+		const float Swing = Has(S.Known, Computers) ? 0.2f : 0.1f;
+		S.Market *= 1.0f + Trend + Swing * static_cast<float>(Dice.Uniform() - 0.5);
+		if (Dice.Chance(0.03)) Crash(S, true); // About one crash a generation, as in real markets.
+	}
+
+	void Crash(Polity& S, bool Spread)
+	{
+		static const int Univ = SkillNamed("universities");
+		// A central bank (banks plus economists from the universities) softens the fall.
+		S.Market *= S.Universities > 0 && Has(S.Known, Univ) ? 0.7f : 0.5f;
+		S.Wealth *= 0.85, ++S.Crashes, ++CrashesAll;
+		if (S.Tier >= Empire || CrashesAll == 1) AddEvent("The share market of " + StateName(S) + " crashes; banks fail and many lose their work" + (CrashesAll == 1 ? ", the first crash" : ""));
+		if (!Spread) return;
+		for (uint32_t P : S.Partners) // Panic spreads along trade.
+			if (Polity* O = StateById(P); O && O->Market > 0.0f && Dice.Chance(0.4)) Crash(*O, false);
 	}
 
 	// The people rise and overthrow their rulers; the state becomes a republic, or a dictatorship of

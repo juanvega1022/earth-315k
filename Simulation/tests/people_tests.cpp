@@ -1,3 +1,4 @@
+#include <array>
 // Tests for the NPCs on a small synthetic planet: a block of land around East Africa.
 #include "PlanetCore/People.h"
 #include "PlanetCore/WorldSave.h"
@@ -754,6 +755,9 @@ static void TestStates()
 			for (const earth::Polity& O : Folk.AllStates())
 				if (O.Id == S.Wed) EXPECT(O.Wed == S.Id || O.Wed == 0 || O.Enemy == S.Id);
 	EXPECT(Folk.SuccessionWarsSoFar() <= Folk.DynastiesSoFar());
+	EXPECT(Folk.CrashesSoFar() >= 0 && Folk.HyperinflationsSoFar() >= 0 && Folk.MarketStates() <= Folk.PolityCount());
+	EXPECT(Folk.WorldInflation() >= 0.0f);
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Market >= 0.0f && (S.Market > 0.0f || S.Crashes == 0));
 	// Migrants and diasporas are counted; diaspora bands are bands.
 	EXPECT(Folk.MigrantsSoFar() >= 0 && Folk.DiasporaBands() <= Folk.BandCount());
 	// Space steps stay in range.
@@ -851,6 +855,15 @@ static void TestFuel()
 // soon, and it survives a save.
 static void TestDiseases()
 {
+	{
+		// Life expectancy from a life table: 1% a year at every age gives about 63 years; heavy child deaths cut it.
+		std::array<double, 20> Dead{}, Alive{};
+		Alive.fill(100.0), Dead.fill(1.0);
+		const double Steady = earth::People::PeriodLife(Dead, Alive);
+		EXPECT(Steady > 60.0 && Steady < 66.0);
+		Dead[0] = 20.0;
+		EXPECT(earth::People::PeriodLife(Dead, Alive) < Steady - 20.0);
+	}
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
 	earth::PeopleSettings Settings;

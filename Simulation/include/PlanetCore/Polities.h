@@ -57,6 +57,8 @@ struct Polity
 	double Debt = 0.0;         // What it owes its lenders, in kg of food.
 	float LastPrice = 1.0f;    // Last year's price of food.
 	bool Slavery = false, Abolished = false;
+	float Market = 0.0f;       // Its share market's worth against when it opened; 0 before it has one.
+	int Crashes = 0;           // Times its market crashed.
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
 	uint16_t Script = 0;       // The name of the script it writes in, 0 none.
 	float Secular = 0.0f;      // How far its people have drifted from faith, 0 .. 1.
@@ -90,6 +92,8 @@ struct Polity
 	float Welfare = 0.0f;        // How well its people live, 0 .. 1: long lives, enough food, reading, freedom, peace and fairness.
 	float Price = 1.0f;      // What food costs against plenty: above 1 it is scarce, or the money is worth less.
 	float Fertility = 1.0f;  // How many children its people have, against the old way: fewer once most read and live in towns.
+	float MoneyWorth = 0.0f; // What a coin buys against when money began; 0 before it does.
+	float Inflation = 0.0f;  // How much the money's worth fell last year, as a fraction.
 	float CrimeRate = 0.0f;  // Crimes a year per 1,000 of its people.
 	uint8_t Justice = 0;     // Bits: 1 courts, 2 police, 4 prisons.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
@@ -117,6 +121,8 @@ struct Polity
 		if (Ar.Version >= 40) Ar.Io(Famines);
 		if (Ar.Version >= 41) Ar.Io(Orbit);
 		if (Ar.Version >= 43) Ar.Io(House), Ar.Io(HouseFrom), Ar.Io(Wed);
+		if (Ar.Version >= 44) Ar.Io(Market), Ar.Io(Crashes);
+		else if (Ar.IsReading()) Market = 0.0f;
 	}
 };
 
