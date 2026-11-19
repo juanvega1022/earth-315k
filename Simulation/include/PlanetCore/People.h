@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -4477,10 +4478,20 @@ private:
 			if (!Camps.empty()) N.Speech = SayWord(Camps[CampSlot(P.Camp)].Words[0]);
 		}
 		char Head[96];
-		std::snprintf(Head, sizeof(Head), "Year %.0f, aged %.0f, near %.0f, %.0f: ", Eco->Years(), P.AgeYears(), P.Lat, P.Lon);
-		N.Deeds.push_back(Head + Deed);
+		std::snprintf(Head, sizeof(Head), "Year %.0f, aged %.0f, near %.0f, %.0f", Eco->Years(), P.AgeYears(), P.Lat, P.Lon);
+		N.Deeds.push_back(Head + Station(P) + ": " + Deed);
 		N.LastLat = P.Lat;
 		N.LastLon = P.Lon;
+	}
+
+	// ", a farmer of humble birth" and the like, for people in a state; empty otherwise.
+	std::string Station(const Npc& P) const
+	{
+		if (Camps.empty() || !Camps[CampSlot(P.Camp)].State) return "";
+		const int J = JobOf(P);
+		static const char* Born[4] = {" born enslaved", " of humble birth", " from a comfortable family", " of a great family"};
+		const std::string What = JobName(J);
+		return ", " + std::string(std::strchr("aeiou", What[0]) ? "an " : "a ") + What + Born[std::min<int>(P.Status, 3)];
 	}
 
 	void Discover(Npc& P, int Skill)
@@ -4489,7 +4500,8 @@ private:
 		if (!Knows(KnownNow, Skill))
 		{
 			const std::string Name = AllSkills()[Skill].Name;
-			AddEvent(Knows(EverKnown, Skill) ? "Someone rediscovers " + Name : "First discovery of " + Name);
+			const std::string By = Station(P).empty() ? std::string() : ", by " + PersonName(P.Name) + Station(P);
+			AddEvent(Knows(EverKnown, Skill) ? (By.empty() ? "Someone" : PersonName(P.Name) + Station(P)) + " rediscovers " + Name : "First discovery of " + Name + By);
 			Remember(P, (Knows(EverKnown, Skill) ? "rediscovered " : "was the first ever to discover ") + Name);
 			if (!Knows(EverKnown, Skill)) RecordDiscovery(P, Name);
 			KnownNow |= SkillSet(1) << Skill;
