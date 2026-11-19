@@ -96,6 +96,7 @@ struct Polity
 	float Price = 1.0f;      // What food costs against plenty: above 1 it is scarce, or the money is worth less.
 	float Fertility = 1.0f;  // How many children its people have, against the old way: fewer once most read and live in towns.
 	float MoneyWorth = 0.0f; // What a coin buys against when money began; 0 before it does.
+	float FarmShare = 0.0f;  // Share of its workers who farm or herd.
 	float Inflation = 0.0f;  // How much the money's worth fell last year, as a fraction.
 	float CrimeRate = 0.0f;  // Crimes a year per 1,000 of its people.
 	uint8_t Justice = 0;     // Bits: 1 courts, 2 police, 4 prisons, 8 a written constitution, 16 juries and rights of the accused.
