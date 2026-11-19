@@ -58,6 +58,7 @@ struct Polity
 	float LastPrice = 1.0f;    // Last year's price of food.
 	bool Slavery = false, Abolished = false;
 	bool NoDeathPenalty = false; // It has ended putting people to death for crimes.
+	bool Tolerant = false;       // It has promised freedom of worship to those of other faiths.
 	float Market = 0.0f;       // Its share market's worth against when it opened; 0 before it has one.
 	int Crashes = 0;           // Times its market crashed.
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
@@ -124,6 +125,7 @@ struct Polity
 		if (Ar.Version >= 43) Ar.Io(House), Ar.Io(HouseFrom), Ar.Io(Wed);
 		if (Ar.Version >= 44) Ar.Io(Market), Ar.Io(Crashes);
 		if (Ar.Version >= 45) Ar.Io(NoDeathPenalty);
+		if (Ar.Version >= 46) Ar.Io(Tolerant);
 		else if (Ar.IsReading()) Market = 0.0f;
 	}
 };

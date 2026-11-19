@@ -963,6 +963,7 @@ public:
 		if (Ar.Version >= 43) Ar.Io(Dynasties), Ar.Io(RoyalWeddings), Ar.Io(SuccessionWars);
 		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
 		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
+		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1935,6 +1936,9 @@ private:
 	int CrashesAll = 0, Hyperinflations = 0; // Market crashes and runaway prices anywhere so far.
 	bool AnyExchange = false;
 	long long Executions = 0;     // People put to death for crimes so far.
+	int HolyWars = 0, Conversions = 0, Reformations = 0; // Wars over gods, states won by missionaries, breaks with a state faith.
+	int Persecuted = 0;           // Bands made to give up their faith.
+	bool AnyTolerance = false;
 	bool AnyAbolishedDeath = false;
 	double WorldCourt = 0.0;      // Year the world court first sat; 0 before.
 	double NextRealMark = 1e6;
@@ -5449,7 +5453,7 @@ private:
 					auto F = std::find(C.Faith.begin(), C.Faith.end(), S.Faith);
 					if (F != C.Faith.end()) C.Faith.erase(F), ++Left;
 				}
-			if (Left) AddEvent("A reformation in " + Name + ": " + std::to_string(Left) + " bands break with its state faith");
+			if (Left) ++Reformations, AddEvent("A reformation in " + Name + ": " + std::to_string(Left) + " bands break with its state faith");
 		}
 		// Missionaries carry the faith along the trade routes.
 		if (S.Faith)
@@ -5462,7 +5466,7 @@ private:
 					if (Them.Faith.size() < 3 && !Shares(Them, S.Faith)) Them.Faith.push_back(S.Faith);
 					if (!T->Faith || Dice.Chance(0.2))
 					{
-						T->Faith = S.Faith;
+						T->Faith = S.Faith, ++Conversions;
 						if (T->Tier >= Kingdom || !AnyMission) AddEvent("Missionaries from " + Name + " convert " + StateName(*T) + " to its faith");
 						AnyMission = true;
 					}
@@ -5471,9 +5475,25 @@ private:
 		if (S.Faith && !S.Enemy && S.Tier >= Kingdom && S.Secular < 0.3f && Dice.Chance(0.01))
 			if (Polity* O = NearestOther(S); O && O->Faith && O->Faith != S.Faith && !O->Enemy && !Deterred(S, *O) && std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end())
 			{
-				AddEvent("A holy war: " + Name + " fights " + StateName(*O) + " over their gods");
+				++HolyWars, AddEvent("A holy war: " + Name + " fights " + StateName(*O) + " over their gods");
 				StartWar(S, *O);
 			}
+		// A state faith may force bands of other faiths to give theirs up, until readers or liberal
+		// ideas win freedom of worship.
+		if (S.Faith && !S.Tolerant && (S.Secular > 0.3f || S.Ideology == Liberalism || (S.Justice & 8)) && Dice.Chance(0.05))
+		{
+			S.Tolerant = true;
+			if (!AnyTolerance || S.Tier >= Empire) AddEvent(Name + " grants freedom of worship to all its people" + (AnyTolerance ? "" : ", the first state to do so"));
+			AnyTolerance = true;
+		}
+		if (S.Faith && !S.Tolerant && S.Secular < 0.3f && (S.Gov == Theocracy || S.Tier >= Kingdom) && Dice.Chance(S.Gov == Theocracy ? 0.1 : 0.02))
+		{
+			int Forced = 0;
+			for (Camp& C : Camps)
+				if (C.State == S.Id && !C.Faith.empty() && !Shares(C, S.Faith) && Forced < 3 && Dice.Chance(0.3)) C.Faith.assign(1, S.Faith), ++Forced;
+			if (Forced && (Persecuted == 0 || S.Tier >= Empire)) AddEvent(Name + " forces " + std::to_string(Forced) + " bands of other faiths to take up its own" + (Persecuted ? "" : ": the first persecution"));
+			Persecuted += Forced;
+		}
 	}
 
 	// Once a year: a state with a city and spare wealth begins a style of its own, in what its people
@@ -5837,6 +5857,11 @@ public:
 		return All ? static_cast<double>(None) / static_cast<double>(All) : 0.0;
 	}
 	int HolyBookCount() const { return static_cast<int>(HolyBooks.size()); }
+	int HolyWarsSoFar() const { return HolyWars; }
+	int ConversionsSoFar() const { return Conversions; }
+	int ReformationsSoFar() const { return Reformations; }
+	int PersecutedSoFar() const { return Persecuted; }
+	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
 	int SecularStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Secular > 0.5f && !S.Faith; })); }
 
 private:
