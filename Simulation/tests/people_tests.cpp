@@ -748,6 +748,9 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Marriage customs and women's rights stay in range; votes for women only in free states (or once won before a coup).
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Marriage < 4 && S.Rights < 4);
+	EXPECT(Folk.StatesWithRights(3) <= Folk.StatesWithRights(1));
 	// Every state has some crime, less with courts; killings are a small part of it.
 	EXPECT(Folk.StatesText().find("  Crime: ") != std::string::npos);
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.CrimeRate >= 0.0f && S.CrimeRate < 50.0f);
@@ -781,7 +784,7 @@ static void TestStates()
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
 	EXPECT(Folk2.Writings().size() == Folk.Writings().size() && Folk2.HolyBookCount() == Folk.HolyBookCount() && Folk2.ArtStylesSoFar() == Folk.ArtStylesSoFar() && Folk2.ArtStylesInUse() == Folk.ArtStylesInUse());
-	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Secular == Folk.AllStates()[i].Secular);
+	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Secular == Folk.AllStates()[i].Secular && Folk2.AllStates()[i].Rights == Folk.AllStates()[i].Rights && Folk2.AllStates()[i].Marriage == Folk.AllStates()[i].Marriage);
 	bool Bomb = false;
 	for (const earth::EcoEvent& E : Folk.Firsts()) Bomb = Bomb || E.Text.find("builds the first nuclear weapon") != std::string::npos;
 	EXPECT(Folk.NuclearStates() == 0 || Bomb);

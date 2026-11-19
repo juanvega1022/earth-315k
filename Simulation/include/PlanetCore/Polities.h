@@ -65,6 +65,8 @@ struct Polity
 	float Fame = 0.0f;         // How widely its art is admired, from the states that took it up.
 	bool Treaty = false;       // Signed the climate treaty: burns less fuel.
 	uint16_t Parks = 0;        // Wild land it protects from hunters and fields.
+	uint8_t Marriage = 0;      // Its custom: see MarriageName.
+	uint8_t Rights = 0;        // How far women's rights have come: see RightsName.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -103,6 +105,7 @@ struct Polity
 		if (Ar.Version >= 34) Ar.Io(Style), Ar.Io(Art), Ar.Io(Fame);
 		if (Ar.Version >= 35) Ar.Io(Treaty);
 		if (Ar.Version >= 36) Ar.Io(Parks);
+		if (Ar.Version >= 38) Ar.Io(Marriage), Ar.Io(Rights);
 	}
 };
 
@@ -175,6 +178,18 @@ inline const char* ArtName(int Art)
 {
 	static const char* Names[] = {"songs and dances", "carvings and statues", "painting", "music", "poetry and plays", "novels", "photographs and films", "recorded music"};
 	return Names[Art < 8 ? Art : 0];
+}
+
+inline const char* MarriageName(int M)
+{
+	static const char* Names[] = {"no fixed custom", "one husband, one wife", "rich men take several wives", "a woman may take several husbands"};
+	return Names[M < 4 ? M : 0];
+}
+
+inline const char* RightsName(int R)
+{
+	static const char* Names[] = {"none of their own", "women may own land and goods", "girls go to school as boys do", "women vote"};
+	return Names[R < 4 ? R : 0];
 }
 
 inline float TaxRate(int Gov)
