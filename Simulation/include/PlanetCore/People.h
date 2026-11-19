@@ -807,6 +807,7 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
+			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
 			if (S->Marriage || S->Rights) Out += std::string("  Family: ") + MarriageName(S->Marriage) + "; women's rights: " + RightsName(S->Rights) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Crime: %.1f a year per 1,000 people%s%s%s\n", S->CrimeRate, S->Justice & 1 ? "; courts" : "", S->Justice & 2 ? ", police" : "", S->Justice & 4 ? ", prisons" : "");
 			Out += Buf;
@@ -928,6 +929,7 @@ public:
 		if (Ar.Version >= 36) Ar.Io(AnyPark);
 		if (Ar.Version >= 37) Ar.Io(Crimes), Ar.Io(CrimeDead), Ar.Io(JusticeSeen);
 		if (Ar.Version >= 38) Ar.Io(FamilySeen);
+		if (Ar.Version >= 39) Ar.Io(SportsSeen), Ar.Io(WorldGames), Ar.Io(LastGames);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1886,6 +1888,9 @@ private:
 	long long Crimes = 0, CrimeDead = 0; // All crimes and killings so far.
 	int JusticeSeen = 0;                 // Bits of Justice that have appeared anywhere.
 	int FamilySeen = 0;                  // Bits: marriage customs (1 << M) and rights (16 << R) seen anywhere.
+	int SportsSeen = 0;                  // Bits of SportName kinds played anywhere.
+	int WorldGames = 0;                  // World games held so far.
+	double LastGames = 0.0;              // Year of the last.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5445,6 +5450,7 @@ public:
 		const int K = SkillNamed(Skill);
 		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
 	}
+	int WorldGamesHeld() const { return WorldGames; }
 	int StatesWithRights(int R) const { return static_cast<int>(std::count_if(States.begin(), States.end(), [R](const Polity& S) { return S.Rights >= R; })); }
 	long long CrimesSoFar() const { return Crimes; }
 	long long CrimeDeaths() const { return CrimeDead; }
@@ -5467,6 +5473,47 @@ public:
 	}
 
 private:
+	// Once a year: a state's people take up the sport their way of life allows (races and wrestling,
+	// ball games in villages, horse and chariot races, team games with written rules in printing
+	// cities, motor racing), shown at its festivals.
+	void Sports(Polity& S)
+	{
+		static const int Villages = SkillNamed("villages"), Herding = SkillNamed("herding"), Wheel = SkillNamed("the wheel"), Printing = SkillNamed("printing"),
+			Engines = SkillNamed("engines");
+		uint8_t Best = 1;
+		if (Has(S.Known, Villages)) Best = 2;
+		if (Has(S.Known, Herding)) Best = 3;
+		if (Has(S.Known, Wheel) && S.Tier >= Kingdom) Best = 4;
+		if (Has(S.Known, Printing) && S.City) Best = 5;
+		if (Has(S.Known, Engines)) Best = 6;
+		if (Best == S.Sport || !Dice.Chance(S.Festival ? 0.1 : 0.03)) return;
+		S.Sport = Best;
+		const int Bit = 1 << Best;
+		if (!(SportsSeen & Bit)) AddEvent("The people of " + StateName(S) + " begin to play " + SportName(Best) + ", the first anywhere");
+		SportsSeen |= Bit;
+	}
+
+	// Every four years once the league of nations meets: the world games, held in the capital of a
+	// league member; the state with the most people and best fed wins most.
+	void HoldWorldGames()
+	{
+		if (LeagueYear <= 0.0 || Eco->Years() - LastGames < 4.0) return;
+		std::vector<Polity*> Members;
+		for (Polity& S : States)
+			if (InLeague(S) && S.City && S.Sport) Members.push_back(&S);
+		if (Members.size() < 3) return;
+		LastGames = Eco->Years(), ++WorldGames;
+		Polity& Host = *Members[Dice.Next() % Members.size()];
+		Polity* Winner = Members.front();
+		double Top = -1.0;
+		for (Polity* S : Members)
+			if (const double Score = S->Members * (0.5 + S->Welfare) * Dice.Range(0.7, 1.3); Score > Top) Top = Score, Winner = S;
+		++Winner->Medals;
+		if (WorldGames == 1 || WorldGames % 10 == 0)
+			AddEvent("The world games" + (WorldGames == 1 ? std::string(", the first ever,") : " (number " + std::to_string(WorldGames) + ")") + " are held in the city of " +
+				PersonName(Host.City) + "; " + StateName(*Winner) + " wins the most");
+	}
+
 	// Once a year: a kingdom settles its marriage custom (where a few are very rich, rich men take
 	// several wives); then, with laws, readers and freedom, women win the right to own, to be
 	// schooled and to vote, step by step, while priests' rule holds them back.
@@ -6108,6 +6155,7 @@ private:
 			Arts(S, Seat);
 			Crime(S);
 			Family(S);
+			Sports(S);
 			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
@@ -6259,6 +6307,7 @@ private:
 		Trade();
 		Voyages();
 		GlobalAge();
+		HoldWorldGames();
 
 		// New chiefdoms, where a band that farms or lives in a village leads others close by that
 		// speak its tongue or share its gods.
