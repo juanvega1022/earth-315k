@@ -1800,6 +1800,7 @@ public:
 				const int J = JobOf(P);
 				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
+				Life += DailyLife(P);
 				if (P.Genes) Life += std::string(P.Genes->Curiosity > 1.0f ? "You are curious and restless by nature. " : P.Genes->Curiosity < 0.4f ? "You like things done the way they always were. " : "") +
 					(P.Genes->Kindness > 0.7f ? "You give freely to others. " : P.Genes->Kindness < 0.3f ? "You keep what is yours. " : "");
 				if (const int V = ViewOf(P); Realm && P.AgeYears() >= 18.0) Life += V ? "You hold with " + std::string(IdeologyName(V)) + ". " : std::string(Has(Realm->Known, SkillNamed("printing")) ? "You hold to the old ways. " : "");
@@ -4484,6 +4485,29 @@ private:
 		N.LastLon = P.Lon;
 	}
 
+public:
+	// How a person lives day to day: their home, food and clothes, from what their band knows and their station.
+	std::string DailyLife(const Npc& P) const
+	{
+		if (Camps.empty()) return "";
+		const Camp& C = Camps[CampSlot(P.Camp)];
+		const SkillSet K = C.Known;
+		auto H = [&](const char* Skill) { return Has(K, SkillNamed(Skill)); };
+		const bool Rich = P.Status >= 2, Poor = P.Status == 0;
+		const std::string Home = H("electricity") ? (Rich ? "a house with lights, running water and machines that cook and wash" : "a flat in a crowded block, with electric light")
+			: H("factories") ? (Rich ? "a large brick house with servants" : "a cramped room in a smoky factory town")
+			: H("cities") ? (Rich ? "a stone house around a courtyard" : Poor ? "a hut by your owner's fields" : "a mud-brick house in a crowded street")
+			: H("villages") ? "a house of mud, wood and thatch in the village"
+			: H("shelters") ? "a shelter of branches and hides that moves with the band" : "the open, by the fire";
+		const std::string Food = H("fertilizers") ? (Rich ? "meat, fruit and food from far away every day" : "bread, rice, beans and some meat, bought in shops")
+			: H("farming") ? (Rich ? "bread, meat, wine and fruit" : "porridge or flatbread, beans and greens, meat on feast days")
+			: H("herding") ? "milk, cheese and meat from your herds" : H("fishing") ? "fish, nuts, roots and what the hunters bring" : "roots, seeds, fruit and what the hunters bring";
+		const std::string Clothes = H("factories") ? (Rich ? "fine clothes made in factories" : "cheap cotton clothes")
+			: H("weaving") ? (Rich ? "dyed wool and linen" : "rough wool or linen") : H("sewn clothing") ? "sewn hides and furs" : H("hide clothing") ? "hides tied on" : "little at all";
+		return "You live in " + Home + ", eat " + Food + ", and wear " + Clothes + ". ";
+	}
+
+private:
 	// ", a farmer of humble birth" and the like, for people in a state; empty otherwise.
 	std::string Station(const Npc& P) const
 	{
