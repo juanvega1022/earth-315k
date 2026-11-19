@@ -922,6 +922,7 @@ public:
 		if (Ar.Version >= 33) Ar.Io(HolyBooks), Ar.Io(AnySecular);
 		if (Ar.Version >= 34) Ar.Io(ArtStyles), Ar.Io(ArtsSeen);
 		if (Ar.Version >= 35) Ar.Io(TreatyYear);
+		if (Ar.Version >= 36) Ar.Io(AnyPark);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1876,6 +1877,7 @@ private:
 	int ArtStyles = 0; // Styles of art ever begun.
 	int ArtsSeen = 0;  // Bits of ArtName kinds that have appeared.
 	double TreatyYear = 0.0; // When the climate treaty was agreed, 0 not yet.
+	bool AnyPark = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -2939,7 +2941,7 @@ private:
 				const int Party = std::max(1, static_cast<int>(std::lround(HuntersIn[c])));
 				const double MaxMass = 250.0 * std::pow(static_cast<double>(Party), 1.5);
 				const double Game = std::clamp(Eco->GameNear(Camps[c].Lat, Camps[c].Lon, MaxMass) / 300.0, 0.0, 1.0);
-				Chance[c] = (0.05 + 0.05 * std::min(Party, 8)) * Game;
+				Chance[c] = (0.05 + 0.05 * std::min(Party, 8)) * Game * HuntShare(Camps[c]);
 			}
 		}
 		std::vector<double> Share(Npcs.size(), 0.0);
@@ -5435,6 +5437,7 @@ public:
 		const int K = SkillNamed(Skill);
 		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
 	}
+	int ParksMade() const { int N = 0; for (const Polity& S : States) N += S.Parks; return N; }
 	int ArtStylesSoFar() const { return ArtStyles; }
 	int ArtStylesInUse() const
 	{
@@ -5446,6 +5449,26 @@ public:
 	}
 
 private:
+	// Once a year: a state whose people care for the land, or whose scholars see the wild animals
+	// going, sets land aside as parks, about one for every ten bands; its hunters take less there.
+	void Nature(Polity& S)
+	{
+		const int Species = static_cast<int>(Eco->GetSpecies().size());
+		const bool Losing = Eco->SpeciesAliveCount() < Species * 9 / 10;
+		const bool Cares = S.Ideology == Environmentalism || (S.Universities && S.Literacy > 0.5f && Losing);
+		if (!Cares || S.Parks >= std::max(1, S.Bands / 10) || !Dice.Chance(0.05)) return;
+		++S.Parks;
+		if (!AnyPark || (S.Parks == 1 && S.Tier >= Empire))
+			AddEvent(StateName(S) + " sets wild land aside as a park, closed to hunters and fields" + (AnyPark ? "" : ": the first in the world"));
+		AnyPark = true;
+	}
+	// How much a band's hunters take, against the old way: less in states with parks.
+	double HuntShare(const Camp& C) const
+	{
+		const Polity* S = C.State ? StateById(C.State) : nullptr;
+		return S && S->Parks ? 1.0 - 0.6 * std::min(1.0, 10.0 * S->Parks / std::max(1, S->Bands)) : 1.0;
+	}
+
 	bool HasHolyBook(uint32_t Faith) const { return std::find(HolyBooks.begin(), HolyBooks.end(), Faith) != HolyBooks.end(); }
 
 	// Once a year: a state that writes puts its faith's teachings in a holy book (which then
@@ -5654,7 +5677,7 @@ private:
 			const int64_t Key = KeyOf(C.Lat, C.Lon);
 			if (!Farmed.insert(Key).second) continue;
 			auto [It, New] = Worn.emplace(Key, 0.0);
-			if (New && Eco->PlantCover(C.Lat, C.Lon) > 0.6) ForestCleared += 1;
+			if (New && Eco->PlantCover(C.Lat, C.Lon) > 0.6 && Dice.Chance(HuntShare(C))) ForestCleared += 1; // Parks spare some forest.
 			const double Wear = 0.0005 * (Has(C.Known, Irrigation) ? 2.0 : 1.0) * (Has(C.Known, Herding) ? 0.6 : 1.0) * (Has(C.Known, Fertilizers) ? 0.2 : 1.0);
 			It->second = std::min(0.5, It->second + Wear);
 			if (C.State) StateWear[C.State].first += It->second, StateWear[C.State].second += 1;
@@ -6012,6 +6035,7 @@ private:
 			Ideas(S, Seat);
 			Faiths(S);
 			Arts(S, Seat);
+			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = StateReachKm(S);
