@@ -1,3 +1,4 @@
+#include <numeric>
 #include <array>
 // Tests for the NPCs on a small synthetic planet: a block of land around East Africa.
 #include "PlanetCore/People.h"
@@ -756,6 +757,20 @@ static void TestStates()
 	EXPECT(Folk.CompulsoryStates() <= Folk.PolityCount());
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.FarmShare >= 0.0f && S.FarmShare <= 0.9f);
 	EXPECT(Folk.WorldFarmShare() > 0.0f); // The test states farm.
+	{
+		// Everyone has a job that fits their age, the same each time; workers in states can read about as often as the state does.
+		const auto Jobs = Folk.JobCounts();
+		EXPECT(std::accumulate(Jobs.begin(), Jobs.end(), 0) == Folk.Alive());
+		for (const earth::Npc& P : Folk.All())
+		{
+			const int J = Folk.JobOf(P);
+			EXPECT(J == Folk.JobOf(P) && (P.AgeYears() >= 12.0 || J <= earth::People::JobPupil));
+		}
+		EXPECT(Folk.WorldReaders() >= 0.0 && Folk.WorldReaders() <= 1.0);
+		EXPECT(Folk.StatesText().find("  Work: ") != std::string::npos);
+		const double D = earth::People::PersonDraw(7, 2);
+		EXPECT(D >= 0.0 && D < 1.0 && D == earth::People::PersonDraw(7, 2));
+	}
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
