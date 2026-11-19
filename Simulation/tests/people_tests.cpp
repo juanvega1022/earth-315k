@@ -711,6 +711,8 @@ static void TestStates()
 	// Every state prices its food, and the world's inequality is a fair Gini index.
 	EXPECT(Folk.StatesText().find("  Food costs ") != std::string::npos);
 	EXPECT(Folk.WorldGini() >= 0.0 && Folk.WorldGini() <= 1.0);
+	// Quakes, storms, floods and droughts come every year somewhere.
+	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.
 	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
 	// Settlers sail from a state's shore bands to a far shore; each landing is counted. (The test states lie inland, so this only checks the count.)
@@ -729,6 +731,7 @@ static void TestStates()
 	EXPECT(Folk2.PolityCount() == Folk.PolityCount());
 	EXPECT(Folk2.AllBattles().size() == Folk.AllBattles().size() && Folk2.WarDeaths() == Folk.WarDeaths());
 	EXPECT(Folk2.Writings().size() == Folk.Writings().size());
+	EXPECT(Folk2.DisasterCounts() == Folk.DisasterCounts() && Folk2.DisasterDeaths() == Folk.DisasterDeaths());
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Gov == Folk.AllStates()[i].Gov);
 	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i)
