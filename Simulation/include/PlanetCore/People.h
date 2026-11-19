@@ -870,6 +870,16 @@ public:
 		for (const Polity& S : States) K |= S.Known;
 		return K;
 	}
+	long long MigrantsSoFar() const { return Migrants; }
+	// Bands living in a state whose capital they can't understand: peoples far from their homeland's tongue.
+	int DiasporaBands() const
+	{
+		int N = 0;
+		for (const Camp& C : Camps)
+			if (const Polity* S = C.State && !C.Members.empty() ? StateById(C.State) : nullptr)
+				if (auto It = CampSlots.find(S->Capital); It != CampSlots.end() && C.Id != S->Capital && !Understand(C, Camps[static_cast<size_t>(It->second)])) ++N;
+		return N;
+	}
 	int SpaceStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Orbit > 0; })); }
 	// Groups of camps that can understand each other, counted greedily.
 	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
@@ -941,6 +951,7 @@ public:
 		if (Ar.Version >= 39) Ar.Io(SportsSeen), Ar.Io(WorldGames), Ar.Io(LastGames);
 		if (Ar.Version >= 40) Ar.Io(FaminesAll), Ar.Io(ReliefKg), Ar.Io(AnyRelief), Ar.Io(AnyGreen);
 		if (Ar.Version >= 41) Ar.Io(SpaceSeen), Ar.Io(AnySpaceRace);
+		if (Ar.Version >= 42) Ar.Io(Migrants), Ar.Io(AnyMigration);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1907,6 +1918,8 @@ private:
 	bool AnyRelief = false, AnyGreen = false;
 	int SpaceSeen = 0;          // Bits of space steps any state has made.
 	bool AnySpaceRace = false;
+	long long Migrants = 0; // People who moved to another state for a better life.
+	bool AnyMigration = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5491,6 +5504,37 @@ public:
 	}
 
 private:
+	// Once a year: from a state in famine, at war or living badly, a band may move to a trading
+	// partner that lives far better, settling near its capital and joining it, keeping its own
+	// tongue (a diaspora) until the words mix.
+	void Migrate(Polity& S)
+	{
+		const bool Pushed = S.Price > 2.0f || S.Enemy || S.Welfare < 0.2f;
+		if (!Pushed || S.Bands < 3 || !Dice.Chance(0.2)) return;
+		for (uint32_t P : S.Partners)
+		{
+			const Polity* T = StateById(P);
+			if (!T || T->Enemy == S.Id || T->Welfare < S.Welfare + 0.2f || !Dice.Chance(0.3)) continue;
+			for (size_t c = 0; c < Camps.size(); ++c)
+			{
+				Camp& C = Camps[c];
+				if (C.State != S.Id || C.Id == S.Capital || C.Members.empty() || !Dice.Chance(0.1)) continue;
+				const double La = T->Lat + Dice.Range(-0.5, 0.5), Lo = T->Lon + Dice.Range(-0.5, 0.5);
+				if (!LivableFor(C.Kind, La, Lo, Fishes(C))) continue;
+				GridRemove(static_cast<int>(c));
+				C.Lat = La, C.Lon = Lo, C.DaysHere = 0;
+				GridAdd(static_cast<int>(c));
+				C.State = T->Id;
+				Migrants += static_cast<long long>(C.Members.size());
+				if (!AnyMigration || (T->Tier >= Empire && Dice.Chance(0.05)))
+					AddEvent("A band leaves " + StateName(S) + " for a better life in " + StateName(*T) + (AnyMigration ? "" : ", the first to move to another land by choice"));
+				AnyMigration = true;
+				break;
+			}
+			break;
+		}
+	}
+
 	// Once a year: a state that can build rockets goes step by step into space; the first of each
 	// step is history, and two rival states racing for the same step make a space race.
 	void SpaceRace(Polity& S)
@@ -6226,6 +6270,7 @@ private:
 			Family(S);
 			Sports(S);
 			SpaceRace(S);
+			Migrate(S);
 			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
