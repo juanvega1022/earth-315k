@@ -964,6 +964,8 @@ public:
 		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
 		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
 		if (Ar.Version >= 47) Ar.Io(AnyCompulsory);
+		if (Ar.Version >= 48) Ar.Io(FarmSeen);
+		else if (Ar.IsReading()) FarmSeen = 0x3F; // An old world has long passed these steps; don't announce them all at once.
 		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
@@ -1941,6 +1943,7 @@ private:
 	int Persecuted = 0;           // Bands made to give up their faith.
 	bool AnyTolerance = false;
 	bool AnyCompulsory = false;
+	int FarmSeen = 0; // Bits of farming milestones reached anywhere.
 	bool AnyAbolishedDeath = false;
 	double WorldCourt = 0.0;      // Year the world court first sat; 0 before.
 	double NextRealMark = 1e6;
@@ -5870,6 +5873,13 @@ public:
 	int ConversionsSoFar() const { return Conversions; }
 	int ReformationsSoFar() const { return Reformations; }
 	int PersecutedSoFar() const { return Persecuted; }
+	// Share of the people in states who farm or herd, weighted by each state's people.
+	float WorldFarmShare() const
+	{
+		double Farm = 0.0, All = 0.0;
+		for (const Polity& S : States) Farm += S.FarmShare * S.Members, All += S.Members;
+		return All > 0.0 ? static_cast<float>(Farm / All) : 0.0f;
+	}
 	int CompulsoryStates() const { int N = 0; for (const Polity& S : States) N += S.Compulsory; return N; }
 	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
 	int SecularStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Secular > 0.5f && !S.Faith; })); }
@@ -6302,6 +6312,7 @@ private:
 			else if (S.Literacy < 0.4f || !S.Universities) S.Known &= ~ModernSkills();
 			// Its cities: the share of its people who live in towns grows with what feeds and moves them.
 			S.RealPeople = S.Members * RealPerPerson(S.Known, S.LifeExpectancy);
+			Farms(S);
 			S.CityPeople = S.CapitalPeople = S.Towns = 0;
 			if (!S.City) continue;
 			static const std::pair<int, double> Urbanizing[] = {{SkillNamed("cities"), 0.05}, {SkillNamed("money"), 0.02}, {SkillNamed("roads"), 0.02},
@@ -6318,6 +6329,39 @@ private:
 			S.Fertility = static_cast<float>((1.0 - 0.65 * S.Literacy * std::min(1.0, 2.0 * Share)) * (S.Rights >= 2 ? 0.85 : 1.0)); // Schooled women marry later.
 		}
 		return Of;
+	}
+
+	// How farming changed: each new tool frees farm hands for other work (about nine in ten farmed
+	// before iron ploughs, a few in a hundred with tractors, fertilizers and machines).
+	void Farms(Polity& S)
+	{
+		static const int Farming = SkillNamed("farming"), Herding = SkillNamed("herding");
+		struct Step { int Skill; float Keep; const char* First; };
+		static const Step Steps[] = {
+			{SkillNamed("iron"), 0.9f, "Iron ploughs turn heavier soils in "},
+			{SkillNamed("water mills"), 0.9f, "Mills grind the grain and fields are rotated with beans and fallow in "},
+			{SkillNamed("steam engines"), 0.7f, "Farms in %s are fenced and run for the market, and farm hands leave for the towns"},
+			{SkillNamed("engines"), 0.5f, "The first tractors plough the fields of "},
+			{SkillNamed("fertilizers"), 0.4f, "Made fertilizers double the harvests of "},
+			{SkillNamed("robots"), 0.5f, "Machines that steer themselves sow and reap in "}};
+		if (!Has(S.Known, Farming) && !Has(S.Known, Herding)) { S.FarmShare = 0.0f; return; }
+		float Share = 0.9f;
+		for (size_t i = 0; i < std::size(Steps); ++i)
+		{
+			if (!Has(S.Known, Steps[i].Skill) || !Has(S.Known, Farming)) continue;
+			Share *= Steps[i].Keep;
+			if (!(FarmSeen & (1 << i)))
+			{
+				FarmSeen |= 1 << i;
+				std::string T = Steps[i].First;
+				const size_t At = T.find("%s");
+				if (At != std::string::npos) T.replace(At, 2, StateName(S));
+				else T += StateName(S);
+				T[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(T[0])));
+				AddEvent(T);
+			}
+		}
+		S.FarmShare = Share;
 	}
 
 	// A band, and those near it that follow it, break away from their state into one of their own.

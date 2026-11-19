@@ -754,6 +754,8 @@ static void TestStates()
 	EXPECT(Folk.TolerantStates() <= Folk.PolityCount());
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Rights >= 2 || S.Literacy <= 0.55f); // Without girls in school, at most about half read.
 	EXPECT(Folk.CompulsoryStates() <= Folk.PolityCount());
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.FarmShare >= 0.0f && S.FarmShare <= 0.9f);
+	EXPECT(Folk.WorldFarmShare() > 0.0f); // The test states farm.
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
