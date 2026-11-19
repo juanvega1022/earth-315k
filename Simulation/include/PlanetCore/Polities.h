@@ -53,6 +53,10 @@ struct Polity
 	int Elected = 0;                // Year of its last election, for republics and democracies.
 	uint8_t Ideology = 0;           // The political idea most of its people hold: see IdeologyName.
 	int Revolutions = 0;
+	double Coins = 0.0;        // Money in circulation, in kg of food it was first worth.
+	double Debt = 0.0;         // What it owes its lenders, in kg of food.
+	float LastPrice = 1.0f;    // Last year's price of food.
+	bool Slavery = false, Abolished = false;
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -64,6 +68,7 @@ struct Polity
 	int CapitalPeople = 0;   // How many live in its capital city.
 	int Towns = 0;           // How many cities it has.
 	float Literacy = 0.0f;   // Share of its people who can read.
+	float Price = 1.0f;      // What food costs against plenty: above 1 it is scarce, or the money is worth less.
 	float Fertility = 1.0f;  // How many children its people have, against the old way: fewer once most read and live in towns.
 	double Lat = 0.0, Lon = 0.0; // Its capital.
 
@@ -78,6 +83,7 @@ struct Polity
 		if (Ar.Version >= 25) Ar.Io(Gov), Ar.Io(Coups), Ar.Io(CivilWars), Ar.Io(Elected);
 		else if (Ar.IsReading()) Gov = Tier >= Kingdom ? 1 : 0;
 		if (Ar.Version >= 26) Ar.Io(Ideology), Ar.Io(Revolutions);
+		if (Ar.Version >= 27) Ar.Io(Coins), Ar.Io(Debt), Ar.Io(LastPrice), Ar.Io(Slavery), Ar.Io(Abolished);
 	}
 };
 

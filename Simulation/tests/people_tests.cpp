@@ -708,6 +708,9 @@ static void TestStates()
 	for (const earth::Polity& S : Folk.AllStates()) Unequal = Unequal || (S.Inequality >= 2.0f && S.Gov != earth::Republic && S.Gov != earth::Democracy);
 	EXPECT(Folk.RevolutionsSoFar() > 0 || !Unequal);
 	std::printf("  Revolutions: %d\n", Folk.RevolutionsSoFar());
+	// Every state prices its food, and the world's inequality is a fair Gini index.
+	EXPECT(Folk.StatesText().find("  Food costs ") != std::string::npos);
+	EXPECT(Folk.WorldGini() >= 0.0 && Folk.WorldGini() <= 1.0);
 	// The yearly census counts how long people live and how many are born and die.
 	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
 	// Settlers sail from a state's shore bands to a far shore; each landing is counted. (The test states lie inland, so this only checks the count.)

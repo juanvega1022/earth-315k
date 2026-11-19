@@ -318,6 +318,8 @@ int main(int Argc, char** Argv)
 		AddCsvColumn(CsvPath, "democracies");
 		AddCsvColumn(CsvPath, "dictatorships");
 		AddCsvColumn(CsvPath, "revolutions");
+		AddCsvColumn(CsvPath, "gini");
+		AddCsvColumn(CsvPath, "slave_states");
 		Csv.open(CsvPath, std::ios::app);
 	}
 	else if (!CsvPath.empty())
@@ -327,7 +329,7 @@ int main(int Argc, char** Argv)
 		for (const auto& S : Species) Csv << ',' << '"' << S.Name << '"';
 		Csv << ",inventions,beliefs,religions,kindness,curiosity";
 		for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << '"' << earth::OtherKinds()[k].Plural << '"';
-		Csv << ",offworld_people,polities,sick_bands,disease_deaths,trade_routes,trade_per_year,city_people,biggest_city,war_deaths,refugees,co2_ppm,fuel_gt_per_year,soil_wear,forest_cleared_km2,literacy,universities,life_expectancy,births_per_1000,deaths_per_1000,colonies,writings,monuments,republics,democracies,dictatorships,revolutions\n";
+		Csv << ",offworld_people,polities,sick_bands,disease_deaths,trade_routes,trade_per_year,city_people,biggest_city,war_deaths,refugees,co2_ppm,fuel_gt_per_year,soil_wear,forest_cleared_km2,literacy,universities,life_expectancy,births_per_1000,deaths_per_1000,colonies,writings,monuments,republics,democracies,dictatorships,revolutions,gini,slave_states\n";
 	}
 
 	const auto Start = std::chrono::steady_clock::now();
@@ -368,7 +370,7 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.InventionsKnown() << ',' << Folk.BeliefsHeld() << ',' << Folk.Religions() << ',' << Folk.AverageKindness() << ','
 				<< Folk.AverageCuriosity();
 			for (size_t k = 1; k < earth::OtherKinds().size(); ++k) Csv << ',' << Folk.AliveOfKind(static_cast<int>(k));
-			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << ',' << Folk.TradeRoutes() << ',' << static_cast<long long>(Folk.WorldTradePerYear()) << ',' << Folk.CityPeopleTotal() << ',' << Folk.BiggestCity() << ',' << Folk.WarDeaths() << ',' << Folk.WarRefugees() << ',' << Eco.Co2Ppm() << ',' << Folk.FuelPerYear() << ',' << Folk.AverageWear() << ',' << static_cast<long long>(Folk.ForestClearedKm2()) << ',' << Folk.WorldLiteracy() << ',' << Folk.WorldUniversities() << ',' << Folk.LifeExpectancyYears() << ',' << Folk.BirthsPer1000() << ',' << Folk.DeathsPer1000() << ',' << Folk.ColoniesFounded() << ',' << Folk.Writings().size() << ',' << Folk.MonumentsBuilt() << ',' << Folk.StatesRuledBy(earth::Republic) << ',' << Folk.StatesRuledBy(earth::Democracy) << ',' << Folk.StatesRuledBy(earth::Dictatorship) << ',' << Folk.RevolutionsSoFar() << '\n';
+			Csv << ',' << static_cast<long long>(Space.Alive()) << ',' << Folk.PolityCount() << ',' << Folk.SickBands() << ',' << Folk.DiseaseDeathsSoFar() << ',' << Folk.TradeRoutes() << ',' << static_cast<long long>(Folk.WorldTradePerYear()) << ',' << Folk.CityPeopleTotal() << ',' << Folk.BiggestCity() << ',' << Folk.WarDeaths() << ',' << Folk.WarRefugees() << ',' << Eco.Co2Ppm() << ',' << Folk.FuelPerYear() << ',' << Folk.AverageWear() << ',' << static_cast<long long>(Folk.ForestClearedKm2()) << ',' << Folk.WorldLiteracy() << ',' << Folk.WorldUniversities() << ',' << Folk.LifeExpectancyYears() << ',' << Folk.BirthsPer1000() << ',' << Folk.DeathsPer1000() << ',' << Folk.ColoniesFounded() << ',' << Folk.Writings().size() << ',' << Folk.MonumentsBuilt() << ',' << Folk.StatesRuledBy(earth::Republic) << ',' << Folk.StatesRuledBy(earth::Democracy) << ',' << Folk.StatesRuledBy(earth::Dictatorship) << ',' << Folk.RevolutionsSoFar() << ',' << Folk.WorldGini() << ',' << Folk.SlaveStates() << '\n';
 			Csv.flush();
 		}
 		if (!StatesJs.empty() && Folk.PolityCount() > 0 && Lived % 10 == 0)
