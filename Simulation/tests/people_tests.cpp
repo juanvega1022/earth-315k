@@ -750,6 +750,8 @@ static void TestStates()
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Secular >= 0.0f && S.Secular <= 1.0f);
 	EXPECT(Folk.Nonbelievers() >= 0.0 && Folk.Nonbelievers() <= 1.0);
 	std::printf("  Holy books: %d, secular states: %d\n", Folk.HolyBookCount(), Folk.SecularStates());
+	EXPECT(Folk.HolyWarsSoFar() >= 0 && Folk.ConversionsSoFar() >= 0 && Folk.ReformationsSoFar() >= 0 && Folk.PersecutedSoFar() >= 0);
+	EXPECT(Folk.TolerantStates() <= Folk.PolityCount());
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
