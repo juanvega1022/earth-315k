@@ -602,6 +602,7 @@ public:
 		for (size_t i = 0; i < V.size(); ++i) Sum += V[i], Weighted += (2.0 * static_cast<double>(i + 1) - static_cast<double>(V.size()) - 1.0) * V[i];
 		return Sum > 0.0 ? Weighted / (static_cast<double>(V.size()) * Sum) : 0.0;
 	}
+	int ThinkerSchools() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Discoveries >= 3; })); }
 	// Everyone killed by quakes, tsunamis, storms, floods and droughts; and how many of each there have been.
 	long long DisasterDeaths() const { return DisasterDead; }
 	const std::array<int, 5>& DisasterCounts() const { return Struck; }
@@ -1581,7 +1582,7 @@ public:
 				"plainly, as someone of your time would, with no modern words. Answer with one JSON object with the keys \"thought\" (one or two sentences in "
 				"your own voice), \"way\" (the number of one way of working to try), \"material\" (a material you have come across, "
 				"for X), \"material2\" (another one for Y, or \"\") and \"work_toward\" (one thing from the list to work toward, or \"\")" +
-				(Writes ? std::string(", \"writing\" (if you wish, a few sentences you write down for others to read, or \"\") and \"kind\" (prayer, poem, story, law or record)") : std::string()) +
+				(Writes ? std::string(", \"writing\" (if you wish, a few sentences you write down for others to read, or \"\") and \"kind\" (prayer, poem, story, law, record or philosophy)") : std::string()) +
 				(Deeds.empty() ? std::string(".") : ", and \"deed\": one of " + Deeds + ".");
 			++MindCounts.Asked;
 			const std::string Answer = Mind(Prompt);
@@ -1697,7 +1698,7 @@ public:
 			{
 				if (Text.size() > 600) Text.resize(600);
 				std::string Kind = Lower(minds::JsonString(Answer, "kind"));
-				if (Kind != "prayer" && Kind != "poem" && Kind != "story" && Kind != "law" && Kind != "record") Kind = "writing";
+				if (Kind != "prayer" && Kind != "poem" && Kind != "story" && Kind != "law" && Kind != "record" && Kind != "philosophy") Kind = "writing";
 				const Polity* Home = C.State ? StateById(C.State) : nullptr;
 				Writing Piece;
 				Piece.Year = Eco->Years(), Piece.Author = Name, Piece.Place = Home ? StateName(*Home) : "a band that calls its land " + LandName(C, RegionOf(C.Lat, C.Lon));
@@ -3495,7 +3496,7 @@ private:
 			if (Camps[c].State)
 			{
 				Scholar[c] = static_cast<float>(Scholarship(Camps[c]));
-				if (const Polity* S = StateById(Camps[c].State)) Books[c] = S->Written;
+				if (const Polity* S = StateById(Camps[c].State)) Books[c] = PrintedFor(*S);
 			}
 		double MeanGift = 0.0;
 		for (const Npc& P : Npcs) MeanGift += Smarts(P) * Smarts(P) * P.Genes->Curiosity * Scholar[static_cast<size_t>(CampSlot(P.Camp))];
@@ -4179,9 +4180,26 @@ private:
 			const std::string Name = AllSkills()[Skill].Name;
 			AddEvent(Knows(EverKnown, Skill) ? "Someone rediscovers " + Name : "First discovery of " + Name);
 			Remember(P, (Knows(EverKnown, Skill) ? "rediscovered " : "was the first ever to discover ") + Name);
+			if (!Knows(EverKnown, Skill)) RecordDiscovery(P, Name);
 			KnownNow |= SkillSet(1) << Skill;
 			EverKnown |= SkillSet(1) << Skill;
 		}
+	}
+
+	// A first-ever find by someone in a state that writes goes into the world's library; a state
+	// whose people make three becomes known for its school of thinkers.
+	void RecordDiscovery(const Npc& P, const std::string& What)
+	{
+		static const int Script = SkillNamed("writing");
+		const Camp& C = Camps[CampSlot(P.Camp)];
+		Polity* S = C.State ? StateById(C.State) : nullptr;
+		if (!S || !Has(S->Known, Script)) return;
+		Writing Piece;
+		Piece.Year = Eco->Years(), Piece.Author = PersonName(P.Name), Piece.Place = StateName(*S), Piece.Kind = "discovery";
+		Piece.Text = "Wrote down how to know " + What + ", the first anyone ever found it.";
+		Library.push_back(Piece);
+		if (++S->Discoveries == 3 && S->City)
+			AddEvent("The thinkers of " + PersonName(S->City) + " in " + StateName(*S) + " are a school of their own: three first discoveries, the latest " + What);
 	}
 
 	// Each word changes about once in 5,000 years, and bands within reach borrow a word about every
@@ -5200,6 +5218,17 @@ private:
 		std::string T = "Revolution in " + Old + (Leader ? ", led by " + PersonName(Leader->Name) : std::string()) + ": the rulers are overthrown and it becomes a " + GovName(S.Gov);
 		if (!AnyRevolution || S.Tier >= Kingdom) AddEvent(T);
 		AnyRevolution = true;
+	}
+
+	// The books a state's people can read: its own libraries', and with printing, those of the states it trades with.
+	SkillSet PrintedFor(const Polity& S) const
+	{
+		static const int Printing = SkillNamed("printing");
+		SkillSet Books = S.Written;
+		if (Has(S.Known, Printing))
+			for (uint32_t P : S.Partners)
+				if (const Polity* T = StateById(P)) Books |= T->Written;
+		return Books;
 	}
 
 	// Once a year: states that read the sky keep a calendar, their faith gets a great festival, and
