@@ -1,3 +1,4 @@
+#include <array>
 // Tests for the NPCs on a small synthetic planet: a block of land around East Africa.
 #include "PlanetCore/People.h"
 #include "PlanetCore/WorldSave.h"
@@ -683,7 +684,11 @@ static void TestStates()
 	Folk.Think(Poet, static_cast<int>(Folk.AllCamps().size()));
 	EXPECT(!Folk.Writings().empty() && Folk.Writings()[0].Kind == "poem");
 	EXPECT(Folk.LibraryText().find("The river gives") != std::string::npos);
-	// States near each other open trade.
+	// States near each other open trade (once there are two to trade).
+	auto Living = [&Folk] { int N = 0; for (const earth::Polity& S : Folk.AllStates()) N += S.Bands > 0; return N; };
+	for (int y = 0; y < 80 && Living() < 2; ++y)
+		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	std::printf("  States before trade: %d living of %d\n", Living(), Folk.PolityCount());
 	for (int y = 0; y < 40 && Folk.TradeRoutes() == 0; ++y)
 		for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.TradeRoutes() > 0 && HasFirst(Folk, "The first trade route"));
@@ -754,6 +759,9 @@ static void TestStates()
 			for (const earth::Polity& O : Folk.AllStates())
 				if (O.Id == S.Wed) EXPECT(O.Wed == S.Id || O.Wed == 0 || O.Enemy == S.Id);
 	EXPECT(Folk.SuccessionWarsSoFar() <= Folk.DynastiesSoFar());
+	EXPECT(Folk.CrashesSoFar() >= 0 && Folk.HyperinflationsSoFar() >= 0 && Folk.MarketStates() <= Folk.PolityCount());
+	EXPECT(Folk.WorldInflation() >= 0.0f);
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Market >= 0.0f && (S.Market > 0.0f || S.Crashes == 0));
 	// Migrants and diasporas are counted; diaspora bands are bands.
 	EXPECT(Folk.MigrantsSoFar() >= 0 && Folk.DiasporaBands() <= Folk.BandCount());
 	// Space steps stay in range.
@@ -851,6 +859,15 @@ static void TestFuel()
 // soon, and it survives a save.
 static void TestDiseases()
 {
+	{
+		// Life expectancy from a life table: 1% a year at every age gives about 63 years; heavy child deaths cut it.
+		std::array<double, 20> Dead{}, Alive{};
+		Alive.fill(100.0), Dead.fill(1.0);
+		const double Steady = earth::People::PeriodLife(Dead, Alive);
+		EXPECT(Steady > 60.0 && Steady < 66.0);
+		Dead[0] = 20.0;
+		EXPECT(earth::People::PeriodLife(Dead, Alive) < Steady - 20.0);
+	}
 	earth::ElevationGrid Grid = MakePlanet();
 	earth::Ecosystem Eco(&Grid, earth::DefaultSpecies(), 8);
 	earth::PeopleSettings Settings;
