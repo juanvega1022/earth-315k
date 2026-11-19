@@ -807,6 +807,7 @@ public:
 				const BeliefRecord& B = BeliefLog[S->Faith - 1];
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
+			if (S->Orbit) Out += std::string("  Space: ") + SpaceStepName(S->Orbit) + "\n";
 			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
 			if (S->Marriage || S->Rights) Out += std::string("  Family: ") + MarriageName(S->Marriage) + "; women's rights: " + RightsName(S->Rights) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Crime: %.1f a year per 1,000 people%s%s%s\n", S->CrimeRate, S->Justice & 1 ? "; courts" : "", S->Justice & 2 ? ", police" : "", S->Justice & 4 ? ", prisons" : "");
@@ -862,6 +863,14 @@ public:
 	int SkillsKnown() const { return KnownNow.Count(); }
 	SkillSet EverKnownSkills() const { return EverKnown; }
 	SkillSet KnownSkills() const { return KnownNow; }
+	// What the world's states can build with between them (bands outside states build no rockets).
+	SkillSet StateSkills() const
+	{
+		SkillSet K = 0;
+		for (const Polity& S : States) K |= S.Known;
+		return K;
+	}
+	int SpaceStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Orbit > 0; })); }
 	// Groups of camps that can understand each other, counted greedily.
 	int Languages() const { return static_cast<int>(LanguageCamps().size()); }
 
@@ -931,6 +940,7 @@ public:
 		if (Ar.Version >= 38) Ar.Io(FamilySeen);
 		if (Ar.Version >= 39) Ar.Io(SportsSeen), Ar.Io(WorldGames), Ar.Io(LastGames);
 		if (Ar.Version >= 40) Ar.Io(FaminesAll), Ar.Io(ReliefKg), Ar.Io(AnyRelief), Ar.Io(AnyGreen);
+		if (Ar.Version >= 41) Ar.Io(SpaceSeen), Ar.Io(AnySpaceRace);
 		else if (Ar.IsReading()) NextRealMark = -1.0; // Set from the world as it is, so an old save doesn't announce every mark at once.
 		if (Ar.Version >= 30) Ar.Io(WorldWars), Ar.Io(NuclearWars), Ar.Io(InWorldWar), Ar.Io(AnyBomb), Ar.Io(AnyWeb), Ar.Io(AnyAI), Ar.Io(LeagueYear);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
@@ -1895,6 +1905,8 @@ private:
 	int FaminesAll = 0;                  // Famines anywhere so far.
 	double ReliefKg = 0.0;               // Food sent by one state to another's famine.
 	bool AnyRelief = false, AnyGreen = false;
+	int SpaceSeen = 0;          // Bits of space steps any state has made.
+	bool AnySpaceRace = false;
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
@@ -5479,6 +5491,28 @@ public:
 	}
 
 private:
+	// Once a year: a state that can build rockets goes step by step into space; the first of each
+	// step is history, and two rival states racing for the same step make a space race.
+	void SpaceRace(Polity& S)
+	{
+		static const int Sats = SkillNamed("satellites"), Flight = SkillNamed("space flight"), Moon = SkillNamed("landing on the moon"), Settle = SkillNamed("settling other worlds");
+		const int Skills[] = {Sats, Flight, Moon, Settle};
+		if (S.Orbit >= 4 || !Has(S.Known, Skills[S.Orbit]) || !Dice.Chance(0.2 * std::max(0.2f, S.Literacy))) return;
+		const int Step = ++S.Orbit;
+		const int Bit = 1 << Step;
+		static const char* Firsts[] = {"", " puts the first satellite in orbit", " sends the first person into space", " lands the first people on the moon", " sends the first settlers to another world"};
+		if (!(SpaceSeen & Bit)) AddEvent(StateName(S) + Firsts[Step]);
+		else if (!AnySpaceRace)
+			for (const Polity& O : States)
+				if (O.Id != S.Id && O.Orbit >= Step && (O.Enemy == S.Id || std::find(S.Allies.begin(), S.Allies.end(), O.Id) == S.Allies.end()))
+				{
+					AnySpaceRace = true;
+					AddEvent("A space race: " + StateName(S) + " matches " + StateName(O) + ", " + SpaceStepName(Step));
+					break;
+				}
+		SpaceSeen |= Bit;
+	}
+
 	// Once a year: a state's people take up the sport their way of life allows (races and wrestling,
 	// ball games in villages, horse and chariot races, team games with written rules in printing
 	// cities, motor racing), shown at its festivals.
@@ -6191,6 +6225,7 @@ private:
 			Crime(S);
 			Family(S);
 			Sports(S);
+			SpaceRace(S);
 			Nature(S);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.

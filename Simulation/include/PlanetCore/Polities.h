@@ -70,6 +70,7 @@ struct Polity
 	uint8_t Sport = 0;         // Its favourite sport: see SportName.
 	uint16_t Medals = 0;       // Wins at the world games.
 	uint16_t Famines = 0;      // Famines it has suffered.
+	uint8_t Orbit = 0;         // How far into space it has gone: see SpaceStepName.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -111,6 +112,7 @@ struct Polity
 		if (Ar.Version >= 38) Ar.Io(Marriage), Ar.Io(Rights);
 		if (Ar.Version >= 39) Ar.Io(Sport), Ar.Io(Medals);
 		if (Ar.Version >= 40) Ar.Io(Famines);
+		if (Ar.Version >= 41) Ar.Io(Orbit);
 	}
 };
 
@@ -201,6 +203,12 @@ inline const char* SportName(int S)
 {
 	static const char* Names[] = {"none", "wrestling and foot races", "ball games", "horse races", "chariot races", "team games with written rules", "motor racing"};
 	return Names[S < 7 ? S : 0];
+}
+
+inline const char* SpaceStepName(int S)
+{
+	static const char* Names[] = {"not yet", "a satellite in orbit", "people in orbit", "people on the moon", "settlers on other worlds"};
+	return Names[S < 5 ? S : 0];
 }
 
 inline float TaxRate(int Gov)

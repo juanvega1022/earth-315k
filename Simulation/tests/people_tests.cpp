@@ -748,6 +748,9 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Space steps stay in range.
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Orbit < 5);
+	EXPECT(Folk.SpaceStates() <= Folk.PolityCount());
 	// Every state's famines are counted in the world's.
 	int Famines = 0;
 	for (const earth::Polity& S : Folk.AllStates()) Famines += S.Famines;
