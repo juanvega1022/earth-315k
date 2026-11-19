@@ -51,6 +51,8 @@ struct Polity
 	uint8_t Gov = 0;                // How it is ruled: see GovName.
 	int Coups = 0, CivilWars = 0;
 	int Elected = 0;                // Year of its last election, for republics and democracies.
+	uint8_t Ideology = 0;           // The political idea most of its people hold: see IdeologyName.
+	int Revolutions = 0;
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -75,6 +77,7 @@ struct Polity
 		if (Ar.Version >= 24) Ar.Io(Calendar), Ar.Io(Festival), Ar.Io(Monuments);
 		if (Ar.Version >= 25) Ar.Io(Gov), Ar.Io(Coups), Ar.Io(CivilWars), Ar.Io(Elected);
 		else if (Ar.IsReading()) Gov = Tier >= Kingdom ? 1 : 0;
+		if (Ar.Version >= 26) Ar.Io(Ideology), Ar.Io(Revolutions);
 	}
 };
 
@@ -122,6 +125,22 @@ inline const char* GovName(int Gov)
 {
 	static const char* Names[] = {"rule by a chieftain", "monarchy", "aristocracy", "republic", "democracy", "dictatorship"};
 	return Names[Gov < 6 ? Gov : 0];
+}
+
+enum IdeaKind : uint8_t
+{
+	NoIdeology,
+	Liberalism,      // Rights and votes for all.
+	Nationalism,     // One people, one state.
+	Socialism,       // Shared wealth, workers first.
+	Militarism,      // Strength and conquest.
+	Environmentalism // Save the living world.
+};
+
+inline const char* IdeologyName(int Idea)
+{
+	static const char* Names[] = {"none", "liberalism", "nationalism", "socialism", "militarism", "environmentalism"};
+	return Names[Idea < 6 ? Idea : 0];
 }
 
 // Share of what each band puts by that the state takes each year.
