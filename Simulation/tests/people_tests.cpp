@@ -698,6 +698,16 @@ static void TestStates()
 	// Every state is ruled some way, and says how.
 	EXPECT(Folk.StatesText().find("  Government: ") != std::string::npos);
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Gov <= earth::Dictatorship && (S.Tier == earth::Chiefdom || S.Gov != earth::Chieftain));
+	// Minds rise against unequal rulers.
+	const earth::Thinker Rebel = [](const std::string& Prompt)
+	{
+		return std::string(Prompt.find("\"revolt\"") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"revolt\"}" : "{\"thought\": \"x\"}");
+	};
+	bool Unequal = false;
+	for (int i = 0; i < 10 && Folk.RevolutionsSoFar() == 0; ++i) Folk.Think(Rebel, static_cast<int>(Folk.AllCamps().size()));
+	for (const earth::Polity& S : Folk.AllStates()) Unequal = Unequal || (S.Inequality >= 2.0f && S.Gov != earth::Republic && S.Gov != earth::Democracy);
+	EXPECT(Folk.RevolutionsSoFar() > 0 || !Unequal);
+	std::printf("  Revolutions: %d\n", Folk.RevolutionsSoFar());
 	// The yearly census counts how long people live and how many are born and die.
 	EXPECT(Folk.LifeExpectancyYears() > 0.0 && Folk.BirthsPer1000() > 0.0 && Folk.DeathsPer1000() > 0.0);
 	// Settlers sail from a state's shore bands to a far shore; each landing is counted. (The test states lie inland, so this only checks the count.)

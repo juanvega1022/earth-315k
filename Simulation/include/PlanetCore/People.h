@@ -584,6 +584,12 @@ public:
 		}
 		return Out;
 	}
+	int RevolutionsSoFar() const
+	{
+		int N = 0;
+		for (const Polity& S : States) N += S.Revolutions;
+		return N;
+	}
 	// How many states are ruled each way (see GovName).
 	int StatesRuledBy(int Gov) const
 	{
@@ -713,6 +719,7 @@ public:
 			for (uint32_t P : S->Partners)
 				if (const Polity* T = StateById(P)) Traders += (Traders.empty() ? "" : ", ") + StateName(*T);
 			if (!Traders.empty()) Out += "  Trades with: " + Traders + "\n";
+			if (S->Ideology || S->Revolutions) Out += "  Idea most hold: " + std::string(IdeologyName(S->Ideology)) + "; revolutions: " + std::to_string(S->Revolutions) + "\n";
 			std::snprintf(Buf, sizeof(Buf), "  Government: %s; taxes %.0f%% a year; %.0f officials; %d coups and %d civil wars so far\n", GovName(S->Gov), 100.0 * TaxRate(S->Gov),
 				OfficialsPerBand(S->Known) * S->Bands, S->Coups, S->CivilWars);
 			Out += Buf;
@@ -805,6 +812,7 @@ public:
 		if (Ar.Version >= 23) Ar.Io(Colonies), Ar.Io(AnyVoyage);
 		if (Ar.Version >= 24) Ar.Io(AnyCalendar), Ar.Io(AnyFestival), Ar.Io(AnyMonument), Ar.Io(Library);
 		if (Ar.Version >= 25) Ar.Io(GovSeen);
+		if (Ar.Version >= 26) Ar.Io(IdeasSeen), Ar.Io(AnyMission), Ar.Io(AnyRevolution);
 		if (Ar.IsReading()) BirthsAtCensus = -1;
 		if (Ar.IsReading())
 		{
@@ -1522,7 +1530,7 @@ public:
 				for (const std::string& L : Realm->Laws) Life += "One of its laws: " + L + ". ";
 				Deeds = Rules ? "\"war\" (attack the nearest other state), \"peace\" (end a war), \"ally\" (make friends with the nearest other state), \"trade\" (send merchants to a new state), "
 								"\"city\" (build a city as your capital), \"school\" (open a school), \"library\" (gather the state's writings), \"law\" (give a law, written in \"law\") or \"\""
-							  : "\"rebel\" (lead your band to break away), \"preach\" (spread your band's beliefs to the whole state) or \"\"";
+							  : "\"rebel\" (lead your band to break away), \"revolt\" (rise up to overthrow the rulers), \"preach\" (spread your band's beliefs to the whole state) or \"\"";
 			}
 			else if (C.Leader == P.Id && (Has(C.Known, SkillNamed("villages")) || Has(C.Known, SkillNamed("farming"))))
 			{
@@ -1748,6 +1756,8 @@ private:
 	int NextLifeMark = 40;
 	int Colonies = 0; // Bands settled across the open sea.
 	bool AnyCalendar = false, AnyFestival = false, AnyMonument = false;
+	int IdeasSeen = 1;
+	bool AnyMission = false, AnyRevolution = false;
 	int GovSeen = 3; // Bits of the kinds of government that have ever existed; chieftains and monarchs are noted as tiers.
 	std::vector<Writing> Library; // Everything the thinking minds have written down, oldest first.
 	bool AnyVoyage = false;
@@ -4950,6 +4960,97 @@ private:
 		else if (S.Tier >= Empire && S.Gov != Dictatorship) AddEvent(T);
 	}
 
+	// Once a year: once printing spreads ideas, a state's people take up a political idea from what
+	// they live through, or from those they trade with. Unequal states under kings or dictators
+	// whose people read may rise in revolution. Printed holy books split faiths (reformations),
+	// missionaries carry the state's faith to its partners, and faith against faith starts holy wars.
+	void Ideas(Polity& S, const Camp& Seat)
+	{
+		static const int Printing = SkillNamed("printing"), Factories = SkillNamed("factories");
+		const std::string Name = StateName(S);
+		if (Has(S.Known, Printing) && Dice.Chance(0.05))
+		{
+			uint8_t Idea = S.Ideology;
+			if (Eco->Greenhouse() > 1.0 && Dice.Chance(0.2)) Idea = Environmentalism;
+			else if (Has(S.Known, Factories) && S.Inequality > 4.0f) Idea = Socialism;
+			else if (S.WarYears > 5 || S.Conquests > 3) Idea = Militarism;
+			else if (S.Tier == Nation) Idea = Dice.Chance(0.5) ? Nationalism : Liberalism;
+			else if (S.Literacy > 0.3f) Idea = Liberalism;
+			for (uint32_t P : S.Partners) // Ideas travel with trade.
+				if (const Polity* T = StateById(P); T && T->Ideology && Dice.Chance(0.2)) Idea = T->Ideology;
+			if (Idea != S.Ideology)
+			{
+				S.Ideology = Idea;
+				const int Bit = 1 << Idea;
+				if (!(IdeasSeen & Bit)) IdeasSeen |= Bit, AddEvent("A new idea spreads in " + Name + ": " + IdeologyName(Idea));
+			}
+		}
+		// Revolution: the people overthrow those who rule them.
+		const bool Unfree = S.Gov == Monarchy || S.Gov == Aristocracy || S.Gov == Dictatorship;
+		if (Unfree && (S.Ideology == Liberalism || S.Ideology == Socialism || S.Ideology == Nationalism) && S.Literacy > 0.3f && S.Inequality > 3.0f && Dice.Chance(0.02))
+			Revolt(S, Seat, nullptr);
+		// Reformation: readers of printed holy books break with the state's faith.
+		if (S.Faith && Has(S.Known, Printing) && S.Literacy > 0.2f && S.Bands >= 10 && Dice.Chance(0.003))
+		{
+			int Left = 0;
+			for (Camp& C : Camps)
+				if (C.State == S.Id && C.Id != S.Capital && Dice.Chance(0.3))
+				{
+					auto F = std::find(C.Faith.begin(), C.Faith.end(), S.Faith);
+					if (F != C.Faith.end()) C.Faith.erase(F), ++Left;
+				}
+			if (Left) AddEvent("A reformation in " + Name + ": " + std::to_string(Left) + " bands break with its state faith");
+		}
+		// Missionaries carry the faith along the trade routes.
+		if (S.Faith)
+			for (uint32_t P : S.Partners)
+				if (Polity* T = StateById(P); T && T->Faith != S.Faith && Dice.Chance(0.03))
+				{
+					auto It = CampSlots.find(T->Capital);
+					if (It == CampSlots.end()) continue;
+					Camp& Them = Camps[static_cast<size_t>(It->second)];
+					if (Them.Faith.size() < 3 && !Shares(Them, S.Faith)) Them.Faith.push_back(S.Faith);
+					if (!T->Faith || Dice.Chance(0.2))
+					{
+						T->Faith = S.Faith;
+						if (T->Tier >= Kingdom || !AnyMission) AddEvent("Missionaries from " + Name + " convert " + StateName(*T) + " to its faith");
+						AnyMission = true;
+					}
+				}
+		// Holy war against a neighbour of another faith.
+		if (S.Faith && !S.Enemy && S.Tier >= Kingdom && Dice.Chance(0.01))
+			if (Polity* O = NearestOther(S); O && O->Faith && O->Faith != S.Faith && !O->Enemy && std::find(S.Allies.begin(), S.Allies.end(), O->Id) == S.Allies.end())
+			{
+				AddEvent("A holy war: " + Name + " fights " + StateName(*O) + " over their gods");
+				StartWar(S, *O);
+			}
+	}
+
+	// The people rise and overthrow their rulers; the state becomes a republic, or a dictatorship of
+	// the revolutionaries, and the rich bands' stores are shared out.
+	void Revolt(Polity& S, const Camp& Seat, const Npc* Leader)
+	{
+		if (!Leader)
+			for (int i : Seat.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (P.Id != S.Ruler && P.AgeYears() >= 18.0 && P.AgeYears() < 45.0 && (!Leader || P.Reputation > Leader->Reputation)) Leader = &P;
+			}
+		const std::string Old = StateName(S);
+		S.Gov = S.Ideology == Socialism ? Dictatorship : Republic;
+		S.Revolutions += 1;
+		if (Leader) S.Ruler = Leader->Id, S.RulerName = Leader->Name, S.Rulers += 1, Remember(*Leader, "led the revolution in " + Old);
+		double Total = 0.0;
+		int N = 0;
+		for (Camp& C : Camps)
+			if (C.State == S.Id) Total += C.Store, ++N;
+		for (Camp& C : Camps)
+			if (C.State == S.Id) C.Store = static_cast<float>(0.5 * C.Store + 0.5 * Total / std::max(1, N));
+		std::string T = "Revolution in " + Old + (Leader ? ", led by " + PersonName(Leader->Name) : std::string()) + ": the rulers are overthrown and it becomes a " + GovName(S.Gov);
+		if (!AnyRevolution || S.Tier >= Kingdom) AddEvent(T);
+		AnyRevolution = true;
+	}
+
 	// Once a year: states that read the sky keep a calendar, their faith gets a great festival, and
 	// a rich treasury raises temples and monuments in the capital.
 	void Culture(Polity& S)
@@ -5338,6 +5439,7 @@ private:
 			Institutions(S);
 			Culture(S);
 			Politics(S, Seat);
+			Ideas(S, Seat);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
 			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
 			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()) + 0.15 * OfficialsPerBand(S.Known));
@@ -5656,6 +5758,14 @@ private:
 			if (C.Id == S->Capital) return " | wants to rebel, but lives in the capital";
 			BreakAway(Slot, &P, "rises up");
 			return " | DEED: rebels and founds " + StateName(*StateById(C.State));
+		}
+		if (S && !Rules && Deed == "revolt")
+		{
+			if (S->Gov == Republic || S->Gov == Democracy) return " | wants a revolution, but the people already choose their rulers";
+			auto It = CampSlots.find(S->Capital);
+			if (It == CampSlots.end() || S->Inequality < 2.0f || !Dice.Chance(0.3)) return " | calls for revolution, but too few rise";
+			Revolt(*S, Camps[static_cast<size_t>(It->second)], &P);
+			return " | DEED: leads a revolution";
 		}
 		if (S && !Rules && Deed == "preach")
 		{
