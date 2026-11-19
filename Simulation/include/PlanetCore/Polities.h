@@ -64,6 +64,7 @@ struct Polity
 	uint8_t Art = 0;           // What the style is mostly: see ArtName.
 	float Fame = 0.0f;         // How widely its art is admired, from the states that took it up.
 	bool Treaty = false;       // Signed the climate treaty: burns less fuel.
+	uint16_t Parks = 0;        // Wild land it protects from hunters and fields.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -99,6 +100,7 @@ struct Polity
 		if (Ar.Version >= 33) Ar.Io(Secular);
 		if (Ar.Version >= 34) Ar.Io(Style), Ar.Io(Art), Ar.Io(Fame);
 		if (Ar.Version >= 35) Ar.Io(Treaty);
+		if (Ar.Version >= 36) Ar.Io(Parks);
 	}
 };
 

@@ -748,6 +748,8 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// Parks: at most one for every ten bands (and one for the smallest).
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(S.Parks <= std::max(1, S.Bands / 10) + 1);
 	// Clean power's share is a share, and only league members sign the climate treaty.
 	EXPECT(Folk.CleanEnergyShare() >= 0.0 && Folk.CleanEnergyShare() <= 1.0);
 	// A state's rule reaches at least as far as its roads alone carry it; rail states are counted.
