@@ -748,6 +748,9 @@ static void TestStates()
 	// Art styles start only in states with cities and are named; styles in use never outnumber those begun.
 	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Style || S.Art < 8);
 	EXPECT(Folk.ArtStylesInUse() <= Folk.ArtStylesSoFar());
+	// A state's rule reaches at least as far as its roads alone carry it; rail states are counted.
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(earth::People::StateReachKm(S) >= earth::ReachKm(S.Tier, false));
+	EXPECT(Folk.StatesUsing("railways") <= Folk.PolityCount() && Folk.StatesUsing("no such thing") == 0);
 	std::printf("  Art styles: %d begun, %d in use\n", Folk.ArtStylesSoFar(), Folk.ArtStylesInUse());
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);

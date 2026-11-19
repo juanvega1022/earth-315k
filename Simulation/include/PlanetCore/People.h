@@ -5408,6 +5408,19 @@ private:
 		S.Fame *= 0.99f;
 	}
 public:
+	// How far a state's rule reaches from its capital: roads, then railways and motor roads move
+	// soldiers and officials faster, and the telegraph carries orders at once.
+	static double StateReachKm(const Polity& S)
+	{
+		static const int Roads = SkillNamed("roads"), Rail = SkillNamed("railways"), Engines = SkillNamed("engines"), Telegraph = SkillNamed("telegraph");
+		return ReachKm(S.Tier, Has(S.Known, Roads)) * (Has(S.Known, Rail) ? 2.0 : 1.0) * (Has(S.Known, Engines) ? 1.5 : 1.0) * (Has(S.Known, Telegraph) ? 1.3 : 1.0);
+	}
+	// States that can use a skill (railways, flight, the telegraph...).
+	int StatesUsing(const char* Skill) const
+	{
+		const int K = SkillNamed(Skill);
+		return K < 0 ? 0 : static_cast<int>(std::count_if(States.begin(), States.end(), [K](const Polity& S) { return Has(S.Known, K); }));
+	}
 	int ArtStylesSoFar() const { return ArtStyles; }
 	int ArtStylesInUse() const
 	{
@@ -5856,7 +5869,7 @@ private:
 		Census();
 		Disasters();
 		static const int Villages = SkillNamed("villages"), Farming = SkillNamed("farming"), Writing = SkillNamed("writing"),
-			Cities = SkillNamed("cities"), LawSkill = SkillNamed("laws"), Money = SkillNamed("money"), Roads = SkillNamed("roads"),
+			Cities = SkillNamed("cities"), LawSkill = SkillNamed("laws"), Money = SkillNamed("money"),
 			Printing = SkillNamed("printing");
 		auto Of = TallyStates();
 		const double Year = Eco->Years();
@@ -5966,7 +5979,7 @@ private:
 			Arts(S, Seat);
 			Economy(S);
 			// Bands too far from the capital, or who no longer speak its tongue or share its gods, may break away.
-			const double Reach = ReachKm(S.Tier, Has(S.Known, Roads));
+			const double Reach = StateReachKm(S);
 			const double Order = 1.0 / (1.0 + 0.3 * static_cast<double>(S.Laws.size()) + 0.15 * OfficialsPerBand(S.Known));
 			for (int c : Mine)
 			{
@@ -6147,7 +6160,7 @@ private:
 				const Camp& O = Camps[static_cast<size_t>(N)];
 				const Polity* S = O.State ? StateById(O.State) : nullptr;
 				if (!S) continue;
-				if (DistanceKm(C.Lat, C.Lon, S->Lat, S->Lon) <= ReachKm(S->Tier, Has(S->Known, Roads)))
+				if (DistanceKm(C.Lat, C.Lon, S->Lat, S->Lon) <= StateReachKm(*S))
 				{
 					const double Pull = 0.5 + (Understand(C, O) ? 1.0 : 0.0) + (Shares(C, S->Faith) ? 1.0 : 0.0) + (C.Neighbour == O.Id ? 0.5 : 0.0) + 0.5 * S->Tier;
 					if (Dice.Chance(0.05 * Pull)) C.State = S->Id;
