@@ -828,6 +828,39 @@ public:
 		if (Has(S->Known, SkillNamed("factories"))) Choices[N++] = JobFactoryWorker; // Industry employs the most.
 		return Choices[static_cast<int>((Draw - S->FarmShare) / std::max(1e-6, 1.0 - S->FarmShare) * N) % N];
 	}
+	// The political view a grown person holds (an Ideology, 0 for keeping the old ways), from their
+	// work, station, reading and faith; it shifts a little with each new leader.
+	int ViewOf(const Npc& P) const
+	{
+		const Camp* C = Camps.empty() ? nullptr : &Camps[CampSlot(P.Camp)];
+		const Polity* S = C && C->State ? StateById(C->State) : nullptr;
+		if (!S || P.AgeYears() < 18.0) return 0;
+		static const int Factories = SkillNamed("factories"), Solar = SkillNamed("solar power");
+		const int J = JobOf(P);
+		const bool Reader = Reads(P);
+		double W[6] = {1.0 + (P.Status == 3 ? 2.0 : 0.0) + (!C->Faith.empty() && !Reader ? 1.0 : 0.0), Reader ? 1.0 + (P.Status == 2 ? 1.0 : 0.0) : 0.0,
+			S->Tier >= Nation ? 1.0 : 0.0, Has(S->Known, Factories) && P.Status <= 1 ? 1.0 + (J == JobFactoryWorker || J == JobMiner ? 1.5 : 0.0) : 0.0,
+			J == JobSoldier || S->Enemy ? 0.7 : 0.0, Reader && Has(S->Known, Solar) ? 0.6 : 0.0};
+		const double Total = W[0] + W[1] + W[2] + W[3] + W[4] + W[5];
+		double Draw = PersonDraw(P.Id, 5u + static_cast<uint64_t>(S->Rulers)) * Total;
+		for (int v = 0; v < 6; ++v)
+			if ((Draw -= W[v]) < 0.0) return v;
+		return 0;
+	}
+	// Grown people in a state holding each view, counting only those allowed to vote if Voters is set
+	// (in a republic the well-off; in a democracy everyone, women once they have the vote).
+	std::array<int, 6> Views(const Polity& S, bool Voters) const
+	{
+		std::array<int, 6> N{};
+		for (const Npc& P : Npcs)
+		{
+			if (P.AgeYears() < 18.0 || Camps[CampSlot(P.Camp)].State != S.Id) continue;
+			if (Voters && ((S.Gov == Republic && P.Status < 2) || (P.Female && S.Rights < 3) || P.Status == 0)) continue;
+			++N[static_cast<size_t>(ViewOf(P))];
+		}
+		return N;
+	}
+	int ProtestsSoFar() const { return Protests; }
 	// Whether they can read: about the state's literacy, though fewer women before girls go to school.
 	bool Reads(const Npc& P) const
 	{
@@ -1059,6 +1092,7 @@ public:
 		if (Ar.Version >= 44) Ar.Io(CrashesAll), Ar.Io(Hyperinflations), Ar.Io(AnyExchange);
 		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
 		if (Ar.Version >= 47) Ar.Io(AnyCompulsory);
+		if (Ar.Version >= 50) Ar.Io(Protests);
 		if (Ar.Version >= 48) Ar.Io(FarmSeen);
 		else if (Ar.IsReading()) FarmSeen = 0x3F; // An old world has long passed these steps; don't announce them all at once.
 		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
@@ -1765,6 +1799,9 @@ public:
 				const int J = JobOf(P);
 				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
+				if (P.Genes) Life += std::string(P.Genes->Curiosity > 1.0f ? "You are curious and restless by nature. " : P.Genes->Curiosity < 0.4f ? "You like things done the way they always were. " : "") +
+					(P.Genes->Kindness > 0.7f ? "You give freely to others. " : P.Genes->Kindness < 0.3f ? "You keep what is yours. " : "");
+				if (const int V = ViewOf(P); Realm && P.AgeYears() >= 18.0) Life += V ? "You hold with " + std::string(IdeologyName(V)) + ". " : std::string(Has(Realm->Known, SkillNamed("printing")) ? "You hold to the old ways. " : "");
 				if (Realm) Life += P.Status == 0 ? "You are enslaved: you work for others and cannot leave. " : P.Status == 3 ? "Your family is among the rich and powerful. " : P.Status == 2 ? "Your family is comfortable, neither rich nor poor. " : "";
 			}
 			if (P.Grief > 0.3f) Life += "You are grieving someone you loved. ";
@@ -2062,6 +2099,7 @@ private:
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	int Protests = 0;      // Mass protests so far.
 	int RisesLastYear = 0; // People who rose in station last year; not saved.
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
@@ -5545,7 +5583,40 @@ private:
 				const Npc& P = Npcs[static_cast<size_t>(i)];
 				if (P.AgeYears() >= 30.0 && (!Best || P.Reputation > Best->Reputation)) Best = &P;
 			}
+			// The voters choose: the view most of them hold wins, and its most trusted holder leads.
+			const std::array<int, 6> Votes = Views(S, true);
+			const int Won = static_cast<int>(std::max_element(Votes.begin(), Votes.end()) - Votes.begin());
+			const int Cast = std::accumulate(Votes.begin(), Votes.end(), 0);
+			for (int i : Seat.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (P.AgeYears() >= 30.0 && ViewOf(P) == Won && (!Best || ViewOf(*Best) != Won || P.Reputation > Best->Reputation)) Best = &P;
+			}
 			if (Best && Best->Id != S.Ruler) S.Ruler = Best->Id, S.RulerName = Best->Name, S.Rulers += 1, Remember(*Best, "was chosen to lead " + StateName(S));
+			if (Cast > 0)
+			{
+				S.Ideology = static_cast<uint8_t>(Won);
+				if (S.Tier >= Nation && Best)
+					AddEvent(PersonName(Best->Name) + " wins the vote in " + StateName(S) + " for " + (Won ? IdeologyName(Won) : "the old ways") + ", with " +
+						std::to_string(100 * Votes[static_cast<size_t>(Won)] / Cast) + "% of " + std::to_string(Cast) + " voters");
+			}
+		}
+		// Where printing spreads news, people who disagree with their rulers march in the streets; tyrants crush them.
+		static const int PrintingSkill = SkillNamed("printing");
+		if (S.Tier >= Kingdom && Has(S.Known, PrintingSkill) && Dice.Chance(0.05))
+		{
+			const std::array<int, 6> All = Views(S, false);
+			const int Total = std::accumulate(All.begin(), All.end(), 0);
+			if (Total > 20 && All[S.Ideology] * 2 < Total)
+			{
+				++Protests;
+				const int Most = static_cast<int>(std::max_element(All.begin(), All.end()) - All.begin());
+				std::string T = "Crowds in " + StateName(S) + " march for " + (Most ? IdeologyName(Most) : std::string("the old ways")) + (S.Gov == Dictatorship ? "; soldiers fire on them" : "");
+				if (S.Tier >= Empire || Protests == 1) AddEvent(T + (Protests == 1 ? ": the first mass protest" : ""));
+				if (S.Gov == Dictatorship)
+					for (int i : Seat.Members)
+						if (Npc& P = Npcs[static_cast<size_t>(i)]; P.AgeYears() >= 18.0 && Dice.Chance(0.05)) P.Health = 0.0f;
+			}
 		}
 		if (S.Gov == Was) return;
 		const int Bit = 1 << S.Gov;
