@@ -784,6 +784,73 @@ public:
 		}
 	}
 	// The living states, biggest first: size, capital, ruler, religion, wars and laws.
+	// What a person does for a living, read from their age, band and state: not stored, but the same
+	// each time for the same person. Jobs open up as the state learns what they need.
+	enum Job : uint8_t { JobChild, JobPupil, JobGatherer, JobHunter, JobFarmer, JobHerder, JobCraftsman, JobSoldier, JobPriest, JobMerchant, JobScribe, JobTeacher,
+		JobDoctor, JobMiner, JobFactoryWorker, JobEngineer, JobScientist, JobProgrammer, JobElder, JobCount };
+	static const char* JobName(int J)
+	{
+		static const char* Names[JobCount] = {"child", "pupil", "gatherer", "hunter", "farmer", "herder", "craftsman", "soldier", "priest", "merchant",
+			"scribe", "teacher", "doctor", "miner", "factory worker", "engineer", "scientist", "programmer", "elder"};
+		return J < JobCount ? Names[J] : "";
+	}
+	// A fixed draw in [0, 1) for one person and one question.
+	static double PersonDraw(uint32_t Id, uint64_t Salt)
+	{
+		uint64_t Z = (static_cast<uint64_t>(Id) * 0x9E3779B97F4A7C15ull) ^ (Salt * 0xBF58476D1CE4E5B9ull);
+		Z = (Z ^ (Z >> 30)) * 0xBF58476D1CE4E5B9ull, Z = (Z ^ (Z >> 27)) * 0x94D049BB133111EBull, Z ^= Z >> 31;
+		return static_cast<double>(Z >> 11) / 9007199254740992.0;
+	}
+	int JobOf(const Npc& P) const
+	{
+		const double Age = P.AgeYears();
+		const Camp* C = Camps.empty() ? nullptr : &Camps[CampSlot(P.Camp)];
+		const Polity* S = C && C->State ? StateById(C->State) : nullptr;
+		if (Age < 12.0) return S && S->Schools && Age >= 6.0 && PersonDraw(P.Id, 1) < S->Literacy / 0.95 ? JobPupil : JobChild;
+		if (Age >= 65.0 && (!S || !Has(S->Known, SkillNamed("factories")))) return JobElder;
+		if (!S) return P.HuntSkill > P.ForageSkill ? JobHunter : JobGatherer;
+		const double Draw = PersonDraw(P.Id, 2);
+		if (Draw < S->FarmShare) return Has(S->Known, SkillNamed("farming")) ? JobFarmer : JobHerder;
+		static const std::pair<int, Job> Open[] = {{SkillNamed("pottery"), JobCraftsman}, {SkillNamed("writing"), JobScribe}, {SkillNamed("money"), JobMerchant},
+			{SkillNamed("medicine"), JobDoctor}, {SkillNamed("steam engines"), JobMiner}, {SkillNamed("factories"), JobFactoryWorker},
+			{SkillNamed("electricity"), JobEngineer}, {SkillNamed("universities"), JobScientist}, {SkillNamed("computers"), JobProgrammer}};
+		Job Choices[16];
+		int N = 0;
+		for (const auto& [Skill, J] : Open)
+			if (Has(S->Known, Skill)) Choices[N++] = J;
+		if (S->Enemy || S->Tier >= Kingdom) Choices[N++] = JobSoldier;
+		if (S->Faith) Choices[N++] = JobPriest;
+		if (S->Schools) Choices[N++] = JobTeacher;
+		if (N == 0) return JobCraftsman;
+		if (Has(S->Known, SkillNamed("factories"))) Choices[N++] = JobFactoryWorker; // Industry employs the most.
+		return Choices[static_cast<int>((Draw - S->FarmShare) / std::max(1e-6, 1.0 - S->FarmShare) * N) % N];
+	}
+	// Whether they can read: about the state's literacy, though fewer women before girls go to school.
+	bool Reads(const Npc& P) const
+	{
+		if (Camps.empty() || P.AgeYears() < 6.0) return false;
+		const Camp& C = Camps[CampSlot(P.Camp)];
+		const Polity* S = C.State ? StateById(C.State) : nullptr;
+		if (!S || !Has(C.Known, SkillNamed("writing"))) return false;
+		const double Share = S->Rights >= 2 ? S->Literacy : (P.Female ? 0.3 : 1.7) * S->Literacy;
+		return PersonDraw(P.Id, 3) < Share;
+	}
+	// Share of grown people (15+) who can read, across the world.
+	double WorldReaders() const
+	{
+		long long All = 0, Read = 0;
+		for (const Npc& P : Npcs)
+			if (P.AgeYears() >= 15.0) ++All, Read += Reads(P);
+		return All ? static_cast<double>(Read) / static_cast<double>(All) : 0.0;
+	}
+	// How many grown people work at each job.
+	std::array<int, JobCount> JobCounts() const
+	{
+		std::array<int, JobCount> N{};
+		for (const Npc& P : Npcs) ++N[JobOf(P)];
+		return N;
+	}
+
 	std::string StatesText() const
 	{
 		static const char* Lands[6] = {"Africa", "Asia", "Europe", "Australia", "the Americas", "elsewhere"};
@@ -791,6 +858,10 @@ public:
 		for (const Polity& S : States) List.push_back(&S);
 		std::sort(List.begin(), List.end(), [](const Polity* A, const Polity* B) { return A->Members != B->Members ? A->Members > B->Members : A->Id < B->Id; });
 		std::string Out = std::to_string(States.size()) + " states (" + std::to_string(StatesFounded) + " founded since the first)\n\n";
+		std::unordered_map<uint32_t, std::array<int, JobCount>> Work; // Grown workers by job, per state.
+		for (const Npc& P : Npcs)
+			if (const int J = JobOf(P); J != JobChild && J != JobPupil && J != JobElder)
+				if (const uint32_t St = Camps.empty() ? 0u : Camps[CampSlot(P.Camp)].State) ++Work[St][J];
 		char Buf[160];
 		for (const Polity* S : List)
 		{
@@ -809,6 +880,18 @@ public:
 				Out += "  State religion: \"" + SayWord(B.Word) + "\" (" + BeliefGloss(B.Subject, B.Claim, B.Practice) + ")\n";
 			}
 			if (S->House) Out += "  Ruling house: " + PersonName(S->House) + ", since ruler number " + std::to_string(S->HouseFrom) + (S->Wed && StateById(S->Wed) ? "; joined by marriage to " + StateName(*StateById(S->Wed)) : std::string()) + "\n";
+			if (auto W = Work.find(S->Id); W != Work.end())
+			{
+				const int All = std::accumulate(W->second.begin(), W->second.end(), 0);
+				std::vector<std::pair<int, int>> Top;
+				for (int j = 0; j < JobCount; ++j)
+					if (W->second[j]) Top.push_back({W->second[j], j});
+				std::sort(Top.rbegin(), Top.rend());
+				std::string Line;
+				for (size_t k = 0; k < std::min<size_t>(5, Top.size()); ++k)
+					Line += (k ? ", " : "") + std::string(JobName(Top[k].second)) + "s " + std::to_string(100 * Top[k].first / std::max(1, All)) + "%";
+				Out += "  Work: " + Line + "\n";
+			}
 			if (S->Market > 0.0f) Out += "  Share market: worth " + std::to_string(static_cast<int>(S->Market * 100.0f)) + "% of when it opened; crashed " + std::to_string(S->Crashes) + " times\n";
 			if (S->Orbit) Out += std::string("  Space: ") + SpaceStepName(S->Orbit) + "\n";
 			if (S->Sport) Out += std::string("  Sport: ") + SportName(S->Sport) + (S->Medals ? "; won the world games " + std::to_string(S->Medals) + " times" : std::string()) + "\n";
@@ -1666,6 +1749,11 @@ public:
 			// What sets this person and moment apart, so minds don't all think the same thought.
 			std::string Life;
 			if (C.Leader == P.Id) Life += "Your band trusts you most and looks to you to lead. ";
+			{
+				const int J = JobOf(P);
+				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
+				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
+			}
 			if (P.Grief > 0.3f) Life += "You are grieving someone you loved. ";
 			if (C.DeathsLately > 2) Life += std::to_string(C.DeathsLately) + " of your people have died lately. ";
 			if (C.SeenDanger > 0.5f) Life += "Dangerous animals are close to camp. ";
@@ -1693,7 +1781,7 @@ public:
 				Deeds = "\"found\" (unite the bands near you under your rule) or \"\"";
 			}
 			static const int WritingSkill = SkillNamed("writing");
-			const bool Writes = Has(C.Known, WritingSkill) && P.AgeYears() >= 12.0;
+			const bool Writes = Has(C.Known, WritingSkill) && P.AgeYears() >= 12.0 && (!Realm || Reads(P));
 			std::vector<std::string>& Past = PastThoughts[P.Id];
 			std::string Before;
 			for (const std::string& T : Past) Before += "\n- \"" + T + "\"";
@@ -1961,6 +2049,7 @@ private:
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
@@ -4772,6 +4861,7 @@ private:
 		P.Alive = false;
 		++Deaths;
 		++DeathsThisYear;
+		++CauseThisYear[static_cast<size_t>(std::clamp(Cause, 0, 4))];
 		const size_t Band = std::min<size_t>(19, static_cast<size_t>(std::max(0.0, P.AgeYears()) / 5.0));
 		WorldDead[Band] += 1.0;
 		if (!Camps.empty())
@@ -5293,7 +5383,7 @@ private:
 		BirthRate = BirthsAtCensus < 0 ? 0.0 : 1000.0 * static_cast<double>(Births - BirthsAtCensus) / Alive; // The first year after a start or a load is partial.
 		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
 		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
-		DeathsThisYear = 0, BirthsAtCensus = Births, WorldDead = AgeBands{};
+		DeathsThisYear = 0, BirthsAtCensus = Births, WorldDead = AgeBands{}, CauseLastYear = CauseThisYear, CauseThisYear = {};
 		for (Polity& S : States)
 		{
 			auto A = StateDead.find(S.Id);
@@ -5880,6 +5970,8 @@ public:
 		for (const Polity& S : States) Farm += S.FarmShare * S.Members, All += S.Members;
 		return All > 0.0 ? static_cast<float>(Farm / All) : 0.0f;
 	}
+	// Last year's deaths by cause: 0 illness or old age, 1 predators, 2 hunger, 3 thirst, 4 injury (war, crime, disaster).
+	int DeathsOf(int Cause) const { return CauseLastYear[static_cast<size_t>(std::clamp(Cause, 0, 4))]; }
 	int CompulsoryStates() const { int N = 0; for (const Polity& S : States) N += S.Compulsory; return N; }
 	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
 	int SecularStates() const { return static_cast<int>(std::count_if(States.begin(), States.end(), [](const Polity& S) { return S.Secular > 0.5f && !S.Faith; })); }
