@@ -726,6 +726,9 @@ static void TestStates()
 	// States know how long their people live and how well.
 	EXPECT(Folk.StatesText().find("  People live ") != std::string::npos);
 	EXPECT(Folk.WorldWelfare() > 0.0 && Folk.WorldWelfare() <= 1.0);
+	// Tongues fall into families, and states that write have scripts.
+	EXPECT(Folk.LanguageFamilies() >= 1 && Folk.LanguageFamilies() <= Folk.Languages());
+	for (const earth::Polity& S : Folk.AllStates()) EXPECT(!S.Script || earth::Knows(S.Known, 33));
 	// Quakes, storms, floods and droughts come every year somewhere.
 	EXPECT(Folk.DisasterCounts()[0] + Folk.DisasterCounts()[2] > 0 && Folk.DisasterDeaths() >= 0);
 	// The yearly census counts how long people live and how many are born and die.
@@ -749,7 +752,7 @@ static void TestStates()
 	bool Bomb = false;
 	for (const earth::EcoEvent& E : Folk.Firsts()) Bomb = Bomb || E.Text.find("builds the first nuclear weapon") != std::string::npos;
 	EXPECT(Folk.NuclearStates() == 0 || Bomb);
-	EXPECT(Folk2.WorldWarsSoFar() == Folk.WorldWarsSoFar()); // What states know is counted afresh, so not compared.
+	EXPECT(Folk2.WorldWarsSoFar() == Folk.WorldWarsSoFar() && Folk2.ScriptsInUse() == Folk.ScriptsInUse()); // What states know is counted afresh, so not compared.
 	EXPECT(Folk2.DisasterCounts() == Folk.DisasterCounts() && Folk2.DisasterDeaths() == Folk.DisasterDeaths());
 	for (size_t i = 0; i < Folk.AllStates().size() && i < Folk2.AllStates().size(); ++i) EXPECT(Folk2.AllStates()[i].Gov == Folk.AllStates()[i].Gov);
 	EXPECT(Folk2.FarmedSquares() == Folk.FarmedSquares() && std::abs(Folk2.AverageWear() - Folk.AverageWear()) < 1e-9);

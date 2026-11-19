@@ -58,6 +58,7 @@ struct Polity
 	float LastPrice = 1.0f;    // Last year's price of food.
 	bool Slavery = false, Abolished = false;
 	uint16_t Discoveries = 0;  // First-ever finds made by its people.
+	uint16_t Script = 0;       // The name of the script it writes in, 0 none.
 
 	// Worked out each year from its bands, not saved.
 	int Bands = 0;
@@ -88,6 +89,7 @@ struct Polity
 		if (Ar.Version >= 26) Ar.Io(Ideology), Ar.Io(Revolutions);
 		if (Ar.Version >= 27) Ar.Io(Coins), Ar.Io(Debt), Ar.Io(LastPrice), Ar.Io(Slavery), Ar.Io(Abolished);
 		if (Ar.Version >= 29) Ar.Io(Discoveries);
+		if (Ar.Version >= 31) Ar.Io(Script);
 	}
 };
 

@@ -19,7 +19,7 @@
 namespace earth
 {
 
-inline constexpr uint32_t kSaveVersion = 30; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders. 5: remembered places. 6: grief and kindness. 7: stored food. 8: other kinds of human. 9: kept herds and crops. 10: when each skill became findable. 11: the sky (orbit ice, disaster winters, blasts). 12: room for 128 skills. 13: colonies beyond Earth. 14: chiefdoms, kingdoms and other states. 15: sicknesses. 16: trade. 17: cities. 18: battles. 19: fuel and CO2. 20: worn soil. 21: schools, libraries and universities. 22: life expectancy. 23: voyages. 24: calendars, festivals, monuments and writings. 25: governments. 26: ideologies and revolutions. 27: money, debt and slavery. 28: natural disasters. 29: discoveries by state. 30: world wars, the bomb, the league and the internet.
+inline constexpr uint32_t kSaveVersion = 31; // 2: inventions and words for things. 3: beliefs. 4: names, trust and leaders. 5: remembered places. 6: grief and kindness. 7: stored food. 8: other kinds of human. 9: kept herds and crops. 10: when each skill became findable. 11: the sky (orbit ice, disaster winters, blasts). 12: room for 128 skills. 13: colonies beyond Earth. 14: chiefdoms, kingdoms and other states. 15: sicknesses. 16: trade. 17: cities. 18: battles. 19: fuel and CO2. 20: worn soil. 21: schools, libraries and universities. 22: life expectancy. 23: voyages. 24: calendars, festivals, monuments and writings. 25: governments. 26: ideologies and revolutions. 27: money, debt and slavery. 28: natural disasters. 29: discoveries by state. 30: world wars, the bomb, the league and the internet. 31: scripts.
 
 class Archive
 {
