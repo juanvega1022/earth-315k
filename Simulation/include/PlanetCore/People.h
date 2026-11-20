@@ -184,6 +184,7 @@ struct Npc
 	uint8_t Kind = 0;         // 0 an NPC (early Homo sapiens); otherwise one of OtherKinds().
 	float OtherShare = 0.0f;  // Share of their ancestry from the other kinds of human.
 	float BabyFatherShare = 0.0f; // The same for the father of the child she carries.
+	uint32_t Spouse = 0;      // Who they are married to; 0 for no one.
 	uint16_t Line = 0;        // Their family line: the name of its founder, passed down from the father (or the mother if he is unknown); 0 for none yet.
 	uint8_t Status = 1;       // Their place in society: 0 enslaved, 1 common, 2 middling (traders, learned), 3 among the rich and powerful.
 
@@ -256,6 +257,7 @@ struct Npc
 		if (Ar.Version >= 8) Ar.Io(Kind), Ar.Io(OtherShare), Ar.Io(BabyFatherShare);
 		if (Ar.Version >= 49) Ar.Io(Status);
 		if (Ar.Version >= 51) Ar.Io(Line);
+		if (Ar.Version >= 52) Ar.Io(Spouse);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -865,6 +867,8 @@ public:
 	}
 	int ProtestsSoFar() const { return Protests; }
 	long long InheritancesSoFar() const { return Inheritances; }
+	long long DivorcesSoFar() const { return Divorces; }
+	double MarriedShareOfAdults() const { return MarriedShare; }
 	// The biggest family line alive: its founder's name and how many belong to it.
 	std::pair<uint16_t, int> BiggestLine() const
 	{
@@ -1109,6 +1113,7 @@ public:
 		if (Ar.Version >= 47) Ar.Io(AnyCompulsory);
 		if (Ar.Version >= 50) Ar.Io(Protests);
 		if (Ar.Version >= 51) Ar.Io(Inheritances);
+		if (Ar.Version >= 52) Ar.Io(Divorces);
 		if (Ar.Version >= 48) Ar.Io(FarmSeen);
 		else if (Ar.IsReading()) FarmSeen = 0x3F; // An old world has long passed these steps; don't announce them all at once.
 		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
@@ -1817,6 +1822,8 @@ public:
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
 				Life += DailyLife(P);
 				if (P.Line) Life += "You belong to the family of " + PersonName(P.Line) + ". ";
+				for (int i : C.Members)
+					if (const Npc& W = Npcs[static_cast<size_t>(i)]; P.Spouse && W.Id == P.Spouse) Life += "You are married to " + PersonName(W.Name) + ". ";
 				if (P.Genes) Life += std::string(P.Genes->Curiosity > 1.0f ? "You are curious and restless by nature. " : P.Genes->Curiosity < 0.4f ? "You like things done the way they always were. " : "") +
 					(P.Genes->Kindness > 0.7f ? "You give freely to others. " : P.Genes->Kindness < 0.3f ? "You keep what is yours. " : "");
 				if (const int V = ViewOf(P); Realm && P.AgeYears() >= 18.0) Life += V ? "You hold with " + std::string(IdeologyName(V)) + ". " : std::string(Has(Realm->Known, SkillNamed("printing")) ? "You hold to the old ways. " : "");
@@ -2119,6 +2126,8 @@ private:
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
 	int Protests = 0;      // Mass protests so far.
 	long long Inheritances = 0; // Heirs who took up a parent's station.
+	long long Divorces = 0;
+	double MarriedShare = 0.0;  // Of grown people, at the last census; not saved.
 	int RisesLastYear = 0; // People who rose in station last year; not saved.
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
@@ -3284,7 +3293,7 @@ private:
 			if (!Q.Female && Fertile(Q) && (P.Mother == 0 || Q.Mother != P.Mother) && Q.Mother != P.Id)
 			{
 				// Couples tend to stay together: the father of her last child comes first if he's still here.
-				const double Score = R.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0) -
+				const double Score = R.Uniform() + 0.5 * P.TrustIn(Q.Id) + 0.1 * std::min(Q.Reputation, 3.0f) + (Q.Id == P.BabyFather ? 0.7 : 0.0) + (Q.Id == P.Spouse ? 3.0 : 0.0) -
 					(Q.Kind != P.Kind ? 0.8 : 0.0); // Seldom someone of another kind of human.
 				if (Mate < 0 || Score > Best)
 				{
@@ -3301,6 +3310,7 @@ private:
 		P.Feel(Npcs[Mate].Id, 0.2f);
 		Npcs[Mate].Feel(P.Id, 0.2f);
 		P.PregnantDays = 0.0;
+		if (!P.Spouse && !Npcs[Mate].Spouse) P.Spouse = Npcs[Mate].Id, Npcs[Mate].Spouse = P.Id; // They marry.
 		P.BabyFather = Npcs[Mate].Id;
 		P.BabyFatherGenes = Npcs[Mate].Genes;
 		P.BabyFatherShare = Npcs[Mate].OtherShare;
@@ -5523,6 +5533,24 @@ private:
 	void Stations()
 	{
 		RisesLastYear = 0;
+		// Widows and widowers; and, where women have the vote, some marriages end in divorce.
+		std::unordered_map<uint32_t, size_t> Where;
+		for (size_t i = 0; i < Npcs.size(); ++i) Where[Npcs[i].Id] = i;
+		long long Grown = 0, Wed = 0;
+		for (Npc& P : Npcs)
+		{
+			if (P.AgeYears() >= 18.0) ++Grown;
+			if (!P.Spouse) continue;
+			auto It = Where.find(P.Spouse);
+			if (It == Where.end()) { P.Spouse = 0; continue; }
+			Npc& Q = Npcs[It->second];
+			if (Q.Spouse != P.Id) { P.Spouse = 0; continue; }
+			const Camp& C = Camps[CampSlot(P.Camp)];
+			const Polity* S = C.State ? StateById(C.State) : nullptr;
+			if (P.Female && S && S->Rights >= 3 && S->Secular > 0.3f && Dice.Chance(0.01)) { P.Spouse = Q.Spouse = 0, ++Divorces; continue; }
+			if (P.AgeYears() >= 18.0) ++Wed;
+		}
+		MarriedShare = Grown ? static_cast<double>(Wed) / static_cast<double>(Grown) : 0.0;
 		for (Npc& P : Npcs)
 		{
 			const Camp& C = Camps[CampSlot(P.Camp)];

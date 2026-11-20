@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include <numeric>
 #include <array>
 // Tests for the NPCs on a small synthetic planet: a block of land around East Africa.
@@ -777,6 +778,12 @@ static void TestStates()
 		EXPECT(Folk.ProtestsSoFar() >= 0);
 		EXPECT(Folk.InheritancesSoFar() >= 0 && Folk.BiggestLine().second <= Folk.Alive());
 		EXPECT(Folk.BiggestLine().second > 0); // Children born here belong to a family line.
+		// Marriages: both partners name each other, and some grown people are married.
+		std::unordered_map<uint32_t, uint32_t> Wed;
+		for (const earth::Npc& P : Folk.All()) Wed[P.Id] = P.Spouse;
+		for (const auto& [Id, Spouse] : Wed)
+			if (Spouse && Wed.count(Spouse)) EXPECT(Wed[Spouse] == Id || Wed[Spouse] == 0);
+		EXPECT(Folk.MarriedShareOfAdults() > 0.0 && Folk.MarriedShareOfAdults() <= 1.0);
 		EXPECT(Folk.MeanAdultHeight() > 140.0 && Folk.MeanAdultHeight() < 185.0);
 		EXPECT(Folk.VaccinatedShare() >= 0.0 && Folk.VaccinatedShare() <= 1.0);
 		for (const earth::Npc& P : Folk.All()) EXPECT(Folk.DailyLife(P).find("You live in ") == 0);
