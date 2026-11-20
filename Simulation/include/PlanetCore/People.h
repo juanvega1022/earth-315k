@@ -184,6 +184,7 @@ struct Npc
 	uint8_t Kind = 0;         // 0 an NPC (early Homo sapiens); otherwise one of OtherKinds().
 	float OtherShare = 0.0f;  // Share of their ancestry from the other kinds of human.
 	float BabyFatherShare = 0.0f; // The same for the father of the child she carries.
+	uint16_t Line = 0;        // Their family line: the name of its founder, passed down from the father (or the mother if he is unknown); 0 for none yet.
 	uint8_t Status = 1;       // Their place in society: 0 enslaved, 1 common, 2 middling (traders, learned), 3 among the rich and powerful.
 
 	float TrustIn(uint32_t Other) const
@@ -254,6 +255,7 @@ struct Npc
 		if (Ar.Version >= 6) Ar.Io(Grief);
 		if (Ar.Version >= 8) Ar.Io(Kind), Ar.Io(OtherShare), Ar.Io(BabyFatherShare);
 		if (Ar.Version >= 49) Ar.Io(Status);
+		if (Ar.Version >= 51) Ar.Io(Line);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -862,6 +864,18 @@ public:
 		return N;
 	}
 	int ProtestsSoFar() const { return Protests; }
+	long long InheritancesSoFar() const { return Inheritances; }
+	// The biggest family line alive: its founder's name and how many belong to it.
+	std::pair<uint16_t, int> BiggestLine() const
+	{
+		std::unordered_map<uint16_t, int> N;
+		for (const Npc& P : Npcs)
+			if (P.Line) ++N[P.Line];
+		std::pair<uint16_t, int> Best{0, 0};
+		for (const auto& [Line, Count] : N)
+			if (Count > Best.second || (Count == Best.second && Line < Best.first)) Best = {Line, Count};
+		return Best;
+	}
 	// Whether they can read: about the state's literacy, though fewer women before girls go to school.
 	bool Reads(const Npc& P) const
 	{
@@ -1094,6 +1108,7 @@ public:
 		if (Ar.Version >= 45) Ar.Io(Executions), Ar.Io(AnyAbolishedDeath), Ar.Io(WorldCourt);
 		if (Ar.Version >= 47) Ar.Io(AnyCompulsory);
 		if (Ar.Version >= 50) Ar.Io(Protests);
+		if (Ar.Version >= 51) Ar.Io(Inheritances);
 		if (Ar.Version >= 48) Ar.Io(FarmSeen);
 		else if (Ar.IsReading()) FarmSeen = 0x3F; // An old world has long passed these steps; don't announce them all at once.
 		if (Ar.Version >= 46) Ar.Io(HolyWars), Ar.Io(Conversions), Ar.Io(Reformations), Ar.Io(Persecuted), Ar.Io(AnyTolerance);
@@ -1801,6 +1816,7 @@ public:
 				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
 				Life += DailyLife(P);
+				if (P.Line) Life += "You belong to the family of " + PersonName(P.Line) + ". ";
 				if (P.Genes) Life += std::string(P.Genes->Curiosity > 1.0f ? "You are curious and restless by nature. " : P.Genes->Curiosity < 0.4f ? "You like things done the way they always were. " : "") +
 					(P.Genes->Kindness > 0.7f ? "You give freely to others. " : P.Genes->Kindness < 0.3f ? "You keep what is yours. " : "");
 				if (const int V = ViewOf(P); Realm && P.AgeYears() >= 18.0) Life += V ? "You hold with " + std::string(IdeologyName(V)) + ". " : std::string(Has(Realm->Known, SkillNamed("printing")) ? "You hold to the old ways. " : "");
@@ -2102,6 +2118,7 @@ private:
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
 	int Protests = 0;      // Mass protests so far.
+	long long Inheritances = 0; // Heirs who took up a parent's station.
 	int RisesLastYear = 0; // People who rose in station last year; not saved.
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
@@ -4763,7 +4780,11 @@ private:
 					FatherGeneration = Father->Generation;
 				}
 				Baby.Generation = std::max(P.Generation, FatherGeneration) + 1;
-				Baby.Status = P.Status == 3 ? 3 : P.Status; // Born into the mother's station.
+				Baby.Status = P.Status; // Born into the mother's station.
+				Baby.Line = P.Line ? P.Line : P.Name;
+				for (int i : Camps[CampSlot(P.Camp)].Members) // The father's line, if he lives in her band.
+					if (const Npc& F = Npcs[static_cast<size_t>(i)]; F.Id == P.BabyFather)
+						Baby.Line = F.Line ? F.Line : F.Name, Baby.Status = std::max(Baby.Status, F.Status);
 				P.PregnantDays = -1.0;
 				P.LastBirthDay = Eco->Day();
 				P.BabyFatherGenes.reset();
@@ -4991,6 +5012,13 @@ private:
 		WorldDead[Band] += 1.0;
 		if (!Camps.empty())
 			if (const uint32_t St = Camps[CampSlot(P.Camp)].State) StateDead[St][Band] += 1.0;
+		if (!Camps.empty() && P.Status >= 2) // Inheritance: the eldest child in the band takes up what they leave.
+		{
+			Npc* Heir = nullptr;
+			for (int i : Camps[CampSlot(P.Camp)].Members)
+				if (Npc& Q = Npcs[static_cast<size_t>(i)]; Q.Alive && (Q.Mother == P.Id || Q.Father == P.Id) && (!Heir || Q.AgeDays > Heir->AgeDays)) Heir = &Q;
+			if (Heir && Heir->Status < P.Status) Heir->Status = P.Status, ++Inheritances;
+		}
 		if (!Camps.empty())
 		{
 			Camp& C = Camps[CampSlot(P.Camp)];
