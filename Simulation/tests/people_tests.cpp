@@ -775,6 +775,8 @@ static void TestStates()
 			EXPECT(std::accumulate(Votes.begin(), Votes.end(), 0) <= std::accumulate(V.begin(), V.end(), 0) && std::accumulate(V.begin(), V.end(), 0) <= S.Members);
 		}
 		EXPECT(Folk.ProtestsSoFar() >= 0);
+		EXPECT(Folk.InheritancesSoFar() >= 0 && Folk.BiggestLine().second <= Folk.Alive());
+		EXPECT(Folk.BiggestLine().second > 0); // Children born here belong to a family line.
 		EXPECT(Folk.MeanAdultHeight() > 140.0 && Folk.MeanAdultHeight() < 185.0);
 		EXPECT(Folk.VaccinatedShare() >= 0.0 && Folk.VaccinatedShare() <= 1.0);
 		for (const earth::Npc& P : Folk.All()) EXPECT(Folk.DailyLife(P).find("You live in ") == 0);
