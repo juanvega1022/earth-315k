@@ -198,6 +198,7 @@ static void TestBrainJson()
 	EXPECT(Moved && J.find("\"neuromodulators\"") != std::string::npos);
 	EXPECT(earth::People::AgeGain(5.0) > earth::People::AgeGain(30.0) && earth::People::AgeGain(30.0) > earth::People::AgeGain(80.0) && J.find("\"plasticity\"") != std::string::npos);
 	EXPECT(J.find("\"episodes\"") != std::string::npos && J.find("\"working_memory_span\"") != std::string::npos);
+	EXPECT(J.find("\"health\"") != std::string::npos && J.find("\"genetics\"") != std::string::npos);
 	EXPECT(J.find("\"anatomy\"") != std::string::npos && J.find("\"neuron_regions\"") != std::string::npos);
 	for (int h = 0; h < P.BrainSize(); ++h) EXPECT(earth::People::RegionOfNeuron(*P.Genes, h) >= 0 && earth::People::RegionOfNeuron(*P.Genes, h) < earth::People::kRegions);
 }
@@ -944,19 +945,24 @@ static void TestDiseases()
 	earth::People Folk(&Eco, 8, Settings);
 	for (int i = 0; i < 13; ++i) Eco.Step(28), Folk.Step(28);
 	EXPECT(Folk.BandCount() >= 3);
-	const long long DeadBefore = Folk.TotalDeaths();
-	// Start it in the band with the most others close by.
+	// Start it in the band with the most others close by (waiting, if need be, until two bands are near each other).
 	size_t Start = 0;
 	int Most = -1;
-	const auto& All = Folk.AllCamps();
-	for (size_t a = 0; a < All.size(); ++a)
+	for (int Wait = 0; Wait < 60 && Most <= 0; ++Wait)
 	{
-		int Near = 0;
-		for (size_t b = 0; b < All.size(); ++b)
-			Near += a != b && std::abs(All[a].Lat - All[b].Lat) < 0.6 && std::abs(All[a].Lon - All[b].Lon) < 0.6;
-		if (Near > Most) Most = Near, Start = a;
+		if (Wait) Eco.Step(28), Folk.Step(28);
+		Most = -1;
+		const auto& All = Folk.AllCamps();
+		for (size_t a = 0; a < All.size(); ++a)
+		{
+			int Near = 0;
+			for (size_t b = 0; b < All.size(); ++b)
+				Near += a != b && std::abs(All[a].Lat - All[b].Lat) < 0.6 && std::abs(All[a].Lon - All[b].Lon) < 0.6;
+			if (Near > Most) Most = Near, Start = a;
+		}
 	}
 	EXPECT(Most > 0);
+	const long long DeadBefore = Folk.TotalDeaths();
 	const uint16_t Id = Folk.StartDisease(Start, -1, 0.3f, 2.0f, 120);
 	int MostSick = 0;
 	for (int i = 0; i < 26; ++i)
