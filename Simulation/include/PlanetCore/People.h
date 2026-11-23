@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -164,6 +165,7 @@ struct Npc
 	std::array<float, kBrainActions> LastChoice{}; // Probability of each action.
 	int LastAction = static_cast<int>(Action::Rest);
 	std::array<int, kBrainActions> ActionCounts{};
+	float LastRpe = 0.0f; // Reward prediction error of the last lesson (like a dopamine burst or dip); not saved.
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
 	SkillEffects Own;
@@ -1468,8 +1470,185 @@ public:
 		J += "]";
 		J += ",\"action_counts\":[";
 		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + std::to_string(P.ActionCounts[a]);
-		J += "]}";
+		J += "],\"lab\":" + BrainLabJson(P) + "}";
 		return J;
+	}
+
+	// ---- Brain lab: experiments on a real NPC's brain, for study ----------------------------
+
+	// What the brain would choose in one situation: the chance of each action. One hidden neuron can be
+	// clamped to a value (0 silences it, as a lesion; 1 drives it, as stimulation). Mirrors Decide.
+	static std::array<float, kBrainActions> Respond(const Npc& P, const std::array<float, kBrainInputs>& In, int Neuron = -1, float Value = 0.0f, std::vector<float>* HiddenOut = nullptr)
+	{
+		const Genome& G = *P.Genes;
+		std::vector<float> Hid(static_cast<size_t>(G.Hidden()));
+		for (int h = 0; h < G.Hidden(); ++h)
+		{
+			float Sum = G.B1[h];
+			for (int i = 0; i < kBrainInputs; ++i) Sum += In[i] * G.W1[static_cast<size_t>(h) * kBrainInputs + i];
+			Hid[h] = h == Neuron ? Value : std::tanh(Sum);
+		}
+		std::array<float, kBrainActions> Out{};
+		float Top = -1e9f, Total = 0.0f;
+		for (int a = 0; a < kBrainActions; ++a)
+		{
+			float Sum = OutputBias(P, a);
+			for (int h = 0; h < G.Hidden(); ++h) Sum += Hid[h] * OutputWeight(P, h, a);
+			Out[a] = Sum / G.Curiosity;
+			Top = std::max(Top, Out[a]);
+		}
+		for (float& O : Out) Total += (O = std::exp(O - Top));
+		const float Random = 0.04f * G.Curiosity;
+		for (float& O : Out) O = (1.0f - Random) * O / Total + Random / kBrainActions;
+		if (HiddenOut) *HiddenOut = Hid;
+		return Out;
+	}
+
+	// The standard situations every brain is tested in: a calm day, then one need or lack pushed to the limit.
+	std::vector<std::pair<std::string, std::array<float, kBrainInputs>>> BrainSituations(const Npc& P) const
+	{
+		std::array<float, kBrainInputs> Calm = {0.3f, 0.3f, 0.3f, 0.0f, 0.2f, 0.2f, 0.5f, 0.3f, 0.5f, 0.7f,
+			static_cast<float>(std::clamp(P.AgeYears() / 70.0, 0.0, 1.0)), P.Health, std::clamp(static_cast<float>(P.BandSize) / 30.0f, 0.0f, 1.0f), 0.2f, P.HuntSkill, 1.0f};
+		std::vector<std::pair<std::string, std::array<float, kBrainInputs>>> L = {{"calm", Calm}};
+		const std::pair<const char*, int> Pushed[] = {{"starving", 0}, {"parched", 1}, {"exhausted", 2}, {"terrified", 3}, {"lonely", 4}, {"wants a mate", 5}};
+		for (const auto& [Name, i] : Pushed) { auto In = Calm; In[i] = 0.95f; L.emplace_back(Name, In); }
+		auto Bare = Calm; Bare[6] = Bare[7] = 0.0f; L.emplace_back("no food around", Bare);
+		auto Winter = Calm; Winter[9] = 0.0f; L.emplace_back("deep winter", Winter);
+		L.emplace_back("last real day", P.LastInputs);
+		return L;
+	}
+
+	// How far apart two choices are: half the summed change in chances (0 the same, 1 completely different).
+	static float ChoiceShift(const std::array<float, kBrainActions>& A, const std::array<float, kBrainActions>& B)
+	{
+		float D = 0.0f;
+		for (int a = 0; a < kBrainActions; ++a) D += std::abs(A[a] - B[a]);
+		return 0.5f * D;
+	}
+
+	// Each neuron's role (what drives it, what it drives), the brain's answers to the standard situations,
+	// lesion and stimulation of every neuron and every sense, and tuning curves for every sense.
+	std::string BrainLabJson(const Npc& P) const
+	{
+		const int H = P.BrainSize();
+		const Genome& G = *P.Genes;
+		const auto Sits = BrainSituations(P);
+		std::vector<std::array<float, kBrainActions>> Base;
+		for (const auto& S : Sits) Base.push_back(Respond(P, S.second));
+		auto Probs = [](const std::array<float, kBrainActions>& A) { return Matrix(A.data(), 1, kBrainActions); };
+		std::string J = "{\"note\":\"Tests run on a copy of this brain in fixed situations. Chances are of each action; shift is how much a change moves the choice (0 none, 1 completely).\"";
+		J += ",\"reward_prediction_error_last\":" + Num(P.LastRpe) + ",\"reward_baseline\":" + Num(P.RewardBaseline) + ",\"wellbeing\":" + Num(P.Wellbeing);
+		double Inborn = 0.0, Learned = 0.0;
+		for (size_t k = 0; k < G.W2.size(); ++k) Inborn += std::abs(G.W2[k]), Learned += std::abs(P.LearnedW2[k]);
+		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
+		J += ",\"situations\":[";
+		for (size_t s = 0; s < Sits.size(); ++s) J += std::string(s ? "," : "") + "{\"name\":\"" + Sits[s].first + "\",\"inputs\":" + Matrix(Sits[s].second.data(), 1, kBrainInputs) + ",\"chances\":" + Probs(Base[s]) + "}";
+		J += "],\"neurons\":[";
+		for (int h = 0; h < H; ++h)
+		{
+			std::array<int, kBrainInputs> Order{};
+			std::iota(Order.begin(), Order.end(), 0);
+			const float* W = &G.W1[static_cast<size_t>(h) * kBrainInputs];
+			std::sort(Order.begin(), Order.end(), [W](int A, int B) { return std::abs(W[A]) > std::abs(W[B]); });
+			int Up = 0, Down = 0;
+			for (int a = 1; a < kBrainActions; ++a)
+			{
+				if (OutputWeight(P, h, a) > OutputWeight(P, h, Up)) Up = a;
+				if (OutputWeight(P, h, a) < OutputWeight(P, h, Down)) Down = a;
+			}
+			float Lesion = 0.0f, Stim = 0.0f;
+			for (size_t s = 0; s < Sits.size(); ++s)
+				Lesion += ChoiceShift(Base[s], Respond(P, Sits[s].second, h, 0.0f)) / Sits.size(), Stim += ChoiceShift(Base[s], Respond(P, Sits[s].second, h, 1.0f)) / Sits.size();
+			J += std::string(h ? "," : "") + "{\"neuron\":" + std::to_string(h) + ",\"top_inputs\":[";
+			for (int k = 0; k < 3; ++k) J += std::string(k ? "," : "") + "[\"" + InputName(Order[k]) + "\"," + Num(W[Order[k]]) + "]";
+			J += "],\"drives\":[\"" + std::string(ActionName(Up)) + "\"," + Num(OutputWeight(P, h, Up)) + "],\"suppresses\":[\"" + ActionName(Down) + "\"," + Num(OutputWeight(P, h, Down)) + "]";
+			J += ",\"activation_last\":" + Num(P.LastHidden[h]) + ",\"lesion_shift\":" + Num(Lesion) + ",\"stimulation_shift\":" + Num(Stim);
+			J += ",\"lesioned_chances\":" + Probs(Respond(P, Sits[0].second, h, 0.0f)) + ",\"stimulated_chances\":" + Probs(Respond(P, Sits[0].second, h, 1.0f)) + "}";
+		}
+		J += "],\"senses\":[";
+		for (int i = 0; i < kBrainInputs; ++i)
+		{
+			float Deaf = 0.0f;
+			for (size_t s = 0; s < Sits.size(); ++s) { auto In = Sits[s].second; In[i] = 0.0f; Deaf += ChoiceShift(Base[s], Respond(P, In)) / Sits.size(); }
+			J += std::string(i ? "," : "") + "{\"sense\":\"" + InputName(i) + "\",\"cut_shift\":" + Num(Deaf) + ",\"tuning\":[";
+			for (int v = 0; v <= 4; ++v) { auto In = Sits[0].second; In[i] = 0.25f * v; J += std::string(v ? "," : "") + Probs(Respond(P, In)); }
+			J += "]}";
+		}
+		J += "],\"tuning_levels\":[0,0.25,0.5,0.75,1]}";
+		return J;
+	}
+
+	// The people whose brains are recorded day by day, like electrodes left in: the youngest, a grown
+	// adult, the oldest and the biggest brain when recording began; each is followed until they die.
+	static constexpr int kWatched = 4;
+	static constexpr size_t kTraceLength = 300;
+	std::string BrainTracesJson() const
+	{
+		static const char* Roles[kWatched] = {"youngest", "adult", "elder", "biggest brain"};
+		std::string J = "{\"sim_year\":" + Num(Eco->Years()) + ",\"inputs\":[";
+		for (int i = 0; i < kBrainInputs; ++i) J += std::string(i ? "," : "") + "\"" + InputName(i) + "\"";
+		J += "],\"actions\":[";
+		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + "\"" + ActionName(a) + "\"";
+		J += "],\"people\":[";
+		bool First = true;
+		for (int w = 0; w < kWatched; ++w)
+		{
+			const auto T = Traces.find(Watched[w]);
+			if (!Watched[w] || T == Traces.end()) continue;
+			const Npc* P = Find(Watched[w]);
+			J += std::string(First ? "" : ",") + "{\"role\":\"" + Roles[w] + "\",\"id\":" + std::to_string(Watched[w]) + ",\"alive\":" + (P ? "true" : "false");
+			if (P) J += ",\"age_years\":" + Num(P->AgeYears()) + ",\"hidden_neurons\":" + std::to_string(P->BrainSize());
+			J += ",\"steps\":[";
+			for (size_t k = 0; k < T->second.Steps.size(); ++k)
+			{
+				const BrainStep& S = T->second.Steps[k];
+				J += std::string(k ? "," : "") + "{\"day\":" + Num(S.Day) + ",\"days\":" + std::to_string(S.Days) + ",\"in\":" + Matrix(S.In.data(), 1, kBrainInputs) +
+					",\"hidden\":" + Matrix(S.Hidden.data(), 1, static_cast<int>(S.Hidden.size())) + ",\"chances\":" + Matrix(S.Chances.data(), 1, kBrainActions) +
+					",\"action\":\"" + ActionName(S.Action) + "\",\"rpe\":" + Num(S.Rpe) + ",\"wellbeing\":" + Num(S.Wellbeing) + "}";
+			}
+			J += "],\"life\":[";
+			for (size_t k = 0; k < T->second.Life.size(); ++k)
+			{
+				const BrainYear& Y = T->second.Life[k];
+				J += std::string(k ? "," : "") + "{\"sim_year\":" + Num(Y.Year) + ",\"age_years\":" + Num(Y.Age) + ",\"learned_weight_size\":" + Num(Y.Learned) +
+					",\"learned_change_since_last\":" + Num(Y.Change) + ",\"mean_abs_rpe\":" + Num(Y.MeanRpe) + ",\"wellbeing\":" + Num(Y.Wellbeing) + ",\"top_action\":\"" + ActionName(Y.TopAction) + "\"}";
+			}
+			J += "]}";
+			First = false;
+		}
+		return J + "]}";
+	}
+
+	// Brain statistics by kind of human, one CSV row each.
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe\n"; }
+	std::string BrainStatsRows(int Year) const
+	{
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0; };
+		std::vector<Sum> By(OtherKinds().size());
+		for (const Npc& P : Npcs)
+		{
+			Sum& S = By[P.Kind];
+			const Genome& G = *P.Genes;
+			int Small = 0;
+			for (float W : G.W1) Small += std::abs(W) < 0.1f;
+			double E = 0.0, In = 0.0, Le = 0.0;
+			for (float C : P.LastChoice) if (C > 0.0f) E -= C * std::log2(C);
+			for (size_t k = 0; k < G.W2.size(); ++k) In += std::abs(G.W2[k]), Le += std::abs(P.LearnedW2[k]);
+			++S.N, S.Max = std::max(S.Max, P.BrainSize()), S.Neurons += P.BrainSize(), S.Sparse += static_cast<double>(Small) / std::max<size_t>(1, G.W1.size()), S.Entropy += E;
+			S.Rate += G.LearningRate, S.Cur += G.Curiosity, S.Imit += G.Imitation, S.Kind += G.Kindness, S.Learned += Le / std::max(1e-9, In + Le), S.Rpe += std::abs(P.LastRpe);
+		}
+		std::string Out;
+		for (size_t k = 0; k < By.size(); ++k)
+		{
+			const Sum& S = By[k];
+			if (!S.N) continue;
+			const double N = S.N;
+			char Line[320];
+			std::snprintf(Line, sizeof(Line), "%d,%s,%d,%.2f,%d,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.4f\n", Year, OtherKinds()[k].Name, S.N, S.Neurons / N, S.Max, S.Sparse / N,
+				S.Entropy / N, S.Rate / N, S.Cur / N, S.Imit / N, S.Kind / N, S.Learned / N, S.Rpe / N);
+			Out += Line;
+		}
+		return Out;
 	}
 
 	// ---- Simulation -------------------------------------------------------------------------
@@ -1547,6 +1726,7 @@ public:
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 			Imitate(i);
 		}
+		RecordBrains(1);
 
 		LearnSkills(1);
 		Invent(1);
@@ -1720,6 +1900,7 @@ public:
 			P.Pleasure = 0.0f;
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 		});
+		RecordBrains(Days);
 		StoreFood(Carer, Spare, Days);
 		// Courting and copying stay within a band, so bands take their turns side by side, each with
 		// its own dice.
@@ -2143,6 +2324,59 @@ private:
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	std::unordered_map<uint32_t, double> SchoolsPerHead; // Each state's schools per member at the last tally; not saved.
+	// Brain recordings of the watched people (see BrainTracesJson); not saved, so they start again when a run resumes.
+	struct BrainStep { double Day = 0.0; int Days = 1; std::array<float, kBrainInputs> In{}; std::vector<float> Hidden; std::array<float, kBrainActions> Chances{}; int Action = 0; float Rpe = 0.0f, Wellbeing = 0.0f; };
+	struct BrainYear { double Year = 0.0, Age = 0.0, Learned = 0.0, Change = 0.0, MeanRpe = 0.0, Wellbeing = 0.0; int TopAction = 0; };
+	struct BrainRecord { std::deque<BrainStep> Steps; std::vector<BrainYear> Life; std::vector<float> LastLearned; double RpeSum = 0.0; int RpeCount = 0; std::array<int, kBrainActions> Done{}; };
+	std::array<uint32_t, 4> Watched{};
+	std::unordered_map<uint32_t, BrainRecord> Traces;
+	int TracedYear = -1;
+
+	// After each day's (or step's) lessons: picks who to watch if one is missing, and records their brains.
+	void RecordBrains(int Days)
+	{
+		if (Npcs.empty()) return;
+		for (int w = 0; w < kWatched; ++w)
+		{
+			if (Watched[w] && Find(Watched[w])) continue;
+			const Npc* Pick = nullptr;
+			for (const Npc& P : Npcs)
+			{
+				if (std::find(Watched.begin(), Watched.end(), P.Id) != Watched.end()) continue;
+				const bool Better = !Pick || (w == 0 ? P.AgeDays < Pick->AgeDays : w == 1 ? std::abs(P.AgeYears() - 30.0) < std::abs(Pick->AgeYears() - 30.0) :
+					w == 2 ? P.AgeDays > Pick->AgeDays : P.BrainSize() > Pick->BrainSize());
+				if (Better) Pick = &P;
+			}
+			if (!Pick) continue;
+			if (Watched[w]) Traces.erase(Watched[w]); // Keep the dead one's record only until someone takes their place.
+			Watched[w] = Pick->Id;
+		}
+		const int Year = static_cast<int>(Eco->Years());
+		const bool NewYear = Year != TracedYear;
+		TracedYear = Year;
+		for (uint32_t Id : Watched)
+		{
+			const Npc* P = Id ? Find(Id) : nullptr;
+			if (!P) continue;
+			BrainRecord& R = Traces[Id];
+			BrainStep S;
+			S.Day = Eco->Day(), S.Days = Days, S.In = P->LastInputs, S.Hidden = P->LastHidden, S.Chances = P->LastChoice, S.Action = P->LastAction, S.Rpe = P->LastRpe, S.Wellbeing = P->Wellbeing;
+			R.Steps.push_back(std::move(S));
+			if (R.Steps.size() > kTraceLength) R.Steps.pop_front();
+			R.RpeSum += std::abs(P->LastRpe), ++R.RpeCount, ++R.Done[P->LastAction];
+			if (!NewYear) continue;
+			BrainYear Y;
+			Y.Year = Eco->Years(), Y.Age = P->AgeYears(), Y.Wellbeing = P->Wellbeing, Y.MeanRpe = R.RpeSum / std::max(1, R.RpeCount);
+			for (size_t k = 0; k < P->LearnedW2.size(); ++k)
+			{
+				Y.Learned += std::abs(P->LearnedW2[k]);
+				if (k < R.LastLearned.size()) Y.Change += std::abs(P->LearnedW2[k] - R.LastLearned[k]);
+			}
+			Y.TopAction = static_cast<int>(std::max_element(R.Done.begin(), R.Done.end()) - R.Done.begin());
+			R.Life.push_back(Y);
+			R.LastLearned = P->LearnedW2, R.RpeSum = 0.0, R.RpeCount = 0, R.Done = {};
+		}
+	}
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -4718,6 +4952,7 @@ private:
 	static void Learn(Npc& P, int Chosen, float Reward)
 	{
 		const float Advantage = Reward - P.RewardBaseline;
+		P.LastRpe = Advantage;
 		P.RewardBaseline = P.RewardBaseline * 0.95f + Reward * 0.05f;
 		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity;
 		for (int a = 0; a < kBrainActions; ++a)

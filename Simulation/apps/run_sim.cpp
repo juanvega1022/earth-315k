@@ -448,6 +448,17 @@ int main(int Argc, char** Argv)
 			Csv << ',' << Folk.StatesRuledBy(earth::Chieftain) << ',' << Folk.StatesRuledBy(earth::Monarchy) << ',' << Folk.StationShare(0) << ',' << Folk.StationShare(2) << ',' << Folk.StationShare(3) << ',' << Folk.RisesInStation() << ',' << Folk.ProtestsSoFar() << ',' << Folk.MeanAdultHeight() << ',' << Folk.VaccinatedShare() << ',' << Folk.InheritancesSoFar() << ',' << Folk.BiggestLine().second << ',' << Folk.MarriedShareOfAdults() << ',' << Folk.DivorcesSoFar() << ',' << Jobs[earth::People::JobStudent] << ',' << Jobs[earth::People::JobRetired] << '\n';
 			Csv.flush();
 		}
+		// The brain lab, every 10 years: the two brains with their experiments, the watched people's recordings, and brain statistics.
+		if (!BrainPath.empty() && Folk.Alive() > 0 && Lived % 10 == 0)
+		{
+			SaveBrain(Folk, BrainPath);
+			std::ofstream(FolderOf(BrainPath) + "brain_traces.json") << Folk.BrainTracesJson() << '\n';
+			const std::string Stats = FolderOf(BrainPath) + "brain_stats.csv";
+			const bool Fresh = !FileExists(Stats);
+			std::ofstream Out(Stats, std::ios::app);
+			if (Fresh) Out << earth::People::BrainStatsHeader();
+			Out << Folk.BrainStatsRows(Y);
+		}
 		if (!StatesJs.empty() && Folk.PolityCount() > 0 && Lived % 10 == 0)
 		{
 			AppendStatesFrame(StatesJs, Eco, Folk, Y, StateEventsDone);

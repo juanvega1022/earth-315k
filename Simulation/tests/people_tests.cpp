@@ -179,6 +179,15 @@ static void TestBrainJson()
 	EXPECT(J.find("\"w2_learned\"") != std::string::npos);
 	EXPECT(J.find("\"Hunger\"") != std::string::npos);
 	EXPECT(J.find("nan") == std::string::npos);
+	// The brain lab: the copy answers like the real brain, a lesion is recorded, and the watched people are traced.
+	const earth::Npc& P = W.Folk.All()[0];
+	std::vector<float> Hid;
+	earth::People::Respond(P, P.LastInputs, -1, 0.0f, &Hid); // The inborn layer doesn't learn, so the copy's matches the last real day's.
+	for (size_t h = 0; h < Hid.size(); ++h) EXPECT(std::abs(Hid[h] - P.LastHidden[h]) < 1e-5f);
+	EXPECT(J.find("\"lesion_shift\"") != std::string::npos && J.find("\"tuning\"") != std::string::npos);
+	const std::string T = W.Folk.BrainTracesJson();
+	EXPECT(T.find("\"role\":\"elder\"") != std::string::npos && T.find("\"rpe\"") != std::string::npos && T.find("nan") == std::string::npos);
+	EXPECT(W.Folk.BrainStatsRows(1).rfind("1,NPC,", 0) == 0);
 }
 
 // When everyone dies, a new band arrives and the run goes on.
