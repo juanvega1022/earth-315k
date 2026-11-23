@@ -166,6 +166,11 @@ struct Npc
 	int LastAction = static_cast<int>(Action::Rest);
 	std::array<int, kBrainActions> ActionCounts{};
 	float LastRpe = 0.0f; // Reward prediction error of the last lesson (like a dopamine burst or dip); not saved.
+	// Neuromodulators, 0..1 with 0.5 as the resting level, where they change nothing (see Modulate):
+	// dopamine (tonic, the running sense of how much better things are going than expected) drives effort and learning;
+	// serotonin (mood, slow) brings patience and generosity; cortisol (stress) makes for hiding and blunts learning;
+	// noradrenaline (arousal, fast) sharpens choices; oxytocin (bonding) draws people to share and seek company.
+	float Dopamine = 0.5f, Serotonin = 0.5f, Cortisol = 0.5f, Noradrenaline = 0.5f, Oxytocin = 0.5f;
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
 	SkillEffects Own;
@@ -260,6 +265,7 @@ struct Npc
 		if (Ar.Version >= 49) Ar.Io(Status);
 		if (Ar.Version >= 51) Ar.Io(Line);
 		if (Ar.Version >= 52) Ar.Io(Spouse);
+		if (Ar.Version >= 53) Ar.Io(Dopamine), Ar.Io(Serotonin), Ar.Io(Cortisol), Ar.Io(Noradrenaline), Ar.Io(Oxytocin);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -1492,9 +1498,9 @@ public:
 		float Top = -1e9f, Total = 0.0f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a);
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a);
 			for (int h = 0; h < G.Hidden(); ++h) Sum += Hid[h] * OutputWeight(P, h, a);
-			Out[a] = Sum / G.Curiosity;
+			Out[a] = Sum / (G.Curiosity * ArousalTemperature(P));
 			Top = std::max(Top, Out[a]);
 		}
 		for (float& O : Out) Total += (O = std::exp(O - Top));
@@ -1538,6 +1544,11 @@ public:
 		auto Probs = [](const std::array<float, kBrainActions>& A) { return Matrix(A.data(), 1, kBrainActions); };
 		std::string J = "{\"note\":\"Tests run on a copy of this brain in fixed situations. Chances are of each action; shift is how much a change moves the choice (0 none, 1 completely).\"";
 		J += ",\"reward_prediction_error_last\":" + Num(P.LastRpe) + ",\"reward_baseline\":" + Num(P.RewardBaseline) + ",\"wellbeing\":" + Num(P.Wellbeing);
+		J += ",\"neuromodulators\":{\"dopamine\":" + Num(P.Dopamine) + ",\"serotonin\":" + Num(P.Serotonin) + ",\"cortisol\":" + Num(P.Cortisol) +
+			",\"noradrenaline\":" + Num(P.Noradrenaline) + ",\"oxytocin\":" + Num(P.Oxytocin) + ",\"resting_level\":0.5,\"learning_gate\":" +
+			Num((0.5f + P.Dopamine) * (1.0f - 1.5f * std::max(0.0f, P.Cortisol - 0.6f))) + ",\"choice_temperature\":" + Num(ArousalTemperature(P)) + ",\"bias_by_action\":[";
+		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + Num(ModulatorBias(P, a));
+		J += "]}";
 		double Inborn = 0.0, Learned = 0.0;
 		for (size_t k = 0; k < G.W2.size(); ++k) Inborn += std::abs(G.W2[k]), Learned += std::abs(P.LearnedW2[k]);
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
@@ -1589,7 +1600,7 @@ public:
 		for (int i = 0; i < kBrainInputs; ++i) J += std::string(i ? "," : "") + "\"" + InputName(i) + "\"";
 		J += "],\"actions\":[";
 		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + "\"" + ActionName(a) + "\"";
-		J += "],\"people\":[";
+		J += "],\"neuromodulators\":[\"dopamine\",\"serotonin\",\"cortisol\",\"noradrenaline\",\"oxytocin\"],\"people\":[";
 		bool First = true;
 		for (int w = 0; w < kWatched; ++w)
 		{
@@ -1604,7 +1615,7 @@ public:
 				const BrainStep& S = T->second.Steps[k];
 				J += std::string(k ? "," : "") + "{\"day\":" + Num(S.Day) + ",\"days\":" + std::to_string(S.Days) + ",\"in\":" + Matrix(S.In.data(), 1, kBrainInputs) +
 					",\"hidden\":" + Matrix(S.Hidden.data(), 1, static_cast<int>(S.Hidden.size())) + ",\"chances\":" + Matrix(S.Chances.data(), 1, kBrainActions) +
-					",\"action\":\"" + ActionName(S.Action) + "\",\"rpe\":" + Num(S.Rpe) + ",\"wellbeing\":" + Num(S.Wellbeing) + "}";
+					",\"action\":\"" + ActionName(S.Action) + "\",\"rpe\":" + Num(S.Rpe) + ",\"wellbeing\":" + Num(S.Wellbeing) + ",\"neuromodulators\":" + Matrix(S.Mods.data(), 1, 5) + "}";
 			}
 			J += "],\"life\":[";
 			for (size_t k = 0; k < T->second.Life.size(); ++k)
@@ -1620,10 +1631,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1636,6 +1647,7 @@ public:
 			for (size_t k = 0; k < G.W2.size(); ++k) In += std::abs(G.W2[k]), Le += std::abs(P.LearnedW2[k]);
 			++S.N, S.Max = std::max(S.Max, P.BrainSize()), S.Neurons += P.BrainSize(), S.Sparse += static_cast<double>(Small) / std::max<size_t>(1, G.W1.size()), S.Entropy += E;
 			S.Rate += G.LearningRate, S.Cur += G.Curiosity, S.Imit += G.Imitation, S.Kind += G.Kindness, S.Learned += Le / std::max(1e-9, In + Le), S.Rpe += std::abs(P.LastRpe);
+			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
 		}
 		std::string Out;
 		for (size_t k = 0; k < By.size(); ++k)
@@ -1643,9 +1655,9 @@ public:
 			const Sum& S = By[k];
 			if (!S.N) continue;
 			const double N = S.N;
-			char Line[320];
-			std::snprintf(Line, sizeof(Line), "%d,%s,%d,%.2f,%d,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.4f\n", Year, OtherKinds()[k].Name, S.N, S.Neurons / N, S.Max, S.Sparse / N,
-				S.Entropy / N, S.Rate / N, S.Cur / N, S.Imit / N, S.Kind / N, S.Learned / N, S.Rpe / N);
+			char Line[400];
+			std::snprintf(Line, sizeof(Line), "%d,%s,%d,%.2f,%d,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f\n", Year, OtherKinds()[k].Name, S.N, S.Neurons / N, S.Max, S.Sparse / N,
+				S.Entropy / N, S.Rate / N, S.Cur / N, S.Imit / N, S.Kind / N, S.Learned / N, S.Rpe / N, S.Da / N, S.Se / N, S.Co / N, S.Na / N, S.Ox / N);
 			Out += Line;
 		}
 		return Out;
@@ -1895,7 +1907,7 @@ public:
 			UpdateLoneliness(P);
 			if (Chosen[i] >= 0)
 			{
-				Learn(P, Chosen[i], WellbeingOf(P) - WellbeingBefore[i] + P.Pleasure);
+				Learn(P, Chosen[i], WellbeingOf(P) - WellbeingBefore[i] + P.Pleasure, Days);
 			}
 			P.Pleasure = 0.0f;
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
@@ -2325,7 +2337,7 @@ private:
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	std::unordered_map<uint32_t, double> SchoolsPerHead; // Each state's schools per member at the last tally; not saved.
 	// Brain recordings of the watched people (see BrainTracesJson); not saved, so they start again when a run resumes.
-	struct BrainStep { double Day = 0.0; int Days = 1; std::array<float, kBrainInputs> In{}; std::vector<float> Hidden; std::array<float, kBrainActions> Chances{}; int Action = 0; float Rpe = 0.0f, Wellbeing = 0.0f; };
+	struct BrainStep { double Day = 0.0; int Days = 1; std::array<float, kBrainInputs> In{}; std::vector<float> Hidden; std::array<float, kBrainActions> Chances{}; int Action = 0; float Rpe = 0.0f, Wellbeing = 0.0f; std::array<float, 5> Mods{}; };
 	struct BrainYear { double Year = 0.0, Age = 0.0, Learned = 0.0, Change = 0.0, MeanRpe = 0.0, Wellbeing = 0.0; int TopAction = 0; };
 	struct BrainRecord { std::deque<BrainStep> Steps; std::vector<BrainYear> Life; std::vector<float> LastLearned; double RpeSum = 0.0; int RpeCount = 0; std::array<int, kBrainActions> Done{}; };
 	std::array<uint32_t, 4> Watched{};
@@ -2361,6 +2373,7 @@ private:
 			BrainRecord& R = Traces[Id];
 			BrainStep S;
 			S.Day = Eco->Day(), S.Days = Days, S.In = P->LastInputs, S.Hidden = P->LastHidden, S.Chances = P->LastChoice, S.Action = P->LastAction, S.Rpe = P->LastRpe, S.Wellbeing = P->Wellbeing;
+			S.Mods = {P->Dopamine, P->Serotonin, P->Cortisol, P->Noradrenaline, P->Oxytocin};
 			R.Steps.push_back(std::move(S));
 			if (R.Steps.size() > kTraceLength) R.Steps.pop_front();
 			R.RpeSum += std::abs(P->LastRpe), ++R.RpeCount, ++R.Done[P->LastAction];
@@ -3234,12 +3247,12 @@ private:
 		float Top = -1e9f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a);
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a);
 			for (int h = 0; h < Hidden; ++h)
 			{
 				Sum += P.LastHidden[h] * OutputWeight(P, h, a);
 			}
-			Logit[a] = Sum / G.Curiosity;
+			Logit[a] = Sum / (G.Curiosity * ArousalTemperature(P));
 			Top = std::max(Top, Logit[a]);
 		}
 		float Total = 0.0f;
@@ -4949,12 +4962,44 @@ private:
 	}
 
 	// Strengthens choices that made the day better than usual and weakens ones that made it worse.
-	static void Learn(Npc& P, int Chosen, float Reward)
+	// How the neuromodulators tilt each choice; all zero at resting levels.
+	static float ModulatorBias(const Npc& P, int Act)
+	{
+		switch (static_cast<Action>(Act))
+		{
+		case Action::Rest: return 0.8f * (0.5f - P.Dopamine);           // Low dopamine: no drive to do anything.
+		case Action::Hide: return 0.8f * (P.Cortisol - 0.5f) + 0.4f * (0.5f - P.Serotonin); // Stress and low mood.
+		case Action::ShareFood: return 0.6f * (P.Oxytocin - 0.5f) + 0.4f * (P.Serotonin - 0.5f);
+		case Action::Socialize: return 0.8f * (P.Oxytocin - 0.5f);
+		case Action::Explore: return 0.6f * (P.Dopamine - 0.5f);
+		default: return 0.0f;
+		}
+	}
+	// Arousal sharpens choices (an alert mind picks its best idea), drowsiness blurs them.
+	static float ArousalTemperature(const Npc& P) { return 1.0f - 0.4f * (P.Noradrenaline - 0.5f); }
+
+	// After each lesson, the neuromodulators drift toward what the day called for.
+	static void Modulate(Npc& P, int Chosen, float Advantage, int Days)
+	{
+		auto Toward = [Days](float& Level, float Target, float PerDay) { Level += (std::clamp(Target, 0.0f, 1.0f) - Level) * (1.0f - std::pow(1.0f - PerDay, static_cast<float>(Days))); };
+		const float Stress = (1.0f - P.Energy) * (1.0f - P.Energy) + (1.0f - P.Water) * (1.0f - P.Water) + P.Fear + 0.5f * P.Grief;
+		const bool Warm = Chosen == static_cast<int>(Action::Socialize) || Chosen == static_cast<int>(Action::ShareFood) || P.Spouse;
+		Toward(P.Dopamine, 0.5f + 0.5f * std::tanh(2.0f * Advantage), 0.02f);
+		Toward(P.Serotonin, 0.5f + 0.5f * std::tanh(2.0f * (P.Wellbeing + 0.25f)), 0.01f);
+		Toward(P.Cortisol, 0.3f + Stress, 0.1f);
+		Toward(P.Noradrenaline, 0.3f + P.Fear + 2.0f * std::abs(Advantage), 0.5f);
+		Toward(P.Oxytocin, 0.45f + (Warm ? 0.25f : 0.0f) - 0.3f * P.Loneliness, 0.05f);
+	}
+
+	static void Learn(Npc& P, int Chosen, float Reward, int Days = 1)
 	{
 		const float Advantage = Reward - P.RewardBaseline;
 		P.LastRpe = Advantage;
 		P.RewardBaseline = P.RewardBaseline * 0.95f + Reward * 0.05f;
-		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity;
+		// Dopamine opens the gate to learning; stress well above normal closes it.
+		const float Gate = (0.5f + P.Dopamine) * (1.0f - 1.5f * std::max(0.0f, P.Cortisol - 0.6f));
+		Modulate(P, Chosen, Advantage, Days);
+		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
 			const float Push = Rate * ((a == Chosen ? 1.0f : 0.0f) - P.LastChoice[a]);

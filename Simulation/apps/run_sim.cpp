@@ -455,6 +455,7 @@ int main(int Argc, char** Argv)
 			std::ofstream(FolderOf(BrainPath) + "brain_traces.json") << Folk.BrainTracesJson() << '\n';
 			const std::string Stats = FolderOf(BrainPath) + "brain_stats.csv";
 			const bool Fresh = !FileExists(Stats);
+			for (const char* Col : {"dopamine", "serotonin", "cortisol", "noradrenaline", "oxytocin"}) AddCsvColumn(Stats, Col);
 			std::ofstream Out(Stats, std::ios::app);
 			if (Fresh) Out << earth::People::BrainStatsHeader();
 			Out << Folk.BrainStatsRows(Y);
