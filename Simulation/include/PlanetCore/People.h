@@ -5090,7 +5090,7 @@ private:
 		const double Age = P.AgeYears();
 		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age);
 		const bool Pruning = Age >= 12.0 && Age < 25.0; // Adolescence: weak, unused synapses are cut away.
-		const float Habit = 0.05f * P.Genes->LearningRate * AgeGain(Age); // Hebbian: what is done together is wired together, rewarded or not.
+		const float Habit = 0.005f * P.Genes->LearningRate * AgeGain(Age); // Hebbian: what is done together is wired together, rewarded or not.
 		for (int a = 0; a < kBrainActions; ++a)
 		{
 			const float Push = Rate * ((a == Chosen ? 1.0f : 0.0f) - P.LastChoice[a]);
