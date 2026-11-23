@@ -1518,6 +1518,55 @@ public:
 
 	// What the brain would choose in one situation: the chance of each action. One hidden neuron can be
 	// clamped to a value (0 silences it, as a lesion; 1 drives it, as stimulation). Mirrors Decide.
+	// ---- Body and rhythms, as a model's estimates ----
+	// Relative power in the EEG bands (delta, theta, alpha, beta, gamma), from what the brain is doing: deep, slow waves in
+	// tired rest, theta in exploring, replay and childhood, alpha in calm, beta in arousal and stress, gamma with busy neurons.
+	static std::array<float, 5> EegBands(const Npc& P, const std::vector<float>& Hidden)
+	{
+		const bool Resting = P.LastAction == static_cast<int>(Action::Rest);
+		float Busy = 0.0f;
+		for (float H : Hidden) Busy += std::abs(H);
+		Busy /= std::max<size_t>(1, Hidden.size());
+		std::array<float, 5> B = {Resting ? 0.3f + 0.5f * P.Fatigue : 0.1f * P.Fatigue,
+			(P.LastAction == static_cast<int>(Action::Explore) || Resting ? 0.25f : 0.1f) + (P.AgeYears() < 12.0 ? 0.2f : 0.0f),
+			0.4f * (1.0f - P.Noradrenaline) * (1.0f - P.Fear), 0.5f * P.Noradrenaline + 0.2f * P.Cortisol, 0.4f * Busy};
+		float Sum = 0.0f;
+		for (float V : B) Sum += V;
+		for (float& V : B) V /= std::max(1e-6f, Sum);
+		return B;
+	}
+	// Puberty, earlier in girls and in the well fed; sex hormones ramp up over three years, fall sharply at menopause
+	// in women and slowly in men. Growth hormone peaks in the teens and fades by about a seventh a decade.
+	static float PubertyAge(const Npc& P) { return static_cast<float>((P.Female ? 10.5 : 11.5) + 2.0 * PersonDraw(P.Id, 13) + 1.5 * (1.0 - P.Energy)); }
+	static float SexHormone(const Npc& P)
+	{
+		const double Age = P.AgeYears(), On = PubertyAge(P);
+		if (Age < On) return 0.05f;
+		const double Rise = std::min(1.0, (Age - On) / 3.0);
+		const double Fall = P.Female ? (Age > 50.0 ? 0.2 : 1.0) : std::max(0.3, 1.0 - std::max(0.0, Age - 40.0) / 60.0);
+		return static_cast<float>(0.05 + 0.95 * Rise * Fall);
+	}
+	static float GrowthHormone(double Age) { return static_cast<float>(Age < 12.0 ? 0.5 + Age / 24.0 : Age < 20.0 ? 1.0 : std::max(0.15, 1.0 - (Age - 20.0) / 70.0)); }
+	// The blood-brain barrier: leaky in infancy, weakening in old age.
+	static float BarrierIntegrity(double Age) { return static_cast<float>(Age < 2.0 ? 0.6 + 0.2 * Age : Age < 60.0 ? 1.0 : std::max(0.5, 1.0 - (Age - 60.0) / 60.0)); }
+	// Teenagers, flooded with sex hormones, take more risks.
+	static float RiskTaking(const Npc& P) { const double Age = P.AgeYears(); return Age >= 12.0 && Age < 25.0 ? 0.2f * SexHormone(P) : 0.0f; }
+	// Attention: how much each sense is driving the brain right now, and how focused it is (best at middling arousal).
+	static std::array<float, kBrainInputs> Salience(const Npc& P, const std::array<float, kBrainInputs>& In)
+	{
+		const Genome& G = *P.Genes;
+		std::array<float, kBrainInputs> S{};
+		float Sum = 0.0f;
+		for (int i = 0; i < kBrainInputs - 1; ++i) // Not the constant input.
+		{
+			for (int h = 0; h < G.Hidden(); ++h) S[i] += std::abs(In[i] * G.W1[static_cast<size_t>(h) * kBrainInputs + i]);
+			Sum += S[i];
+		}
+		for (float& V : S) V /= std::max(1e-6f, Sum);
+		return S;
+	}
+	static float Focus(const Npc& P) { return std::max(0.0f, 1.0f - 4.0f * (P.Noradrenaline - 0.5f) * (P.Noradrenaline - 0.5f)) * (P.Drink > 0.3f ? 0.6f : 1.0f); }
+
 	static std::array<float, kBrainActions> Respond(const Npc& P, const std::array<float, kBrainInputs>& In, int Neuron = -1, float Value = 0.0f, std::vector<float>* HiddenOut = nullptr)
 	{
 		const Genome& G = *P.Genes;
@@ -1684,6 +1733,31 @@ public:
 		for (int h = 0, n = 0; h < P.BrainSize(); ++h) if (Silenced(P, h)) J += std::string(n++ ? "," : "") + std::to_string(h);
 		J += "]},\"genetics\":{\"kind\":\"" + std::string(OtherKinds()[P.Kind].Name) + "\",\"neurons_from_genes\":" + std::to_string(G.Hidden()) + ",\"learning_rate\":" + Num(G.LearningRate) +
 			",\"curiosity\":" + Num(G.Curiosity) + ",\"imitation\":" + Num(G.Imitation) + ",\"kindness\":" + Num(G.Kindness) + ",\"generation\":" + std::to_string(P.Generation) + "}";
+		{
+			const double Age = P.AgeYears();
+			const auto Eeg = EegBands(P, P.LastHidden);
+			const auto Sal = Salience(P, P.LastInputs);
+			const double Rem = Age < 1.0 ? 0.5 : Age < 5.0 ? 0.3 : Age < 60.0 ? 0.2 : 0.15, Deep = std::clamp(0.3 - Age / 250.0, 0.03, 0.3);
+			const double Need = Age < 1.0 ? 14.0 : Age < 6.0 ? 11.0 : Age < 13.0 ? 10.0 : Age < 18.0 ? 9.0 : Age < 65.0 ? 7.5 : 7.0;
+			const double Chrono = 2.0 * PersonDraw(P.Id, 12) - 1.0 + (Age >= 13.0 && Age < 22.0 ? 1.5 : 0.0) - (Age > 60.0 ? 1.0 : 0.0); // Hours later than average.
+			J += ",\"rhythms\":{\"note\":\"Model estimates from the brain's state, not a simulated EEG.\",\"eeg_relative_power\":{\"delta\":" + Num(Eeg[0]) + ",\"theta\":" + Num(Eeg[1]) +
+				",\"alpha\":" + Num(Eeg[2]) + ",\"beta\":" + Num(Eeg[3]) + ",\"gamma\":" + Num(Eeg[4]) + "},\"chronotype_hours_late\":" + Num(Chrono) + "}";
+			J += ",\"sleep\":{\"hours_needed\":" + Num(Need) + ",\"stage_shares\":{\"n1\":0.05,\"n2\":" + Num(0.95 - Rem - Deep) + ",\"n3_deep\":" + Num(Deep) + ",\"rem\":" + Num(Rem) +
+				"},\"memories_replayed_in_sleep\":";
+			int Replays = 0;
+			for (const Episode& E : P.Episodes) Replays += E.Replays;
+			J += std::to_string(Replays) + ",\"tiredness\":" + Num(P.Fatigue) + "}";
+			J += ",\"hormones\":{\"puberty_age\":" + Num(PubertyAge(P)) + ",\"sex_hormone\":" + Num(SexHormone(P)) + ",\"growth_hormone\":" + Num(GrowthHormone(Age)) +
+				",\"blood_glucose\":" + Num(P.Energy) + ",\"hydration\":" + Num(P.Water) + ",\"blood_brain_barrier\":" + Num(BarrierIntegrity(Age)) + ",\"risk_taking_push\":" + Num(RiskTaking(P)) + "}";
+			const char* Stage = Age < 1.0 ? "infant" : Age < 12.0 ? "child" : Age < 25.0 ? "adolescent" : Age < 60.0 ? "adult" : "elder";
+			J += ",\"development\":{\"stage\":\"" + std::string(Stage) + "\",\"critical_periods_open\":[";
+			std::string Open;
+			if (Age < 7.0) Open += "\"senses\"";
+			if (Age < 12.0) Open += std::string(Open.empty() ? "" : ",") + "\"language\"";
+			if (Age >= 10.0 && Age < 25.0) Open += std::string(Open.empty() ? "" : ",") + "\"social\"";
+			J += Open + "],\"unborn_baby_brain_formed\":" + Num(P.PregnantDays >= 0.0 ? std::min(1.0, P.PregnantDays / 270.0) : 0.0) + "}";
+			J += ",\"attention\":{\"focus\":" + Num(Focus(P)) + ",\"sense_salience\":" + Matrix(Sal.data(), 1, kBrainInputs) + "}";
+		}
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
 		J += ",\"situations\":[";
 		for (size_t s = 0; s < Sits.size(); ++s) J += std::string(s ? "," : "") + "{\"name\":\"" + Sits[s].first + "\",\"inputs\":" + Matrix(Sits[s].second.data(), 1, kBrainInputs) + ",\"chances\":" + Probs(Base[s]) + "}";
@@ -1733,7 +1807,7 @@ public:
 		for (int i = 0; i < kBrainInputs; ++i) J += std::string(i ? "," : "") + "\"" + InputName(i) + "\"";
 		J += "],\"actions\":[";
 		for (int a = 0; a < kBrainActions; ++a) J += std::string(a ? "," : "") + "\"" + ActionName(a) + "\"";
-		J += "],\"neuromodulators\":[\"dopamine\",\"serotonin\",\"cortisol\",\"noradrenaline\",\"oxytocin\"],\"people\":[";
+		J += "],\"neuromodulators\":[\"dopamine\",\"serotonin\",\"cortisol\",\"noradrenaline\",\"oxytocin\"],\"eeg\":[\"delta\",\"theta\",\"alpha\",\"beta\",\"gamma\"],\"people\":[";
 		bool First = true;
 		for (int w = 0; w < kWatched; ++w)
 		{
@@ -1748,7 +1822,7 @@ public:
 				const BrainStep& S = T->second.Steps[k];
 				J += std::string(k ? "," : "") + "{\"day\":" + Num(S.Day) + ",\"days\":" + std::to_string(S.Days) + ",\"in\":" + Matrix(S.In.data(), 1, kBrainInputs) +
 					",\"hidden\":" + Matrix(S.Hidden.data(), 1, static_cast<int>(S.Hidden.size())) + ",\"chances\":" + Matrix(S.Chances.data(), 1, kBrainActions) +
-					",\"action\":\"" + ActionName(S.Action) + "\",\"rpe\":" + Num(S.Rpe) + ",\"wellbeing\":" + Num(S.Wellbeing) + ",\"neuromodulators\":" + Matrix(S.Mods.data(), 1, 5) + "}";
+					",\"action\":\"" + ActionName(S.Action) + "\",\"rpe\":" + Num(S.Rpe) + ",\"wellbeing\":" + Num(S.Wellbeing) + ",\"neuromodulators\":" + Matrix(S.Mods.data(), 1, 5) + ",\"eeg\":" + Matrix(S.Eeg.data(), 1, 5) + "}";
 			}
 			J += "],\"life\":[";
 			for (size_t k = 0; k < T->second.Life.size(); ++k)
@@ -1764,10 +1838,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures,eeg_delta,eeg_theta,eeg_alpha,eeg_beta,eeg_gamma,sex_hormone,growth_hormone,attention_focus\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0, Sex = 0, Growth = 0, Foc = 0; std::array<double, 5> Eeg{}; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1783,6 +1857,9 @@ public:
 			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
 			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P), S.Fits += P.Seizures;
+			S.Sex += SexHormone(P), S.Growth += GrowthHormone(P.AgeYears()), S.Foc += Focus(P);
+			const auto Bands = EegBands(P, P.LastHidden);
+			for (int b = 0; b < 5; ++b) S.Eeg[b] += Bands[b];
 			for (int b = 0; b < kBrainConditions; ++b) S.Cond[b] += ((P.Conditions >> b) & 1) || (b == 0 && Epileptic(P));
 			for (int h = 0; h < P.BrainSize(); ++h) S.Silent += Silenced(P, h);
 			for (const Episode& Ep : P.Episodes) S.Mem += Ep.Strength, S.Rep += Ep.Replays;
@@ -1801,7 +1878,9 @@ public:
 			for (double R : S.Reg) std::snprintf(Line, sizeof(Line), ",%.2f", R / N), Out += Line;
 			std::snprintf(Line, sizeof(Line), ",%.3f,%.2f,%.3f,%.2f,%.2f", S.Exc / N, S.Epi / N, S.Mem / std::max(1.0, S.Epi), S.Rep / std::max(1.0, S.Epi), S.Span / N), Out += Line;
 			for (double Cn : S.Cond) std::snprintf(Line, sizeof(Line), ",%.4f", Cn / N), Out += Line;
-			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f\n", S.Silent / N, S.Fits / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f", S.Silent / N, S.Fits / N), Out += Line;
+			for (double Bp : S.Eeg) std::snprintf(Line, sizeof(Line), ",%.3f", Bp / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f,%.3f\n", S.Sex / N, S.Growth / N, S.Foc / N), Out += Line;
 		}
 		return Out;
 	}
@@ -2482,7 +2561,7 @@ private:
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
 	std::unordered_map<uint32_t, double> SchoolsPerHead; // Each state's schools per member at the last tally; not saved.
 	// Brain recordings of the watched people (see BrainTracesJson); not saved, so they start again when a run resumes.
-	struct BrainStep { double Day = 0.0; int Days = 1; std::array<float, kBrainInputs> In{}; std::vector<float> Hidden; std::array<float, kBrainActions> Chances{}; int Action = 0; float Rpe = 0.0f, Wellbeing = 0.0f; std::array<float, 5> Mods{}; };
+	struct BrainStep { double Day = 0.0; int Days = 1; std::array<float, kBrainInputs> In{}; std::vector<float> Hidden; std::array<float, kBrainActions> Chances{}; int Action = 0; float Rpe = 0.0f, Wellbeing = 0.0f; std::array<float, 5> Mods{}, Eeg{}; };
 	struct BrainYear { double Year = 0.0, Age = 0.0, Learned = 0.0, Change = 0.0, MeanRpe = 0.0, Wellbeing = 0.0; int TopAction = 0; };
 	struct BrainRecord { std::deque<BrainStep> Steps; std::vector<BrainYear> Life; std::vector<float> LastLearned; double RpeSum = 0.0; int RpeCount = 0; std::array<int, kBrainActions> Done{}; };
 	std::array<uint32_t, 4> Watched{};
@@ -2519,6 +2598,7 @@ private:
 			BrainStep S;
 			S.Day = Eco->Day(), S.Days = Days, S.In = P->LastInputs, S.Hidden = P->LastHidden, S.Chances = P->LastChoice, S.Action = P->LastAction, S.Rpe = P->LastRpe, S.Wellbeing = P->Wellbeing;
 			S.Mods = {P->Dopamine, P->Serotonin, P->Cortisol, P->Noradrenaline, P->Oxytocin};
+			S.Eeg = EegBands(*P, P->LastHidden);
 			R.Steps.push_back(std::move(S));
 			if (R.Steps.size() > kTraceLength) R.Steps.pop_front();
 			R.RpeSum += std::abs(P->LastRpe), ++R.RpeCount, ++R.Done[P->LastAction];
@@ -5119,7 +5199,7 @@ private:
 		case Action::Hide: return 0.8f * (P.Cortisol - 0.5f) + 0.4f * (0.5f - P.Serotonin); // Stress and low mood.
 		case Action::ShareFood: return 0.6f * (P.Oxytocin - 0.5f) + 0.4f * (P.Serotonin - 0.5f);
 		case Action::Socialize: return 0.8f * (P.Oxytocin - 0.5f);
-		case Action::Explore: return 0.6f * (P.Dopamine - 0.5f);
+		case Action::Explore: return 0.6f * (P.Dopamine - 0.5f) + RiskTaking(P);
 		default: return 0.0f;
 		}
 	}
@@ -5723,7 +5803,7 @@ private:
 					AnyDied = true;
 					D.Killed += 1, D.KilledThisYear += 1, ++DiseaseDeaths;
 				}
-				else if (P.Alive && Dice.Chance(OverDays(0.0003, Days))) P.Conditions |= Encephalitis, Lesion(P, Dice); // It reached the brain.
+				else if (P.Alive && Dice.Chance(OverDays(0.0003 * (2.0 - BarrierIntegrity(Age)), Days))) P.Conditions |= Encephalitis, Lesion(P, Dice); // It reached the brain.
 			}
 			// It passes to bands nearby, along the state's roads to its capital, and with armies to the enemy.
 			const double Pass = OverDays(0.02 * D.Spread * (Home && Sanitation(*Home) ? 0.4 : 1.0), Days); // Clean water and sewers stop much of it.

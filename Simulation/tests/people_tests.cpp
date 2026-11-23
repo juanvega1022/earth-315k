@@ -199,6 +199,7 @@ static void TestBrainJson()
 	EXPECT(earth::People::AgeGain(5.0) > earth::People::AgeGain(30.0) && earth::People::AgeGain(30.0) > earth::People::AgeGain(80.0) && J.find("\"plasticity\"") != std::string::npos);
 	EXPECT(J.find("\"episodes\"") != std::string::npos && J.find("\"working_memory_span\"") != std::string::npos);
 	EXPECT(J.find("\"health\"") != std::string::npos && J.find("\"genetics\"") != std::string::npos);
+	EXPECT(J.find("\"eeg_relative_power\"") != std::string::npos && J.find("\"hormones\"") != std::string::npos && J.find("\"attention\"") != std::string::npos);
 	EXPECT(J.find("\"anatomy\"") != std::string::npos && J.find("\"neuron_regions\"") != std::string::npos);
 	for (int h = 0; h < P.BrainSize(); ++h) EXPECT(earth::People::RegionOfNeuron(*P.Genes, h) >= 0 && earth::People::RegionOfNeuron(*P.Genes, h) < earth::People::kRegions);
 }
