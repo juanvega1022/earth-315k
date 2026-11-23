@@ -196,6 +196,7 @@ static void TestBrainJson()
 		Moved = Moved || std::abs(Q.Cortisol - 0.5f) > 0.01f;
 	}
 	EXPECT(Moved && J.find("\"neuromodulators\"") != std::string::npos);
+	EXPECT(earth::People::AgeGain(5.0) > earth::People::AgeGain(30.0) && earth::People::AgeGain(30.0) > earth::People::AgeGain(80.0) && J.find("\"plasticity\"") != std::string::npos);
 	EXPECT(J.find("\"anatomy\"") != std::string::npos && J.find("\"neuron_regions\"") != std::string::npos);
 	for (int h = 0; h < P.BrainSize(); ++h) EXPECT(earth::People::RegionOfNeuron(*P.Genes, h) >= 0 && earth::People::RegionOfNeuron(*P.Genes, h) < earth::People::kRegions);
 }

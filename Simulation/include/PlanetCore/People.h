@@ -1504,7 +1504,7 @@ public:
 			Top = std::max(Top, Out[a]);
 		}
 		for (float& O : Out) Total += (O = std::exp(O - Top));
-		const float Random = 0.04f * G.Curiosity;
+		const float Random = 0.04f * G.Curiosity * Unmyelinated(P);
 		for (float& O : Out) O = (1.0f - Random) * O / Total + Random / kBrainActions;
 		if (HiddenOut) *HiddenOut = Hid;
 		return Out;
@@ -1624,6 +1624,10 @@ public:
 		J += "]}";
 		double Inborn = 0.0, Learned = 0.0;
 		for (size_t k = 0; k < G.W2.size(); ++k) Inborn += std::abs(G.W2[k]), Learned += std::abs(P.LearnedW2[k]);
+		int Cut = 0;
+		for (float W : P.LearnedW2) Cut += W == 0.0f;
+		J += ",\"plasticity\":{\"learning_gain_for_age\":" + Num(AgeGain(P.AgeYears())) + ",\"choice_noise_for_myelin\":" + Num(Unmyelinated(P)) +
+			",\"pruning_now\":" + (P.AgeYears() >= 12.0 && P.AgeYears() < 25.0 ? "true" : "false") + ",\"silent_learned_synapses_share\":" + Num(static_cast<double>(Cut) / std::max<size_t>(1, P.LearnedW2.size())) + "}";
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
 		J += ",\"situations\":[";
 		for (size_t s = 0; s < Sits.size(); ++s) J += std::string(s ? "," : "") + "{\"name\":\"" + Sits[s].first + "\",\"inputs\":" + Matrix(Sits[s].second.data(), 1, kBrainInputs) + ",\"chances\":" + Probs(Base[s]) + "}";
@@ -3339,7 +3343,7 @@ private:
 			Total += P.LastChoice[a];
 		}
 		// Now and then anyone tries something at random, so no habit is ever completely lost.
-		const float Random = 0.04f * G.Curiosity;
+		const float Random = 0.04f * G.Curiosity * Unmyelinated(P);
 		for (float& C : P.LastChoice)
 		{
 			C = (1.0f - Random) * C / Total + Random / kBrainActions;
@@ -5052,6 +5056,13 @@ private:
 		default: return 0.0f;
 		}
 	}
+	// Plasticity over a life: a child's brain, still overgrown with synapses, learns fastest; it slows to
+	// adult pace by 25 and fades in old age.
+public:
+	static float AgeGain(double Age) { return static_cast<float>(Age < 12.0 ? 1.5 : Age < 25.0 ? 1.5 - 0.5 * (Age - 12.0) / 13.0 : Age < 60.0 ? 1.0 : std::max(0.4, 1.0 - (Age - 60.0) / 25.0)); }
+	// Before myelin wraps its nerves (into the early twenties), a young brain's signals are noisier, so its choices wander more.
+	static float Unmyelinated(const Npc& P) { return P.AgeYears() < 20.0 ? 1.0f + static_cast<float>((20.0 - P.AgeYears()) / 20.0) : 1.0f; }
+private:
 	// Arousal sharpens choices (an alert mind picks its best idea), drowsiness blurs them.
 	static float ArousalTemperature(const Npc& P) { return 1.0f - 0.4f * (P.Noradrenaline - 0.5f); }
 
@@ -5076,7 +5087,10 @@ private:
 		// Dopamine opens the gate to learning; stress well above normal closes it.
 		const float Gate = (0.5f + P.Dopamine) * (1.0f - 1.5f * std::max(0.0f, P.Cortisol - 0.6f));
 		Modulate(P, Chosen, Advantage, Days);
-		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate;
+		const double Age = P.AgeYears();
+		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age);
+		const bool Pruning = Age >= 12.0 && Age < 25.0; // Adolescence: weak, unused synapses are cut away.
+		const float Habit = 0.005f * P.Genes->LearningRate * AgeGain(Age); // Hebbian: what is done together is wired together, rewarded or not.
 		for (int a = 0; a < kBrainActions; ++a)
 		{
 			const float Push = Rate * ((a == Chosen ? 1.0f : 0.0f) - P.LastChoice[a]);
@@ -5084,7 +5098,8 @@ private:
 			{
 				// Lessons fade unless they keep being confirmed.
 				float& W = P.LearnedW2[h * kBrainActions + a];
-				W = std::clamp(W * 0.9995f + Push * P.LastHidden[h], -4.0f, 4.0f);
+				W = std::clamp(W * 0.9995f + (Push + (a == Chosen ? Habit : 0.0f)) * P.LastHidden[h], -4.0f, 4.0f);
+				if (Pruning && std::abs(W) < 0.005f) W = 0.0f;
 			}
 			P.LearnedB2[a] = std::clamp(P.LearnedB2[a] * 0.9995f + Push, -4.0f, 4.0f);
 		}
