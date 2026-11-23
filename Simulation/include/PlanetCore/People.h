@@ -1565,6 +1565,43 @@ public:
 		for (float& V : S) V /= std::max(1e-6f, Sum);
 		return S;
 	}
+	// Higher cognition, tested on a copy of the brain: does each need call up the right act (problem solving), how settled
+	// its calm choices are, how much the coming winter moves it to gather (planning), how much it is built to read and
+	// copy others (theory of mind), how fast it learns, and its working-memory span; composite is their mean, 0..1.
+	std::array<float, 7> Cognition(const Npc& P) const
+	{
+		const auto Sits = BrainSituations(P);
+		const int Right[] = {-1, static_cast<int>(Action::Forage), static_cast<int>(Action::Drink), static_cast<int>(Action::Rest), static_cast<int>(Action::Hide), static_cast<int>(Action::Socialize)};
+		float Solve = 0.0f, Entropy = 0.0f;
+		const auto Calm = Respond(P, Sits[0].second);
+		for (int k = 1; k <= 5; ++k)
+		{
+			const auto C = Respond(P, Sits[static_cast<size_t>(k)].second);
+			const int Want = Right[k];
+			float Gain = C[Want] - Calm[Want];
+			if (Want == static_cast<int>(Action::Forage)) Gain += C[static_cast<int>(Action::Hunt)] - Calm[static_cast<int>(Action::Hunt)];
+			Solve += Gain > 0.02f ? 0.2f : 0.0f;
+		}
+		for (float C : Calm) if (C > 0.0f) Entropy -= C * std::log2(C);
+		const float Settled = 1.0f - Entropy / 3.0f;
+		const auto Winter = Respond(P, Sits[8].second);
+		const float Plan = std::clamp(0.5f + 5.0f * (Winter[0] + Winter[1] - Calm[0] - Calm[1]), 0.0f, 1.0f);
+		int Social = 0;
+		for (int h = 0; h < P.BrainSize(); ++h) Social += RegionOfNeuron(*P.Genes, h) == 2;
+		const float Mind = std::clamp(0.5f * P.Genes->Imitation / 0.2f + 0.5f * static_cast<float>(Social) / std::max(1, P.BrainSize()) * 4.0f, 0.0f, 1.0f);
+		const float Speed = std::clamp(P.Genes->LearningRate * AgeGain(P.AgeYears()) * (P.Conditions & Dementia ? 0.5f : 1.0f) / 0.1f, 0.0f, 1.0f);
+		const float Span = static_cast<float>(WorkingSpan(P)) / 9.0f;
+		return {Solve, Settled, Plan, Mind, Speed, Span, (Solve + Settled + Plan + Mind + Speed + Span) / 6.0f};
+	}
+	// Left- or right-handed (about 1 in 10 left), and how lopsided activity is between the halves (even neurons left, odd right).
+	static bool LeftHanded(const Npc& P) { return PersonDraw(P.Id, 14) < 0.1; }
+	static float Lateralization(const Npc& P)
+	{
+		float L = 0.0f, R = 0.0f;
+		for (int h = 0; h < P.BrainSize(); ++h) (h % 2 ? R : L) += std::abs(P.LastHidden[static_cast<size_t>(h)]);
+		return (L - R) / std::max(1e-6f, L + R);
+	}
+
 	static float Focus(const Npc& P) { return std::max(0.0f, 1.0f - 4.0f * (P.Noradrenaline - 0.5f) * (P.Noradrenaline - 0.5f)) * (P.Drink > 0.3f ? 0.6f : 1.0f); }
 
 	static std::array<float, kBrainActions> Respond(const Npc& P, const std::array<float, kBrainInputs>& In, int Neuron = -1, float Value = 0.0f, std::vector<float>* HiddenOut = nullptr)
@@ -1757,6 +1794,36 @@ public:
 			if (Age >= 10.0 && Age < 25.0) Open += std::string(Open.empty() ? "" : ",") + "\"social\"";
 			J += Open + "],\"unborn_baby_brain_formed\":" + Num(P.PregnantDays >= 0.0 ? std::min(1.0, P.PregnantDays / 270.0) : 0.0) + "}";
 			J += ",\"attention\":{\"focus\":" + Num(Focus(P)) + ",\"sense_salience\":" + Matrix(Sal.data(), 1, kBrainInputs) + "}";
+			const auto Cog = Cognition(P);
+			J += ",\"cognition\":{\"note\":\"Scores 0..1 from tests on a copy of the brain.\",\"problem_solving\":" + Num(Cog[0]) + ",\"settled_choices\":" + Num(Cog[1]) + ",\"planning\":" + Num(Cog[2]) +
+				",\"theory_of_mind\":" + Num(Cog[3]) + ",\"learning_speed\":" + Num(Cog[4]) + ",\"working_memory\":" + Num(Cog[5]) + ",\"composite\":" + Num(Cog[6]) + "}";
+			// Language areas: in most right-handers speech sits on the left, in a third of left-handers on the right.
+			const bool SpeechRight = LeftHanded(P) && PersonDraw(P.Id, 15) < 0.3;
+			int Words = 0;
+			for (uint16_t W : Camps[CampSlot(P.Camp)].Words) Words += W != 0;
+			J += ",\"hemispheres\":{\"handedness\":\"" + std::string(LeftHanded(P) ? "left" : "right") + "\",\"speech_side\":\"" + (SpeechRight ? "right" : "left") +
+				"\",\"lateralization_now\":" + Num(Lateralization(P)) + ",\"band_words_for_broca_and_wernicke\":" + std::to_string(Words) + "}";
+			J += ",\"cerebellum\":{\"hunting_skill\":" + Num(P.HuntSkill) + ",\"foraging_skill\":" + Num(P.ForageSkill) + "}";
+			// Glia: about one per neuron, myelin following maturity; microglia roused by injury, infection and dementia.
+			const bool Roused = (P.Conditions & (BrainInjury | Encephalitis | Dementia)) != 0;
+			J += ",\"glia\":{\"astrocytes_per_neuron\":" + Num(1.0 + 0.2 * std::min(1.0, Age / 20.0)) + ",\"myelination\":" + Num(1.0 / Unmyelinated(P)) + ",\"microglia_active\":" + (Roused ? "true" : "false") +
+				",\"adult_neurogenesis\":" + Num(std::max(0.0, 1.0 - Age / 80.0) * (1.0 - 0.5 * std::max(0.0f, P.Cortisol - 0.5f)) * (P.LastAction == static_cast<int>(Action::Explore) ? 1.2 : 1.0)) + "}";
+			// The wiring as a graph: inputs to neurons to actions, with links stronger than 0.1 counted.
+			int Links = 0, Possible = 0;
+			for (float W : P.Genes->W1) Links += std::abs(W) > 0.1f, ++Possible;
+			for (int h = 0; h < P.BrainSize(); ++h)
+				for (int a = 0; a < kBrainActions; ++a) Links += std::abs(OutputWeight(P, h, a)) > 0.1f, ++Possible;
+			struct Path { float W; int In, H, Act; };
+			std::vector<Path> Paths;
+			for (int h = 0; h < P.BrainSize(); ++h)
+				for (int i = 0; i < kBrainInputs - 1; ++i)
+					for (int a = 0; a < kBrainActions; ++a) Paths.push_back({P.Genes->W1[static_cast<size_t>(h) * kBrainInputs + i] * OutputWeight(P, h, a), i, h, a});
+			std::partial_sort(Paths.begin(), Paths.begin() + std::min<size_t>(5, Paths.size()), Paths.end(), [](const Path& A, const Path& B) { return std::abs(A.W) > std::abs(B.W); });
+			J += ",\"connectome\":{\"nodes\":" + std::to_string(kBrainInputs + P.BrainSize() + kBrainActions) + ",\"strong_links\":" + std::to_string(Links) + ",\"density\":" + Num(static_cast<double>(Links) / std::max(1, Possible)) +
+				",\"mean_degree_per_neuron\":" + Num(static_cast<double>(Links) / std::max(1, P.BrainSize())) + ",\"strongest_pathways\":[";
+			for (size_t k = 0; k < std::min<size_t>(5, Paths.size()); ++k)
+				J += std::string(k ? "," : "") + "{\"sense\":" + std::to_string(Paths[k].In) + ",\"neuron\":" + std::to_string(Paths[k].H) + ",\"action\":\"" + ActionName(Paths[k].Act) + "\",\"strength\":" + Num(Paths[k].W) + "}";
+			J += "]}";
 		}
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
 		J += ",\"situations\":[";
@@ -1838,10 +1905,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures,eeg_delta,eeg_theta,eeg_alpha,eeg_beta,eeg_gamma,sex_hormone,growth_hormone,attention_focus\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures,eeg_delta,eeg_theta,eeg_alpha,eeg_beta,eeg_gamma,sex_hormone,growth_hormone,attention_focus,problem_solving,planning,theory_of_mind,cognition_composite,cognition_sd,left_handed\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0, Sex = 0, Growth = 0, Foc = 0; std::array<double, 5> Eeg{}; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0, Tested = 0, Sex = 0, Growth = 0, Foc = 0, Solve = 0, Plan = 0, Mind = 0, Cog = 0, Cog2 = 0, Left = 0; std::array<double, 5> Eeg{}; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1857,7 +1924,12 @@ public:
 			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
 			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P), S.Fits += P.Seizures;
-			S.Sex += SexHormone(P), S.Growth += GrowthHormone(P.AgeYears()), S.Foc += Focus(P);
+			S.Sex += SexHormone(P), S.Growth += GrowthHormone(P.AgeYears()), S.Foc += Focus(P), S.Left += LeftHanded(P);
+			if (P.Id % 10 == 0) // A sample, as the tests take time.
+			{
+				const auto Cg = Cognition(P);
+				S.Solve += Cg[0], S.Plan += Cg[2], S.Mind += Cg[3], S.Cog += Cg[6], S.Cog2 += Cg[6] * Cg[6], S.Tested += 1;
+			}
 			const auto Bands = EegBands(P, P.LastHidden);
 			for (int b = 0; b < 5; ++b) S.Eeg[b] += Bands[b];
 			for (int b = 0; b < kBrainConditions; ++b) S.Cond[b] += ((P.Conditions >> b) & 1) || (b == 0 && Epileptic(P));
@@ -1880,7 +1952,9 @@ public:
 			for (double Cn : S.Cond) std::snprintf(Line, sizeof(Line), ",%.4f", Cn / N), Out += Line;
 			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f", S.Silent / N, S.Fits / N), Out += Line;
 			for (double Bp : S.Eeg) std::snprintf(Line, sizeof(Line), ",%.3f", Bp / N), Out += Line;
-			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f,%.3f\n", S.Sex / N, S.Growth / N, S.Foc / N), Out += Line;
+			const double T = std::max(1.0, S.Tested), Mean = S.Cog / T;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", S.Sex / N, S.Growth / N, S.Foc / N, S.Solve / T, S.Plan / T, S.Mind / T, Mean,
+				std::sqrt(std::max(0.0, S.Cog2 / T - Mean * Mean)), S.Left / N), Out += Line;
 		}
 		return Out;
 	}
@@ -5317,7 +5391,7 @@ private:
 		if (Epileptic(P) && R.Chance(OverDays(Has(C.Known, Medicine) ? 0.001 : 0.003, Days)))
 			++P.Seizures, P.Health -= 0.02f, P.Noradrenaline = 1.0f, P.Fatigue = 1.0f;
 		P.LowMoodDays = static_cast<uint16_t>(P.Serotonin < 0.3f ? std::min(60000, P.LowMoodDays + Days) : std::max(0, P.LowMoodDays - 2 * Days));
-		if (P.LowMoodDays >= 180) P.Conditions |= Depression;
+		if (P.LowMoodDays >= 180 && PersonDraw(P.Id, 16) < 0.2) P.Conditions |= Depression; // Only those with an inborn vulnerability (stress meets diathesis).
 		else if (P.Serotonin > 0.45f) P.Conditions &= static_cast<uint16_t>(~Depression);
 		if ((P.Conditions & Ptsd) && R.Chance(OverDays(0.0005, Days))) P.Conditions &= static_cast<uint16_t>(~Ptsd); // Trauma can heal.
 		const double Age = P.AgeYears();
