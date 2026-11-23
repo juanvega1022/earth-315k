@@ -134,6 +134,13 @@ struct Episode
 	void Serialize(A& Ar) { Ar.Io(AgeDays), Ar.Io(Act), Ar.Io(Value), Ar.Io(Strength), Ar.Io(Replays), Ar.Io(Cue); }
 };
 inline constexpr int kEpisodes = 6;
+enum BrainCondition : uint16_t { Epilepsy = 1, Depression = 2, Ptsd = 4, Dementia = 8, BrainInjury = 16, Encephalitis = 32, AlcoholAddiction = 64 };
+inline constexpr int kBrainConditions = 7;
+inline const char* BrainConditionName(int Bit)
+{
+	static const char* Names[kBrainConditions] = {"epilepsy", "depression", "ptsd", "dementia", "brain injury", "encephalitis", "alcohol addiction"};
+	return Bit >= 0 && Bit < kBrainConditions ? Names[Bit] : "";
+}
 
 struct Npc
 {
@@ -190,6 +197,12 @@ struct Npc
 	std::vector<Episode> Episodes;
 	std::array<int8_t, 9> Held{};
 	int HeldCount = 0;
+	// Brain health: conditions (bits of BrainCondition), seizures had, days of low mood running, neurons silenced
+	// by injury, infection or dementia (bit per neuron, first 32), and alcohol in the blood (not saved) and tolerance.
+	uint16_t Conditions = 0;
+	uint16_t Seizures = 0, LowMoodDays = 0;
+	uint32_t Lesions = 0;
+	float Drink = 0.0f, Tolerance = 0.0f;
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
 	SkillEffects Own;
@@ -286,6 +299,7 @@ struct Npc
 		if (Ar.Version >= 52) Ar.Io(Spouse);
 		if (Ar.Version >= 53) Ar.Io(Dopamine), Ar.Io(Serotonin), Ar.Io(Cortisol), Ar.Io(Noradrenaline), Ar.Io(Oxytocin);
 		if (Ar.Version >= 54) Ar.Io(Episodes);
+		if (Ar.Version >= 55) Ar.Io(Conditions), Ar.Io(Seizures), Ar.Io(LowMoodDays), Ar.Io(Lesions), Ar.Io(Tolerance);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -1512,13 +1526,14 @@ public:
 		{
 			float Sum = G.B1[h];
 			for (int i = 0; i < kBrainInputs; ++i) Sum += In[i] * G.W1[static_cast<size_t>(h) * kBrainInputs + i];
-			Hid[h] = h == Neuron ? Value : std::tanh(Sum);
+			Hid[h] = h == Neuron ? Value : Silenced(P, h) ? 0.0f : std::tanh(Sum);
 		}
+		const std::array<float, kBrainActions> Pull = Recalled(P, In);
 		std::array<float, kBrainActions> Out{};
 		float Top = -1e9f, Total = 0.0f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a) + ModulatorBias(P, a);
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Pull[a];
 			for (int h = 0; h < G.Hidden(); ++h) Sum += Hid[h] * OutputWeight(P, h, a);
 			Out[a] = Sum / (G.Curiosity * ArousalTemperature(P));
 			Top = std::max(Top, Out[a]);
@@ -1660,6 +1675,15 @@ public:
 				",\"strength\":" + Num(E.Strength) + ",\"sleep_replays\":" + std::to_string(E.Replays) + ",\"senses\":" + Matrix(Cue.data(), 1, kBrainInputs) + ",\"likeness_to_now\":" + Num(Likeness(E, P.LastInputs)) + "}";
 		}
 		J += "],\"recall_pull_now\":" + Matrix(Recalled(P, P.LastInputs).data(), 1, kBrainActions) + "}";
+		J += ",\"health\":{\"conditions\":[";
+		bool AnyCondition = false;
+		for (int b = 0; b < kBrainConditions; ++b)
+			if (((P.Conditions >> b) & 1) || (b == 0 && Epileptic(P))) J += std::string(AnyCondition ? "," : "") + "\"" + BrainConditionName(b) + "\"", AnyCondition = true;
+		J += "],\"seizures\":" + std::to_string(P.Seizures) + ",\"low_mood_days\":" + std::to_string(P.LowMoodDays) + ",\"blood_alcohol\":" + Num(P.Drink) +
+			",\"alcohol_tolerance\":" + Num(P.Tolerance) + ",\"silenced_neurons\":[";
+		for (int h = 0, n = 0; h < P.BrainSize(); ++h) if (Silenced(P, h)) J += std::string(n++ ? "," : "") + std::to_string(h);
+		J += "]},\"genetics\":{\"kind\":\"" + std::string(OtherKinds()[P.Kind].Name) + "\",\"neurons_from_genes\":" + std::to_string(G.Hidden()) + ",\"learning_rate\":" + Num(G.LearningRate) +
+			",\"curiosity\":" + Num(G.Curiosity) + ",\"imitation\":" + Num(G.Imitation) + ",\"kindness\":" + Num(G.Kindness) + ",\"generation\":" + std::to_string(P.Generation) + "}";
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
 		J += ",\"situations\":[";
 		for (size_t s = 0; s < Sits.size(); ++s) J += std::string(s ? "," : "") + "{\"name\":\"" + Sits[s].first + "\",\"inputs\":" + Matrix(Sits[s].second.data(), 1, kBrainInputs) + ",\"chances\":" + Probs(Base[s]) + "}";
@@ -1740,10 +1764,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0; std::array<double, kRegions> Reg{}; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1758,7 +1782,9 @@ public:
 			S.Rate += G.LearningRate, S.Cur += G.Curiosity, S.Imit += G.Imitation, S.Kind += G.Kindness, S.Learned += Le / std::max(1e-9, In + Le), S.Rpe += std::abs(P.LastRpe);
 			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
-			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P);
+			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P), S.Fits += P.Seizures;
+			for (int b = 0; b < kBrainConditions; ++b) S.Cond[b] += ((P.Conditions >> b) & 1) || (b == 0 && Epileptic(P));
+			for (int h = 0; h < P.BrainSize(); ++h) S.Silent += Silenced(P, h);
 			for (const Episode& Ep : P.Episodes) S.Mem += Ep.Strength, S.Rep += Ep.Replays;
 		}
 		std::string Out;
@@ -1773,7 +1799,9 @@ public:
 			Out += Line;
 			Out.pop_back();
 			for (double R : S.Reg) std::snprintf(Line, sizeof(Line), ",%.2f", R / N), Out += Line;
-			std::snprintf(Line, sizeof(Line), ",%.3f,%.2f,%.3f,%.2f,%.2f\n", S.Exc / N, S.Epi / N, S.Mem / std::max(1.0, S.Epi), S.Rep / std::max(1.0, S.Epi), S.Span / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.2f,%.3f,%.2f,%.2f", S.Exc / N, S.Epi / N, S.Mem / std::max(1.0, S.Epi), S.Rep / std::max(1.0, S.Epi), S.Span / N), Out += Line;
+			for (double Cn : S.Cond) std::snprintf(Line, sizeof(Line), ",%.4f", Cn / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f\n", S.Silent / N, S.Fits / N), Out += Line;
 		}
 		return Out;
 	}
@@ -1848,6 +1876,7 @@ public:
 			if (Chosen[i] >= 0)
 			{
 				Learn(P, Chosen[i], WellbeingOf(P) - WellbeingBefore[i] + P.Pleasure);
+				BrainHealth(P, Camps[CampSlot(P.Camp)], 1, Dice);
 			}
 			P.Pleasure = 0.0f;
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
@@ -2039,6 +2068,7 @@ public:
 				const size_t I = static_cast<size_t>(i);
 				MaybeConceive(I, Chosen[I] >= 0 && Mine.Chance(OverDays(Shares[I][static_cast<int>(Action::Socialize)], Days)), Days, Mine);
 				Imitate(I, Days, Mine);
+				BrainHealth(Npcs[I], Camps[Here], Days, Mine);
 			}
 		});
 
@@ -3356,7 +3386,7 @@ private:
 			{
 				Sum += P.LastInputs[i] * W[i];
 			}
-			P.LastHidden[h] = std::tanh(Sum);
+			P.LastHidden[h] = Silenced(P, h) ? 0.0f : std::tanh(Sum);
 		}
 		const std::array<float, kBrainActions> Recall = Recalled(P, P.LastInputs);
 		std::array<float, kBrainActions> Logit{};
@@ -3450,6 +3480,7 @@ private:
 			if (Dice.Chance(0.0001 * std::min(MaxMass, 2000.0) / 250.0))
 			{
 				P.Health -= 0.6f; // Gored, kicked or trampled.
+				HeadInjury(P, Dice);
 			}
 			break;
 		}
@@ -3637,6 +3668,7 @@ private:
 			if (Dice.Chance(OverDays(0.0001 * std::min(MaxMass, 2000.0) / 250.0 * Hunting, Days)))
 			{
 				P.Health -= 0.6f; // Gored, kicked or trampled.
+				HeadInjury(P, Dice);
 			}
 		}
 		uint8_t Occasional = 0;
@@ -5099,7 +5131,7 @@ public:
 	static float Unmyelinated(const Npc& P) { return P.AgeYears() < 20.0 ? 1.0f + static_cast<float>((20.0 - P.AgeYears()) / 20.0) : 1.0f; }
 private:
 	// Arousal sharpens choices (an alert mind picks its best idea), drowsiness blurs them.
-	static float ArousalTemperature(const Npc& P) { return 1.0f - 0.4f * (P.Noradrenaline - 0.5f); }
+	static float ArousalTemperature(const Npc& P) { return (1.0f - 0.4f * (P.Noradrenaline - 0.5f)) * (1.0f + P.Drink); } // Drink blurs them too.
 
 	// After each lesson, the neuromodulators drift toward what the day called for.
 	static void Modulate(Npc& P, int Chosen, float Advantage, int Days)
@@ -5107,10 +5139,13 @@ private:
 		auto Toward = [Days](float& Level, float Target, float PerDay) { Level += (std::clamp(Target, 0.0f, 1.0f) - Level) * (1.0f - std::pow(1.0f - PerDay, static_cast<float>(Days))); };
 		const float Stress = (1.0f - P.Energy) * (1.0f - P.Energy) + (1.0f - P.Water) * (1.0f - P.Water) + P.Fear + 0.5f * P.Grief;
 		const bool Warm = Chosen == static_cast<int>(Action::Socialize) || Chosen == static_cast<int>(Action::ShareFood) || P.Spouse;
-		Toward(P.Dopamine, 0.5f + 0.5f * std::tanh(2.0f * Advantage), 0.02f);
+		// Depression flattens the dopamine response, as does craving a drink once dependent; trauma keeps stress and arousal high.
+		const float Flat = (P.Conditions & Depression ? 0.15f : 0.0f) + ((P.Conditions & AlcoholAddiction) && P.Drink < 0.05f ? 0.1f : 0.0f);
+		const float Alarm = P.Conditions & Ptsd ? 0.2f : 0.0f;
+		Toward(P.Dopamine, 0.5f - Flat + 0.5f * std::tanh(2.0f * Advantage), 0.02f);
 		Toward(P.Serotonin, 0.5f + 0.5f * std::tanh(2.0f * (P.Wellbeing + 0.25f)), 0.01f);
-		Toward(P.Cortisol, 0.3f + Stress, 0.1f);
-		Toward(P.Noradrenaline, 0.3f + P.Fear + 2.0f * std::abs(Advantage), 0.5f);
+		Toward(P.Cortisol, 0.3f + Alarm + Stress, 0.1f);
+		Toward(P.Noradrenaline, 0.3f + Alarm + P.Fear + 2.0f * std::abs(Advantage), 0.5f);
 		Toward(P.Oxytocin, 0.45f + (Warm ? 0.25f : 0.0f) - 0.3f * P.Loneliness, 0.05f);
 	}
 
@@ -5135,12 +5170,12 @@ private:
 	// How many recent acts can be held in mind at once: about seven, fewer in a small, stressed or very old brain.
 	static int WorkingSpan(const Npc& P)
 	{
-		return std::clamp(3 + P.BrainSize() / 8 - (P.Cortisol > 0.7f ? 1 : 0) - (P.AgeYears() > 75.0 ? 1 : 0), 2, 9);
+		return std::clamp(3 + P.BrainSize() / 8 - (P.Cortisol > 0.7f ? 1 : 0) - (P.AgeYears() > 75.0 ? 1 : 0) - (P.Conditions & Dementia ? 2 : 0), 2, 9);
 	}
 	// Writes the moment into memory if it moved them more than their faintest memory; fear and arousal write deeper.
 	static void Remember(Npc& P, int Chosen, float Advantage, int Days)
 	{
-		for (Episode& E : P.Episodes) E.Strength *= std::pow(0.998f, static_cast<float>(Days));
+		for (Episode& E : P.Episodes) E.Strength *= std::pow(P.Conditions & Dementia ? 0.99f : 0.998f, static_cast<float>(Days)); // Dementia wipes memories fast.
 		const float Feeling = std::abs(Advantage) * (0.5f + P.Noradrenaline) * (1.0f + 2.0f * std::max(0.0f, P.Cortisol - 0.6f));
 		Episode* Slot = nullptr;
 		if (Feeling <= 0.05f) {}
@@ -5150,6 +5185,8 @@ private:
 			Slot = &*std::min_element(P.Episodes.begin(), P.Episodes.end(), [](const Episode& A, const Episode& B) { return A.Strength < B.Strength; });
 			if (Slot->Strength >= Feeling) Slot = nullptr;
 		}
+		// A terrifying blow may leave trauma behind; some are more resilient than others.
+		if (Feeling > 1.5f && Advantage < -0.8f && P.Cortisol > 0.6f && PersonDraw(P.Id, 10) < 0.3) P.Conditions |= Ptsd;
 		if (Slot)
 		{
 			*Slot = Episode{P.AgeDays, static_cast<int8_t>(Chosen), Advantage, Feeling, 0, {}};
@@ -5181,6 +5218,44 @@ private:
 		E.Strength = std::min(E.Strength * 1.1f, 4.0f), ++E.Replays;
 	}
 
+	static bool Silenced(const Npc& P, int h) { return h < 32 && ((P.Lesions >> h) & 1u); }
+	static bool Epileptic(const Npc& P) { return (P.Conditions & Epilepsy) || PersonDraw(P.Id, 9) < 0.007; } // About 0.7% are born with it.
+	static void Lesion(Npc& P, Rng& R) { P.Lesions |= 1u << (R.Next() % static_cast<uint64_t>(std::min(32, P.BrainSize()))); }
+	// A blow to the head may hurt the brain, silence a neuron, and later bring seizures.
+	static void HeadInjury(Npc& P, Rng& R)
+	{
+		if (!R.Chance(0.1)) return;
+		P.Conditions |= BrainInjury;
+		Lesion(P, R);
+		if (R.Chance(0.05)) P.Conditions |= Epilepsy;
+	}
+	// Seizures, moods that sink into depression, dementia in old age, and drinking where there is grain or fruit to ferment.
+	void BrainHealth(Npc& P, const Camp& C, int Days, Rng& R) const
+	{
+		static const int Farming = SkillNamed("farming"), Medicine = SkillNamed("medicine");
+		const float D = static_cast<float>(Days);
+		if (Epileptic(P) && R.Chance(OverDays(Has(C.Known, Medicine) ? 0.001 : 0.003, Days)))
+			++P.Seizures, P.Health -= 0.02f, P.Noradrenaline = 1.0f, P.Fatigue = 1.0f;
+		P.LowMoodDays = static_cast<uint16_t>(P.Serotonin < 0.3f ? std::min(60000, P.LowMoodDays + Days) : std::max(0, P.LowMoodDays - 2 * Days));
+		if (P.LowMoodDays >= 180) P.Conditions |= Depression;
+		else if (P.Serotonin > 0.45f) P.Conditions &= static_cast<uint16_t>(~Depression);
+		if ((P.Conditions & Ptsd) && R.Chance(OverDays(0.0005, Days))) P.Conditions &= static_cast<uint16_t>(~Ptsd); // Trauma can heal.
+		const double Age = P.AgeYears();
+		if (Age > 65.0 && R.Chance(OverDays(0.01 / 365.0 * std::pow(2.0, (Age - 70.0) / 5.0), Days))) P.Conditions |= Dementia; // Doubling every five years.
+		if ((P.Conditions & Dementia) && R.Chance(OverDays(1.0 / 365.0, Days))) Lesion(P, R);
+		P.Drink *= std::pow(0.5f, D);
+		P.Tolerance *= std::pow(0.999f, D);
+		if (Age >= 14.0 && P.LastAction == static_cast<int>(Action::Socialize) && Has(C.Known, Farming) && R.Chance(0.1 + 0.4 * PersonDraw(P.Id, 11)))
+		{
+			P.Drink = std::min(1.0f, P.Drink + 0.3f);
+			P.Dopamine = std::min(1.0f, P.Dopamine + 0.1f * (1.0f - P.Tolerance));
+			P.Tolerance = std::min(1.0f, P.Tolerance + 0.03f * static_cast<float>(0.5 + PersonDraw(P.Id, 11)));
+		}
+		if (P.Tolerance > 0.6f) P.Conditions |= AlcoholAddiction;
+		else if (P.Tolerance < 0.2f) P.Conditions &= static_cast<uint16_t>(~AlcoholAddiction);
+		if (P.Conditions & AlcoholAddiction) P.Health -= 0.0003f * D;
+	}
+
 	static void Learn(Npc& P, int Chosen, float Reward, int Days = 1)
 	{
 		const float Advantage = Reward - P.RewardBaseline;
@@ -5190,7 +5265,7 @@ private:
 		const float Gate = (0.5f + P.Dopamine) * (1.0f - 1.5f * std::max(0.0f, P.Cortisol - 0.6f));
 		Modulate(P, Chosen, Advantage, Days);
 		const double Age = P.AgeYears();
-		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age);
+		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age) * (P.Conditions & Dementia ? 0.5f : 1.0f);
 		const bool Pruning = Age >= 12.0 && Age < 25.0; // Adolescence: weak, unused synapses are cut away.
 		const float Habit = 0.005f * P.Genes->LearningRate * AgeGain(Age); // Hebbian: what is done together is wired together, rewarded or not.
 		for (int a = 0; a < kBrainActions; ++a)
@@ -5648,6 +5723,7 @@ private:
 					AnyDied = true;
 					D.Killed += 1, D.KilledThisYear += 1, ++DiseaseDeaths;
 				}
+				else if (P.Alive && Dice.Chance(OverDays(0.0003, Days))) P.Conditions |= Encephalitis, Lesion(P, Dice); // It reached the brain.
 			}
 			// It passes to bands nearby, along the state's roads to its capital, and with armies to the enemy.
 			const double Pass = OverDays(0.02 * D.Spread * (Home && Sanitation(*Home) ? 0.4 : 1.0), Days); // Clean water and sewers stop much of it.
