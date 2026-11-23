@@ -5490,7 +5490,7 @@ private:
 			InWorldWar = true, ++WorldWars;
 			AddEvent("World war " + std::to_string(WorldWars) + ": " + std::to_string(Sides) + " industrial states, with " + std::to_string(Fighting) + " people, are at war at once");
 		}
-		else if (!Big && InWorldWar && Fighting < World / 6.0) InWorldWar = false, WorldWarEnded = Eco->Years(), AddEvent("World war " + std::to_string(WorldWars) + " ends");
+		else if (!Big && InWorldWar) InWorldWar = false, WorldWarEnded = Eco->Years(), AddEvent("World war " + std::to_string(WorldWars) + " ends");
 		// Nuclear weapons: the first, their use in a war, and accidents.
 		for (Polity& S : States)
 		{
@@ -6748,7 +6748,9 @@ private:
 				Camps[static_cast<size_t>(N)].State = NewId;
 		Polity& New = *StateById(NewId);
 		const Polity& From = *StateById(OldId);
-		New.Rights = From.Rights, New.Compulsory = From.Compulsory; // Its people keep the rights and schooling they had.
+		New.Rights = From.Rights, New.Compulsory = From.Compulsory; // Its people keep the rights and schooling they had,
+		if (From.Gov != Chieftain && From.Gov != Dictatorship) New.Gov = From.Gov; // and the kind of rule they knew.
+		New.Justice = From.Justice;
 		if (Loud || Leader)
 		{
 			const std::string Text = (Leader ? PersonName(Leader->Name) + " " + Why : Why) + ": " + StateName(New) + " breaks away from " + OldName;
