@@ -2534,6 +2534,7 @@ private:
 	// How much of what the land around a camp can feed is still free: its own square and two rings around it.
 	void MeasureRoom()
 	{
+		static const int SpearThrowers = SkillNamed("spear throwers");
 		// Ice ages change how much land there is and how much it grows.
 		if (SquareCapacity.empty() || LandClimate != Eco->ClimateVersion())
 		{
@@ -2547,6 +2548,7 @@ private:
 			const int C0 = GridCol(C.Lon);
 			double Capacity = 0.0;
 			double Living = 0.0;
+			const bool Outmatched = C.Kind == 0 && !Has(C.Known, SpearThrowers);
 			for (int r = std::max(0, R0 - 2); r <= std::min(179, R0 + 2); ++r)
 			{
 				for (int c = C0 - 2; c <= C0 + 2; ++c)
@@ -2558,7 +2560,9 @@ private:
 					{
 						for (int Slot : It->second)
 						{
-							Living += static_cast<double>(Camps[Slot].Members.size());
+							// Other humans hold their lands against NPCs who don't yet hunt from afar with spear throwers,
+							// as the Neanderthals of the Levant held back the first who left Africa.
+							Living += static_cast<double>(Camps[Slot].Members.size()) * (Outmatched && Camps[Slot].Kind != 0 ? 3.0 : 1.0);
 						}
 					}
 				}
@@ -2823,11 +2827,18 @@ private:
 				Angle = std::atan2(Camps[c].ScoutLat - Camps[c].Lat, Camps[c].ScoutLon - Camps[c].Lon);
 			}
 			bool Placed = false;
-			for (int Try = 0; Try < 8 && !Placed; ++Try)
+			// Shore bands with rafts or boats sometimes paddle out to land they can see or guess at, as the first to reach Australia did.
+			// They make for the emptiest land they find. Only foragers do this; farmers settle near their fields.
+			const bool Paddle = !Full && !Camps[c].State && !Knows(Camps[c].Known, 25) && Camps[c].Effects.Travel > 1.0f && Fishes(Camps[c]) && ShoreFood(Camps[c].Lat, Camps[c].Lon) > 0.0 && Dice.Chance(0.2);
+			double Fewest = 1e18;
+			for (int Try = 0; Try < 8 && (Paddle || !Placed); ++Try)
 			{
-				const double Far = Full ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
-				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, New.Lat, New.Lon);
-				Placed = LivableFor(New.Kind, New.Lat, New.Lon, Fishes(Camps[c]));
+				const double Far = Full || Paddle ? Dice.Range(60.0, 150.0) * Camps[c].Effects.Travel : Dice.Range(30.0, 60.0);
+				double La = 0.0, Lo = 0.0;
+				Offset(Camps[c].Lat, Camps[c].Lon, Angle + Try * 0.8, Far, La, Lo);
+				if (!LivableFor(New.Kind, La, Lo, Fishes(Camps[c]))) continue;
+				const double Near = Paddle ? static_cast<double>(CampSlotsNear(La, Lo, 100.0).size()) - Far / 1000.0 : 0.0; // Emptiest, then farthest.
+				if (Near < Fewest) Fewest = Near, New.Lat = La, New.Lon = Lo, Placed = true;
 			}
 			if (!Placed)
 			{
