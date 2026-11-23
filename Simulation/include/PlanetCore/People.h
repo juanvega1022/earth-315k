@@ -1524,6 +1524,79 @@ public:
 		return L;
 	}
 
+	// Functional anatomy: each hidden neuron is placed in the region whose senses drive it most, the way
+	// a recording tells a neuroscientist what an area does. The action layer, where lessons are learned,
+	// stands for the basal ganglia (striatum). Regions are read from the wiring, not built in.
+	static constexpr int kRegions = 6;
+	static const char* RegionName(int R)
+	{
+		static const char* Names[kRegions] = {"hypothalamus (hunger, thirst, tiredness, mating)", "amygdala (fear)", "social cortex (loneliness, company)",
+			"sensory cortex and thalamus (food, game, water, season)", "brainstem (age, health, arousal)", "prefrontal cortex (mixed, integrating)"};
+		return R >= 0 && R < kRegions ? Names[R] : "?";
+	}
+	static int RegionOfNeuron(const Genome& G, int H)
+	{
+		static const int Group[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
+		std::array<float, kRegions> Pull{};
+		float Total = 0.0f;
+		for (int i = 0; i < kBrainInputs; ++i)
+		{
+			const float W = std::abs(G.W1[static_cast<size_t>(H) * kBrainInputs + i]);
+			Pull[Group[i]] += W, Total += W;
+		}
+		const int Top = static_cast<int>(std::max_element(Pull.begin(), Pull.begin() + 5) - Pull.begin());
+		return Total > 0.0f && Pull[Top] >= 0.5f * Total ? Top : 5; // No region dominates: an integrating neuron.
+	}
+	// Excitatory if what it sends out is mostly positive, inhibitory if mostly negative (Dale's law: one sign per cell).
+	static bool Excitatory(const Npc& P, int H)
+	{
+		float Sum = 0.0f;
+		for (int a = 0; a < kBrainActions; ++a) Sum += OutputWeight(P, H, a);
+		return Sum >= 0.0f;
+	}
+	std::string AnatomyJson(const Npc& P) const
+	{
+		const int H = P.BrainSize();
+		std::array<int, kRegions> Count{};
+		std::array<std::array<float, kBrainActions>, kRegions> ToActions{};
+		std::array<std::array<float, kBrainInputs>, kRegions> FromSenses{};
+		int Exc = 0, Dale = 0;
+		std::vector<std::pair<float, int>> Hubs;
+		for (int h = 0; h < H; ++h)
+		{
+			const int R = RegionOfNeuron(*P.Genes, h);
+			++Count[R];
+			float Strength = 0.0f, Pos = 0.0f, Neg = 0.0f;
+			for (int a = 0; a < kBrainActions; ++a)
+			{
+				const float W = OutputWeight(P, h, a);
+				ToActions[R][a] += W, Strength += std::abs(W), (W >= 0.0f ? Pos : Neg) += std::abs(W);
+			}
+			for (int i = 0; i < kBrainInputs; ++i)
+			{
+				const float W = P.Genes->W1[static_cast<size_t>(h) * kBrainInputs + i];
+				FromSenses[R][i] += W, Strength += std::abs(W);
+			}
+			Exc += Excitatory(P, h);
+			Dale += std::max(Pos, Neg) >= 0.8f * (Pos + Neg); // Nearly all its outputs share one sign.
+			Hubs.emplace_back(Strength, h);
+		}
+		std::sort(Hubs.rbegin(), Hubs.rend());
+		std::string J = "{\"note\":\"Regions are assigned from which senses drive each neuron most; learned output weights stand for the basal ganglia.\",\"regions\":[";
+		for (int R = 0; R < kRegions; ++R)
+		{
+			J += std::string(R ? "," : "") + "{\"region\":\"" + RegionName(R) + "\",\"neurons\":" + std::to_string(Count[R]) + ",\"from_senses\":" + Matrix(FromSenses[R].data(), 1, kBrainInputs) +
+				",\"to_actions\":" + Matrix(ToActions[R].data(), 1, kBrainActions) + "}";
+		}
+		J += "],\"neuron_regions\":[";
+		for (int h = 0; h < H; ++h) J += std::string(h ? "," : "") + std::to_string(RegionOfNeuron(*P.Genes, h));
+		J += "],\"neuron_types\":[";
+		for (int h = 0; h < H; ++h) J += std::string(h ? "," : "") + (Excitatory(P, h) ? "\"excitatory\"" : "\"inhibitory\"");
+		J += "],\"excitatory_share\":" + Num(static_cast<double>(Exc) / std::max(1, H)) + ",\"obeys_dales_law_share\":" + Num(static_cast<double>(Dale) / std::max(1, H)) + ",\"hubs\":[";
+		for (size_t k = 0; k < std::min<size_t>(3, Hubs.size()); ++k) J += std::string(k ? "," : "") + std::to_string(Hubs[k].second);
+		return J + "]}";
+	}
+
 	// How far apart two choices are: half the summed change in chances (0 the same, 1 completely different).
 	static float ChoiceShift(const std::array<float, kBrainActions>& A, const std::array<float, kBrainActions>& B)
 	{
@@ -1585,7 +1658,7 @@ public:
 			for (int v = 0; v <= 4; ++v) { auto In = Sits[0].second; In[i] = 0.25f * v; J += std::string(v ? "," : "") + Probs(Respond(P, In)); }
 			J += "]}";
 		}
-		J += "],\"tuning_levels\":[0,0.25,0.5,0.75,1]}";
+		J += "],\"tuning_levels\":[0,0.25,0.5,0.75,1],\"anatomy\":" + AnatomyJson(P) + "}";
 		return J;
 	}
 
@@ -1631,10 +1704,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1647,6 +1720,7 @@ public:
 			for (size_t k = 0; k < G.W2.size(); ++k) In += std::abs(G.W2[k]), Le += std::abs(P.LearnedW2[k]);
 			++S.N, S.Max = std::max(S.Max, P.BrainSize()), S.Neurons += P.BrainSize(), S.Sparse += static_cast<double>(Small) / std::max<size_t>(1, G.W1.size()), S.Entropy += E;
 			S.Rate += G.LearningRate, S.Cur += G.Curiosity, S.Imit += G.Imitation, S.Kind += G.Kindness, S.Learned += Le / std::max(1e-9, In + Le), S.Rpe += std::abs(P.LastRpe);
+			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
 		}
 		std::string Out;
@@ -1659,6 +1733,9 @@ public:
 			std::snprintf(Line, sizeof(Line), "%d,%s,%d,%.2f,%d,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f\n", Year, OtherKinds()[k].Name, S.N, S.Neurons / N, S.Max, S.Sparse / N,
 				S.Entropy / N, S.Rate / N, S.Cur / N, S.Imit / N, S.Kind / N, S.Learned / N, S.Rpe / N, S.Da / N, S.Se / N, S.Co / N, S.Na / N, S.Ox / N);
 			Out += Line;
+			Out.pop_back();
+			for (double R : S.Reg) std::snprintf(Line, sizeof(Line), ",%.2f", R / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f\n", S.Exc / N), Out += Line;
 		}
 		return Out;
 	}
