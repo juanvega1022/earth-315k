@@ -120,6 +120,21 @@ struct Genome
 	}
 };
 
+// A remembered moment: what was sensed, what was done and how much better or worse it went than expected.
+struct Episode
+{
+	double AgeDays = 0.0; // How old the person was.
+	int8_t Act = 0;
+	float Value = 0.0f;    // Reward prediction error at the time.
+	float Strength = 0.0f; // Fades with time; strong feelings write it deeper, sleep replay strengthens it.
+	uint16_t Replays = 0;
+	std::array<int8_t, kBrainInputs> Cue{}; // The senses, in hundredths.
+
+	template <class A>
+	void Serialize(A& Ar) { Ar.Io(AgeDays), Ar.Io(Act), Ar.Io(Value), Ar.Io(Strength), Ar.Io(Replays), Ar.Io(Cue); }
+};
+inline constexpr int kEpisodes = 6;
+
 struct Npc
 {
 	uint32_t Id = 0;
@@ -171,6 +186,10 @@ struct Npc
 	// serotonin (mood, slow) brings patience and generosity; cortisol (stress) makes for hiding and blunts learning;
 	// noradrenaline (arousal, fast) sharpens choices; oxytocin (bonding) draws people to share and seek company.
 	float Dopamine = 0.5f, Serotonin = 0.5f, Cortisol = 0.5f, Noradrenaline = 0.5f, Oxytocin = 0.5f;
+	// Memory: a few vivid episodes (hippocampus), recalled when the senses match, and the last actions held in mind (not saved).
+	std::vector<Episode> Episodes;
+	std::array<int8_t, 9> Held{};
+	int HeldCount = 0;
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
 	SkillEffects Own;
@@ -266,6 +285,7 @@ struct Npc
 		if (Ar.Version >= 51) Ar.Io(Line);
 		if (Ar.Version >= 52) Ar.Io(Spouse);
 		if (Ar.Version >= 53) Ar.Io(Dopamine), Ar.Io(Serotonin), Ar.Io(Cortisol), Ar.Io(Noradrenaline), Ar.Io(Oxytocin);
+		if (Ar.Version >= 54) Ar.Io(Episodes);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -1628,6 +1648,18 @@ public:
 		for (float W : P.LearnedW2) Cut += W == 0.0f;
 		J += ",\"plasticity\":{\"learning_gain_for_age\":" + Num(AgeGain(P.AgeYears())) + ",\"choice_noise_for_myelin\":" + Num(Unmyelinated(P)) +
 			",\"pruning_now\":" + (P.AgeYears() >= 12.0 && P.AgeYears() < 25.0 ? "true" : "false") + ",\"silent_learned_synapses_share\":" + Num(static_cast<double>(Cut) / std::max<size_t>(1, P.LearnedW2.size())) + "}";
+		J += ",\"memory\":{\"working_memory_span\":" + std::to_string(WorkingSpan(P)) + ",\"held_in_mind\":[";
+		for (int k = 0; k < P.HeldCount; ++k) J += std::string(k ? "," : "") + "\"" + ActionName(P.Held[k]) + "\"";
+		J += "],\"episodes\":[";
+		for (size_t k = 0; k < P.Episodes.size(); ++k)
+		{
+			const Episode& E = P.Episodes[k];
+			std::array<float, kBrainInputs> Cue{};
+			for (int i = 0; i < kBrainInputs; ++i) Cue[i] = E.Cue[i] / 100.0f;
+			J += std::string(k ? "," : "") + "{\"age_years\":" + Num(E.AgeDays / 365.0) + ",\"action\":\"" + ActionName(E.Act) + "\",\"surprise\":" + Num(E.Value) +
+				",\"strength\":" + Num(E.Strength) + ",\"sleep_replays\":" + std::to_string(E.Replays) + ",\"senses\":" + Matrix(Cue.data(), 1, kBrainInputs) + ",\"likeness_to_now\":" + Num(Likeness(E, P.LastInputs)) + "}";
+		}
+		J += "],\"recall_pull_now\":" + Matrix(Recalled(P, P.LastInputs).data(), 1, kBrainActions) + "}";
 		J += ",\"learned_share_of_output_weights\":" + Num(Learned / std::max(1e-9, Inborn + Learned));
 		J += ",\"situations\":[";
 		for (size_t s = 0; s < Sits.size(); ++s) J += std::string(s ? "," : "") + "{\"name\":\"" + Sits[s].first + "\",\"inputs\":" + Matrix(Sits[s].second.data(), 1, kBrainInputs) + ",\"chances\":" + Probs(Base[s]) + "}";
@@ -1708,10 +1740,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0; std::array<double, kRegions> Reg{}; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1726,6 +1758,8 @@ public:
 			S.Rate += G.LearningRate, S.Cur += G.Curiosity, S.Imit += G.Imitation, S.Kind += G.Kindness, S.Learned += Le / std::max(1e-9, In + Le), S.Rpe += std::abs(P.LastRpe);
 			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
+			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P);
+			for (const Episode& Ep : P.Episodes) S.Mem += Ep.Strength, S.Rep += Ep.Replays;
 		}
 		std::string Out;
 		for (size_t k = 0; k < By.size(); ++k)
@@ -1739,7 +1773,7 @@ public:
 			Out += Line;
 			Out.pop_back();
 			for (double R : S.Reg) std::snprintf(Line, sizeof(Line), ",%.2f", R / N), Out += Line;
-			std::snprintf(Line, sizeof(Line), ",%.3f\n", S.Exc / N), Out += Line;
+			std::snprintf(Line, sizeof(Line), ",%.3f,%.2f,%.3f,%.2f,%.2f\n", S.Exc / N, S.Epi / N, S.Mem / std::max(1.0, S.Epi), S.Rep / std::max(1.0, S.Epi), S.Span / N), Out += Line;
 		}
 		return Out;
 	}
@@ -3324,11 +3358,12 @@ private:
 			}
 			P.LastHidden[h] = std::tanh(Sum);
 		}
+		const std::array<float, kBrainActions> Recall = Recalled(P, P.LastInputs);
 		std::array<float, kBrainActions> Logit{};
 		float Top = -1e9f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a) + ModulatorBias(P, a);
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Recall[a];
 			for (int h = 0; h < Hidden; ++h)
 			{
 				Sum += P.LastHidden[h] * OutputWeight(P, h, a);
@@ -5079,6 +5114,73 @@ private:
 		Toward(P.Oxytocin, 0.45f + (Warm ? 0.25f : 0.0f) - 0.3f * P.Loneliness, 0.05f);
 	}
 
+	// How alike a remembered scene is to now (cosine of the senses).
+	static float Likeness(const Episode& E, const std::array<float, kBrainInputs>& In)
+	{
+		float Dot = 0.0f, A = 0.0f, B = 0.0f;
+		for (int i = 0; i < kBrainInputs; ++i) Dot += E.Cue[i] * In[i], A += float(E.Cue[i]) * E.Cue[i], B += In[i] * In[i];
+		return Dot / std::sqrt(std::max(1e-9f, A * B));
+	}
+	// A scene much like a remembered one brings it back, pulling toward what went well then and away from what went badly.
+	static std::array<float, kBrainActions> Recalled(const Npc& P, const std::array<float, kBrainInputs>& In)
+	{
+		std::array<float, kBrainActions> Pull{};
+		for (const Episode& E : P.Episodes)
+		{
+			const float L = Likeness(E, In);
+			if (L > 0.95f) Pull[E.Act] += std::clamp(E.Value, -1.0f, 1.0f) * std::min(E.Strength, 2.0f) * (L - 0.95f) * 20.0f;
+		}
+		return Pull;
+	}
+	// How many recent acts can be held in mind at once: about seven, fewer in a small, stressed or very old brain.
+	static int WorkingSpan(const Npc& P)
+	{
+		return std::clamp(3 + P.BrainSize() / 8 - (P.Cortisol > 0.7f ? 1 : 0) - (P.AgeYears() > 75.0 ? 1 : 0), 2, 9);
+	}
+	// Writes the moment into memory if it moved them more than their faintest memory; fear and arousal write deeper.
+	static void Remember(Npc& P, int Chosen, float Advantage, int Days)
+	{
+		for (Episode& E : P.Episodes) E.Strength *= std::pow(0.998f, static_cast<float>(Days));
+		const float Feeling = std::abs(Advantage) * (0.5f + P.Noradrenaline) * (1.0f + 2.0f * std::max(0.0f, P.Cortisol - 0.6f));
+		Episode* Slot = nullptr;
+		if (Feeling <= 0.05f) {}
+		else if (P.Episodes.size() < kEpisodes) Slot = &P.Episodes.emplace_back();
+		else
+		{
+			Slot = &*std::min_element(P.Episodes.begin(), P.Episodes.end(), [](const Episode& A, const Episode& B) { return A.Strength < B.Strength; });
+			if (Slot->Strength >= Feeling) Slot = nullptr;
+		}
+		if (Slot)
+		{
+			*Slot = Episode{P.AgeDays, static_cast<int8_t>(Chosen), Advantage, Feeling, 0, {}};
+			for (int i = 0; i < kBrainInputs; ++i) Slot->Cue[i] = static_cast<int8_t>(std::clamp(std::lround(P.LastInputs[i] * 100.0f), -127L, 127L));
+		}
+		const int Span = WorkingSpan(P);
+		for (int k = std::min(P.HeldCount, Span - 1); k > 0; --k) P.Held[k] = P.Held[k - 1];
+		P.Held[0] = static_cast<int8_t>(Chosen), P.HeldCount = std::min(P.HeldCount + 1, Span);
+	}
+	// Asleep, the strongest memory is replayed and its lesson learned again, which also deepens it.
+	static void Replay(Npc& P, float Rate)
+	{
+		if (P.Episodes.empty()) return;
+		Episode& E = *std::max_element(P.Episodes.begin(), P.Episodes.end(), [](const Episode& A, const Episode& B) { return A.Strength / (1 + A.Replays) < B.Strength / (1 + B.Replays); });
+		std::array<float, kBrainInputs> In{};
+		for (int i = 0; i < kBrainInputs; ++i) In[i] = E.Cue[i] / 100.0f;
+		std::vector<float> H;
+		const std::array<float, kBrainActions> Chances = Respond(P, In, -1, 0.0f, &H);
+		const float Push = 0.3f * Rate * E.Value;
+		for (int a = 0; a < kBrainActions; ++a)
+		{
+			const float D = Push * ((a == E.Act ? 1.0f : 0.0f) - Chances[a]);
+			for (int h = 0; h < P.BrainSize(); ++h)
+			{
+				float& W = P.LearnedW2[h * kBrainActions + a];
+				W = std::clamp(W + D * H[h], -4.0f, 4.0f);
+			}
+		}
+		E.Strength = std::min(E.Strength * 1.1f, 4.0f), ++E.Replays;
+	}
+
 	static void Learn(Npc& P, int Chosen, float Reward, int Days = 1)
 	{
 		const float Advantage = Reward - P.RewardBaseline;
@@ -5103,6 +5205,8 @@ private:
 			}
 			P.LearnedB2[a] = std::clamp(P.LearnedB2[a] * 0.9995f + Push, -4.0f, 4.0f);
 		}
+		Remember(P, Chosen, Advantage, Days);
+		if (Chosen == static_cast<int>(Action::Rest)) Replay(P, P.Genes->LearningRate / P.Genes->Curiosity * AgeGain(Age));
 	}
 
 	static void Blend(Npc& Learner, const Npc& Teacher, float Amount)
