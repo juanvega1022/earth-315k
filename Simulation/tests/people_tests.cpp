@@ -188,6 +188,14 @@ static void TestBrainJson()
 	const std::string T = W.Folk.BrainTracesJson();
 	EXPECT(T.find("\"role\":\"elder\"") != std::string::npos && T.find("\"rpe\"") != std::string::npos && T.find("nan") == std::string::npos);
 	EXPECT(W.Folk.BrainStatsRows(1).rfind("1,NPC,", 0) == 0);
+	// Neuromodulators stay in range and move with each life.
+	bool Moved = false;
+	for (const earth::Npc& Q : W.Folk.All())
+	{
+		for (float L : {Q.Dopamine, Q.Serotonin, Q.Cortisol, Q.Noradrenaline, Q.Oxytocin}) EXPECT(L >= 0.0f && L <= 1.0f);
+		Moved = Moved || std::abs(Q.Cortisol - 0.5f) > 0.01f;
+	}
+	EXPECT(Moved && J.find("\"neuromodulators\"") != std::string::npos);
 }
 
 // When everyone dies, a new band arrives and the run goes on.
