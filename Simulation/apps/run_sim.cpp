@@ -19,9 +19,14 @@
 #include <string>
 #include <vector>
 
+static std::vector<uint32_t> BrainOf; // People asked for by id with --brain-of, each saved as brain_<id>.json beside the others.
+
 // Saves the brain of the oldest NPC, who has had the longest to learn, and the biggest brain.
 static const earth::Npc& SaveBrain(const earth::People& Folk, const std::string& Path)
 {
+	const size_t Slash = Path.find_last_of("/\\");
+	for (uint32_t Id : BrainOf)
+		if (const earth::Npc* P = Folk.Find(Id)) std::ofstream((Slash == std::string::npos ? std::string() : Path.substr(0, Slash + 1)) + "brain_" + std::to_string(Id) + ".json") << Folk.BrainJson(*P) << '\n';
 	const earth::Npc* Oldest = &Folk.All()[0];
 	for (const earth::Npc& P : Folk.All())
 	{
@@ -148,6 +153,13 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--other-humans")) PeopleCfg.OtherHumans = true;
 		else if (!std::strcmp(Argv[i], "--sea-level") && HasValue) SeaLevel = std::atof(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--brain") && HasValue) BrainPath = Argv[++i];
+		else if (!std::strcmp(Argv[i], "--brain-of") && HasValue)
+			for (const char* C = Argv[++i]; *C;)
+			{
+				char* End = nullptr;
+				BrainOf.push_back(static_cast<uint32_t>(std::strtoul(C, &End, 10)));
+				C = *End ? End + 1 : End;
+			}
 		else if (!std::strcmp(Argv[i], "--no-people")) WithPeople = false;
 		else if (!std::strcmp(Argv[i], "--fast") && HasValue) FastDays = std::atoi(Argv[++i]);
 		else if (!std::strcmp(Argv[i], "--max-people") && HasValue) PeopleCfg.MaxPeople = std::atoi(Argv[++i]);
@@ -167,7 +179,7 @@ int main(int Argc, char** Argv)
 		else if (!std::strcmp(Argv[i], "--mind-model") && HasValue) MindModel = Argv[++i];
 		else
 		{
-			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans] [--minds N] [--mind-model name]\n");
+			std::printf("Usage: earth315k_sim [--years N] [--seed S] [--data folder] [--csv file] [--sea-level metres] [--brain file.json] [--brain-of id,id,...] [--no-people] [--fast days] [--max-people N] [--density D] [--start years-ago] [--no-ice-ages] [--languages file.txt] [--stories file.txt] [--inventions file.txt] [--report file.html] [--beliefs file.txt] [--atlas file.html] [--save file.bin] [--save-every years] [--resume file.bin] [--other-humans] [--minds N] [--mind-model name]\n");
 			std::printf("  --fast N        move everything N days at a time (1..30): coarser, much faster\n");
 			std::printf("  --max-people N  never more than N people (default: no limit but the land)\n");
 			std::printf("  --density D     people a square km of the greenest land can feed (default %g)\n", PeopleCfg.PeoplePerKm2);
@@ -455,7 +467,7 @@ int main(int Argc, char** Argv)
 			std::ofstream(FolderOf(BrainPath) + "brain_traces.json") << Folk.BrainTracesJson() << '\n';
 			const std::string Stats = FolderOf(BrainPath) + "brain_stats.csv";
 			const bool Fresh = !FileExists(Stats);
-			for (const char* Col : {"dopamine", "serotonin", "cortisol", "noradrenaline", "oxytocin", "hypothalamus", "amygdala", "social_cortex", "sensory_cortex", "brainstem", "prefrontal", "excitatory_share", "episodes", "memory_strength", "sleep_replays", "working_span", "epilepsy", "depression", "ptsd", "dementia", "brain_injury", "encephalitis", "alcohol_addiction", "silenced_neurons", "seizures", "eeg_delta", "eeg_theta", "eeg_alpha", "eeg_beta", "eeg_gamma", "sex_hormone", "growth_hormone", "attention_focus"}) AddCsvColumn(Stats, Col);
+			for (const char* Col : {"dopamine", "serotonin", "cortisol", "noradrenaline", "oxytocin", "hypothalamus", "amygdala", "social_cortex", "sensory_cortex", "brainstem", "prefrontal", "excitatory_share", "episodes", "memory_strength", "sleep_replays", "working_span", "epilepsy", "depression", "ptsd", "dementia", "brain_injury", "encephalitis", "alcohol_addiction", "silenced_neurons", "seizures", "eeg_delta", "eeg_theta", "eeg_alpha", "eeg_beta", "eeg_gamma", "sex_hormone", "growth_hormone", "attention_focus", "problem_solving", "planning", "theory_of_mind", "cognition_composite", "cognition_sd", "left_handed"}) AddCsvColumn(Stats, Col);
 			std::ofstream Out(Stats, std::ios::app);
 			if (Fresh) Out << earth::People::BrainStatsHeader();
 			Out << Folk.BrainStatsRows(Y);
