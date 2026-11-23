@@ -795,11 +795,11 @@ public:
 	// What a person does for a living, read from their age, band and state: not stored, but the same
 	// each time for the same person. Jobs open up as the state learns what they need.
 	enum Job : uint8_t { JobChild, JobPupil, JobGatherer, JobHunter, JobFarmer, JobHerder, JobCraftsman, JobSoldier, JobPriest, JobMerchant, JobScribe, JobTeacher,
-		JobDoctor, JobMiner, JobFactoryWorker, JobEngineer, JobScientist, JobProgrammer, JobElder, JobCount };
+		JobDoctor, JobMiner, JobFactoryWorker, JobEngineer, JobScientist, JobProgrammer, JobElder, JobStudent, JobRetired, JobCount };
 	static const char* JobName(int J)
 	{
 		static const char* Names[JobCount] = {"child", "pupil", "gatherer", "hunter", "farmer", "herder", "craftsman", "soldier", "priest", "merchant",
-			"scribe", "teacher", "doctor", "miner", "factory worker", "engineer", "scientist", "programmer", "elder"};
+			"scribe", "teacher", "doctor", "miner", "factory worker", "engineer", "scientist", "programmer", "elder", "student", "retired"};
 		return J < JobCount ? Names[J] : "";
 	}
 	// A fixed draw in [0, 1) for one person and one question.
@@ -814,8 +814,15 @@ public:
 		const double Age = P.AgeYears();
 		const Camp* C = Camps.empty() ? nullptr : &Camps[CampSlot(P.Camp)];
 		const Polity* S = C && C->State ? StateById(C->State) : nullptr;
-		if (Age < 12.0) return S && S->Schools && Age >= 6.0 && PersonDraw(P.Id, 1) < S->Literacy / 0.95 ? JobPupil : JobChild;
-		if (Age >= 65.0 && (!S || !Has(S->Known, SkillNamed("factories")))) return JobElder;
+		// The course of a life: play, then school (longer where the law sends every child), perhaps university, work, and old age.
+		if (Age < 6.0) return JobChild;
+		if (Age < (S && S->Compulsory ? 16.0 : 12.0)) return S && S->Schools && (S->Compulsory || PersonDraw(P.Id, 1) < S->Literacy / 0.95) ? JobPupil : JobChild;
+		if (Age >= 18.0 && Age < 23.0 && S && S->Universities && PersonDraw(P.Id, 8) < 0.3 * S->Literacy) return JobStudent;
+		if (Age >= 65.0)
+		{
+			if (!S || !Has(S->Known, SkillNamed("factories"))) return JobElder;
+			if (S->Welfare > 0.5f) return JobRetired; // A rich industrial state pays the old a pension; elsewhere they work on.
+		}
 		if (!S) return P.HuntSkill > P.ForageSkill ? JobHunter : JobGatherer;
 		if (P.Status == 0) return Has(S->Known, SkillNamed("steam engines")) && PersonDraw(P.Id, 4) < 0.3 ? JobMiner : JobFarmer; // The enslaved work fields and mines.
 		const double Draw = PersonDraw(P.Id, 2);
@@ -925,7 +932,7 @@ public:
 		std::string Out = std::to_string(States.size()) + " states (" + std::to_string(StatesFounded) + " founded since the first)\n\n";
 		std::unordered_map<uint32_t, std::array<int, JobCount>> Work; // Grown workers by job, per state.
 		for (const Npc& P : Npcs)
-			if (const int J = JobOf(P); J != JobChild && J != JobPupil && J != JobElder)
+			if (const int J = JobOf(P); J != JobChild && J != JobPupil && J != JobElder && J != JobStudent && J != JobRetired)
 				if (const uint32_t St = Camps.empty() ? 0u : Camps[CampSlot(P.Camp)].State) ++Work[St][J];
 		char Buf[160];
 		for (const Polity* S : List)
@@ -1819,7 +1826,10 @@ public:
 			if (C.Leader == P.Id) Life += "Your band trusts you most and looks to you to lead. ";
 			{
 				const int J = JobOf(P);
-				if (J != JobChild && J != JobElder) Life += std::string(J == JobPupil ? "You go to school. " : "You work as a ") + (J == JobPupil ? "" : std::string(JobName(J)) + ". ");
+				if (J == JobPupil) Life += "You go to school. ";
+				else if (J == JobStudent) Life += "You study at the university. ";
+				else if (J == JobRetired) Life += "You have stopped working and live on a pension. ";
+				else if (J != JobChild && J != JobElder) Life += "You work as a " + std::string(JobName(J)) + ". ";
 				if (Realm && Has(C.Known, SkillNamed("writing"))) Life += Reads(P) ? "You can read and write. " : "You cannot read or write. ";
 				Life += DailyLife(P);
 				if (P.Line) Life += "You belong to the family of " + PersonName(P.Line) + ". ";

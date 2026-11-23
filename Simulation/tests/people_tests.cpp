@@ -766,6 +766,8 @@ static void TestStates()
 		{
 			const int J = Folk.JobOf(P);
 			EXPECT(J == Folk.JobOf(P) && (P.AgeYears() >= 12.0 || J <= earth::People::JobPupil));
+			EXPECT(P.AgeYears() >= 6.0 || J == earth::People::JobChild);
+			EXPECT((J != earth::People::JobStudent || (P.AgeYears() >= 18.0 && P.AgeYears() < 23.0)) && (J != earth::People::JobRetired || P.AgeYears() >= 65.0));
 		}
 		EXPECT(Folk.WorldReaders() >= 0.0 && Folk.WorldReaders() <= 1.0);
 		// Views: children hold none; a state's view tally counts only its grown people.
