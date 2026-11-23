@@ -338,6 +338,7 @@ struct Camp
 	int DeathsLately = 0;  // Deaths since the band last wondered why.
 	uint32_t Leader = 0;   // The most trusted adult, worked out each step.
 	uint32_t State = 0;    // The chiefdom, kingdom or other state it belongs to (see Polities.h), 0 none.
+	uint32_t TalliedState = UINT32_MAX; // State at the last tally, so its schools can move with it; not saved.
 	uint16_t Sick = 0;     // The sickness going through the band now (see Diseases.h), 0 none.
 	int SickDays = 0;
 	std::vector<std::pair<uint16_t, float>> Exposed; // Sicknesses the band's people have lived through, and the last year.
@@ -2131,6 +2132,7 @@ private:
 	int RisesLastYear = 0; // People who rose in station last year; not saved.
 	std::array<int, 5> CauseThisYear{}, CauseLastYear{}; // Deaths by cause (illness or age, predators, hunger, thirst, injury); not saved.
 	std::unordered_map<uint32_t, AgeBands> StateDead; // The same by state; not saved.
+	std::unordered_map<uint32_t, double> SchoolsPerHead; // Each state's schools per member at the last tally; not saved.
 	bool FuelRunningOut = false;
 	double FuelThisYear = 0.0; // Gt of CO2; not saved.
 	int StatesFounded = 0;
@@ -5479,7 +5481,8 @@ private:
 				AnyBomb = true, AddEvent(T);
 			}
 			Polity* E = StateById(S.Enemy);
-			if (E && Dice.Chance(Nuclear(*E) ? 0.002 : 0.01))
+			// Deterrence holds between nuclear states; against others the bomb is used only in a total war, and seldom again once its horror is seen.
+			if (E && Dice.Chance(Nuclear(*E) ? 0.002 : !InWorldWar ? 0.0001 : NuclearWars == 0 ? 0.01 : 0.001))
 			{
 				AddEvent("Nuclear war: " + StateName(S) + " destroys the capital of " + StateName(*E) + (Nuclear(*E) ? ", and is destroyed in turn" : ""));
 				Eco->Strike("A nuclear strike", E->Lat, E->Lon, 0.1, 3.0, 60.0, 0.0);
@@ -6610,6 +6613,7 @@ private:
 	{
 		std::unordered_map<uint32_t, std::vector<int>> Of;
 		for (Polity& S : States) S.Bands = S.Members = 0, S.Known = 0;
+		std::unordered_map<uint32_t, double> SchoolsMoved, PerHeadNow; // A band that changes state takes its share of schools with it.
 		std::unordered_map<uint32_t, std::pair<float, float>> Rich; // Least and most food put by per head.
 		for (size_t c = 0; c < Camps.size(); ++c)
 		{
@@ -6622,6 +6626,13 @@ private:
 				continue;
 			}
 			if (C.Members.empty()) continue;
+			if (C.TalliedState != C.State && C.TalliedState != UINT32_MAX)
+			{
+				auto From = SchoolsPerHead.find(C.TalliedState);
+				const double Took = From == SchoolsPerHead.end() ? 0.0 : From->second * static_cast<double>(C.Members.size());
+				SchoolsMoved[C.TalliedState] -= Took, SchoolsMoved[C.State] += Took;
+			}
+			C.TalliedState = C.State;
 			S->Bands += 1;
 			S->Members += static_cast<int>(C.Members.size());
 			S->Known |= C.Known;
@@ -6635,6 +6646,9 @@ private:
 			auto R = Rich.find(S.Id);
 			S.Inequality = R == Rich.end() ? 1.0f : (R->second.second + 1.0f) / (R->second.first + 1.0f);
 			S.Fertility = 1.0f; // Set with the cities below.
+			auto Moved = SchoolsMoved.find(S.Id);
+			if (Moved != SchoolsMoved.end()) S.Schools = static_cast<uint16_t>(std::lround(std::clamp(static_cast<double>(S.Schools) + Moved->second, 0.0, 65535.0)));
+			PerHeadNow[S.Id] = static_cast<double>(S.Schools) / std::max(1, S.Members);
 			S.Literacy = std::min(S.Rights >= 2 ? 0.95f : 0.55f, static_cast<float>(S.Schools) * 10.0f / static_cast<float>(std::max(1, S.Members))); // Until girls go to school, most women can't read.
 			// Knowing of a thing is not being able to build it: factories need cities and readers,
 			// and the newest things universities and a mostly reading people as well.
@@ -6659,6 +6673,7 @@ private:
 			// The demographic transition: where most read and many live in towns, families get smaller.
 			S.Fertility = static_cast<float>((1.0 - 0.65 * S.Literacy * std::min(1.0, 2.0 * Share)) * (S.Rights >= 2 ? 0.85 : 1.0)); // Schooled women marry later.
 		}
+		SchoolsPerHead.swap(PerHeadNow);
 		return Of;
 	}
 
@@ -6711,6 +6726,8 @@ private:
 			if (Camps[static_cast<size_t>(N)].State == OldId && Camps[static_cast<size_t>(N)].Id != StateById(OldId)->Capital && Dice.Chance(0.5))
 				Camps[static_cast<size_t>(N)].State = NewId;
 		Polity& New = *StateById(NewId);
+		const Polity& From = *StateById(OldId);
+		New.Rights = From.Rights, New.Compulsory = From.Compulsory; // Its people keep the rights and schooling they had.
 		if (Loud || Leader)
 		{
 			const std::string Text = (Leader ? PersonName(Leader->Name) + " " + Why : Why) + ": " + StateName(New) + " breaks away from " + OldName;
