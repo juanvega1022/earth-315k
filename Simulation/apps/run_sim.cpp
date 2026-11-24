@@ -467,7 +467,7 @@ int main(int Argc, char** Argv)
 			std::ofstream(FolderOf(BrainPath) + "brain_traces.json") << Folk.BrainTracesJson() << '\n';
 			const std::string Stats = FolderOf(BrainPath) + "brain_stats.csv";
 			const bool Fresh = !FileExists(Stats);
-			for (const char* Col : {"dopamine", "serotonin", "cortisol", "noradrenaline", "oxytocin", "hypothalamus", "amygdala", "social_cortex", "sensory_cortex", "brainstem", "prefrontal", "excitatory_share", "episodes", "memory_strength", "sleep_replays", "working_span", "epilepsy", "depression", "ptsd", "dementia", "brain_injury", "encephalitis", "alcohol_addiction", "silenced_neurons", "seizures", "eeg_delta", "eeg_theta", "eeg_alpha", "eeg_beta", "eeg_gamma", "sex_hormone", "growth_hormone", "attention_focus", "problem_solving", "planning", "theory_of_mind", "cognition_composite", "cognition_sd", "left_handed"}) AddCsvColumn(Stats, Col);
+			for (const char* Col : {"dopamine", "serotonin", "cortisol", "noradrenaline", "oxytocin", "hypothalamus", "amygdala", "social_cortex", "sensory_cortex", "brainstem", "prefrontal", "excitatory_share", "episodes", "memory_strength", "sleep_replays", "working_span", "epilepsy", "depression", "ptsd", "dementia", "brain_injury", "encephalitis", "alcohol_addiction", "silenced_neurons", "seizures", "eeg_delta", "eeg_theta", "eeg_alpha", "eeg_beta", "eeg_gamma", "sex_hormone", "growth_hormone", "attention_focus", "problem_solving", "planning", "theory_of_mind", "cognition_composite", "cognition_sd", "left_handed", "drug_addiction", "tobacco_users", "caffeine_users", "opium_users", "cannabis_users"}) AddCsvColumn(Stats, Col);
 			std::ofstream Out(Stats, std::ios::app);
 			if (Fresh) Out << earth::People::BrainStatsHeader();
 			Out << Folk.BrainStatsRows(Y);

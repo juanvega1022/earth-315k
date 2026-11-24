@@ -171,8 +171,14 @@ struct Episode
 	void Serialize(A& Ar) { Ar.Io(AgeDays), Ar.Io(Act), Ar.Io(Value), Ar.Io(Strength), Ar.Io(Replays), Ar.Io(Cue); }
 };
 inline constexpr int kEpisodes = 6;
-enum BrainCondition : uint16_t { Epilepsy = 1, Depression = 2, Ptsd = 4, Dementia = 8, BrainInjury = 16, Encephalitis = 32, AlcoholAddiction = 64 };
-inline constexpr int kBrainConditions = 7;
+enum BrainCondition : uint16_t { Epilepsy = 1, Depression = 2, Ptsd = 4, Dementia = 8, BrainInjury = 16, Encephalitis = 32, AlcoholAddiction = 64, DrugAddiction = 128 };
+inline constexpr int kBrainConditions = 7; // Drug addiction, added later, is counted on its own so CSV columns keep their places.
+inline constexpr int kDrugs = 4;
+inline const char* DrugName(int K)
+{
+	static const char* Names[kDrugs] = {"tobacco", "caffeine", "opium", "cannabis"};
+	return K >= 0 && K < kDrugs ? Names[K] : "";
+}
 inline const char* BrainConditionName(int Bit)
 {
 	static const char* Names[kBrainConditions] = {"epilepsy", "depression", "ptsd", "dementia", "brain injury", "encephalitis", "alcohol addiction"};
@@ -240,6 +246,7 @@ struct Npc
 	uint16_t Seizures = 0, LowMoodDays = 0;
 	uint32_t Lesions = 0;
 	float Drink = 0.0f, Tolerance = 0.0f;
+	std::array<float, kDrugs> Dose{}, Hooked{}; // Each drug in the body now (not saved), and tolerance built up.
 
 	SkillSet Skills = 0; // What this NPC knows how to do.
 	SkillEffects Own;
@@ -337,6 +344,7 @@ struct Npc
 		if (Ar.Version >= 53) Ar.Io(Dopamine), Ar.Io(Serotonin), Ar.Io(Cortisol), Ar.Io(Noradrenaline), Ar.Io(Oxytocin);
 		if (Ar.Version >= 54) Ar.Io(Episodes);
 		if (Ar.Version >= 55) Ar.Io(Conditions), Ar.Io(Seizures), Ar.Io(LowMoodDays), Ar.Io(Lesions), Ar.Io(Tolerance);
+		if (Ar.Version >= 57) Ar.Io(Hooked);
 		if (Ar.IsReading()) Own = EffectsOf(Skills);
 	}
 };
@@ -1804,7 +1812,9 @@ public:
 		for (int b = 0; b < kBrainConditions; ++b)
 			if (((P.Conditions >> b) & 1) || (b == 0 && Epileptic(P))) J += std::string(AnyCondition ? "," : "") + "\"" + BrainConditionName(b) + "\"", AnyCondition = true;
 		J += "],\"seizures\":" + std::to_string(P.Seizures) + ",\"low_mood_days\":" + std::to_string(P.LowMoodDays) + ",\"blood_alcohol\":" + Num(P.Drink) +
-			",\"alcohol_tolerance\":" + Num(P.Tolerance) + ",\"silenced_neurons\":[";
+			",\"alcohol_tolerance\":" + Num(P.Tolerance) + ",\"drug_addiction\":" + ((P.Conditions & DrugAddiction) ? "true" : "false") + ",\"drugs\":{";
+		for (int K = 0; K < kDrugs; ++K) J += std::string(K ? "," : "") + "\"" + DrugName(K) + "\":{\"in_body\":" + Num(P.Dose[K]) + ",\"tolerance\":" + Num(P.Hooked[K]) + "}";
+		J += "},\"silenced_neurons\":[";
 		for (int h = 0, n = 0; h < P.BrainSize(); ++h) if (Silenced(P, h)) J += std::string(n++ ? "," : "") + std::to_string(h);
 		J += "]},\"genetics\":{\"kind\":\"" + std::string(OtherKinds()[P.Kind].Name) + "\",\"neurons_from_genes\":" + std::to_string(G.Hidden()) + ",\"learning_rate\":" + Num(G.LearningRate) +
 			",\"curiosity\":" + Num(G.Curiosity) + ",\"imitation\":" + Num(G.Imitation) + ",\"kindness\":" + Num(G.Kindness) + ",\"generation\":" + std::to_string(P.Generation) + "}";
@@ -1943,10 +1953,10 @@ public:
 	}
 
 	// Brain statistics by kind of human, one CSV row each.
-	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures,eeg_delta,eeg_theta,eeg_alpha,eeg_beta,eeg_gamma,sex_hormone,growth_hormone,attention_focus,problem_solving,planning,theory_of_mind,cognition_composite,cognition_sd,left_handed\n"; }
+	static const char* BrainStatsHeader() { return "year,kind,people,mean_neurons,max_neurons,weight_sparsity,action_entropy_bits,learning_rate,curiosity,imitation,kindness,learned_share,mean_abs_rpe,dopamine,serotonin,cortisol,noradrenaline,oxytocin,hypothalamus,amygdala,social_cortex,sensory_cortex,brainstem,prefrontal,excitatory_share,episodes,memory_strength,sleep_replays,working_span,epilepsy,depression,ptsd,dementia,brain_injury,encephalitis,alcohol_addiction,silenced_neurons,seizures,eeg_delta,eeg_theta,eeg_alpha,eeg_beta,eeg_gamma,sex_hormone,growth_hormone,attention_focus,problem_solving,planning,theory_of_mind,cognition_composite,cognition_sd,left_handed,drug_addiction,tobacco_users,caffeine_users,opium_users,cannabis_users\n"; }
 	std::string BrainStatsRows(int Year) const
 	{
-		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0, Tested = 0, Sex = 0, Growth = 0, Foc = 0, Solve = 0, Plan = 0, Mind = 0, Cog = 0, Cog2 = 0, Left = 0; std::array<double, 5> Eeg{}; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
+		struct Sum { int N = 0, Max = 0; double Neurons = 0, Sparse = 0, Entropy = 0, Rate = 0, Cur = 0, Imit = 0, Kind = 0, Learned = 0, Rpe = 0, Da = 0, Se = 0, Co = 0, Na = 0, Ox = 0, Exc = 0, Epi = 0, Mem = 0, Rep = 0, Span = 0, Silent = 0, Fits = 0, Tested = 0, Sex = 0, Growth = 0, Foc = 0, Solve = 0, Plan = 0, Mind = 0, Cog = 0, Cog2 = 0, Left = 0, Addicted = 0; std::array<double, kDrugs> Users{}; std::array<double, 5> Eeg{}; std::array<double, kBrainConditions> Cond{}; std::array<double, kRegions> Reg{}; };
 		std::vector<Sum> By(OtherKinds().size());
 		for (const Npc& P : Npcs)
 		{
@@ -1962,7 +1972,8 @@ public:
 			for (int h = 0; h < P.BrainSize(); ++h) S.Reg[RegionOfNeuron(G, h)] += 1.0, S.Exc += Excitatory(P, h) / static_cast<double>(P.BrainSize());
 			S.Da += P.Dopamine, S.Se += P.Serotonin, S.Co += P.Cortisol, S.Na += P.Noradrenaline, S.Ox += P.Oxytocin;
 			S.Epi += P.Episodes.size(), S.Span += WorkingSpan(P), S.Fits += P.Seizures;
-			S.Sex += SexHormone(P), S.Growth += GrowthHormone(P.AgeYears()), S.Foc += Focus(P), S.Left += LeftHanded(P);
+			S.Sex += SexHormone(P), S.Growth += GrowthHormone(P.AgeYears()), S.Foc += Focus(P), S.Left += LeftHanded(P), S.Addicted += (P.Conditions & DrugAddiction) != 0;
+			for (int K = 0; K < kDrugs; ++K) S.Users[K] += P.Hooked[K] > 0.05f;
 			if (P.Id % 10 == 0) // A sample, as the tests take time.
 			{
 				const auto Cg = Cognition(P);
@@ -1993,6 +2004,10 @@ public:
 			const double T = std::max(1.0, S.Tested), Mean = S.Cog / T;
 			std::snprintf(Line, sizeof(Line), ",%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", S.Sex / N, S.Growth / N, S.Foc / N, S.Solve / T, S.Plan / T, S.Mind / T, Mean,
 				std::sqrt(std::max(0.0, S.Cog2 / T - Mean * Mean)), S.Left / N), Out += Line;
+			Out.pop_back();
+			std::snprintf(Line, sizeof(Line), ",%.4f", S.Addicted / N), Out += Line;
+			for (double U : S.Users) std::snprintf(Line, sizeof(Line), ",%.4f", U / N), Out += Line;
+			Out += '\n';
 		}
 		return Out;
 	}
@@ -5337,7 +5352,9 @@ private:
 		const float Stress = (1.0f - P.Energy) * (1.0f - P.Energy) + (1.0f - P.Water) * (1.0f - P.Water) + P.Fear + 0.5f * P.Grief;
 		const bool Warm = Chosen == static_cast<int>(Action::Socialize) || Chosen == static_cast<int>(Action::ShareFood) || P.Spouse;
 		// Depression flattens the dopamine response, as does craving a drink once dependent; trauma keeps stress and arousal high.
-		const float Flat = (P.Conditions & Depression ? 0.15f : 0.0f) + ((P.Conditions & AlcoholAddiction) && P.Drink < 0.05f ? 0.1f : 0.0f);
+		float Sober = 1.0f;
+		for (float Dose : P.Dose) Sober = std::min(Sober, Dose < 0.05f ? 1.0f : 0.0f);
+		const float Flat = (P.Conditions & Depression ? 0.15f : 0.0f) + ((P.Conditions & AlcoholAddiction) && P.Drink < 0.05f ? 0.1f : 0.0f) + ((P.Conditions & DrugAddiction) && Sober > 0.0f ? 0.1f : 0.0f);
 		const float Alarm = P.Conditions & Ptsd ? 0.2f : 0.0f;
 		Toward(P.Dopamine, 0.5f - Flat + 0.5f * std::tanh(2.0f * Advantage), 0.02f);
 		Toward(P.Serotonin, 0.5f + 0.5f * std::tanh(2.0f * (P.Wellbeing + 0.25f)), 0.01f);
@@ -5451,6 +5468,53 @@ private:
 		if (P.Tolerance > 0.6f) P.Conditions |= AlcoholAddiction;
 		else if (P.Tolerance < 0.2f) P.Conditions &= static_cast<uint16_t>(~AlcoholAddiction);
 		if (P.Conditions & AlcoholAddiction) P.Health -= 0.0003f * D;
+		TakeDrugs(P, C, Days, R);
+	}
+
+	// Where each drug grew before ships carried them everywhere: tobacco in the Americas, coffee in Ethiopia and Yemen
+	// and tea in China, the opium poppy around the Mediterranean and West Asia, cannabis in Central and South Asia.
+public:
+	static bool DrugGrowsAt(int K, double Lat, double Lon)
+	{
+		switch (K)
+		{
+		case 0: return RegionOf(Lat, Lon) == 4;
+		case 1: return (Lat > 5.0 && Lat < 20.0 && Lon > 35.0 && Lon < 50.0) || (Lat > 20.0 && Lat < 35.0 && Lon > 95.0 && Lon < 122.0);
+		case 2: return Lat > 30.0 && Lat < 45.0 && Lon > 0.0 && Lon < 50.0;
+		default: return Lat > 20.0 && Lat < 45.0 && Lon > 60.0 && Lon < 100.0;
+		}
+	}
+private:
+	// Farming bands grow the drug of their land, or any once sailing ships trade them; some people never take to a drug.
+	// Each lifts dopamine less as tolerance builds; heavy tolerance is addiction, and craving when sober.
+	void TakeDrugs(Npc& P, const Camp& C, int Days, Rng& R) const
+	{
+		static const int Farming = SkillNamed("farming"), Ships = SkillNamed("sailing ships"), Factories = SkillNamed("factories");
+		const float D = static_cast<float>(Days);
+		bool Hooked = false;
+		for (int K = 0; K < kDrugs; ++K)
+		{
+			P.Dose[K] *= std::pow(0.3f, D);
+			P.Hooked[K] *= std::pow(0.999f, D);
+			const double Liking = PersonDraw(P.Id, 20 + static_cast<uint64_t>(K));
+			const bool Habit = K < 2; // Tobacco and caffeine are daily habits; opium and cannabis come with rest or company.
+			const bool Moment = Habit || P.LastAction == static_cast<int>(Action::Rest) || P.LastAction == static_cast<int>(Action::Socialize);
+			if (P.AgeYears() >= 14.0 && Liking < (Habit ? 0.4 : 0.15) && Moment && Has(C.Known, Farming) && (Has(C.Known, Ships) || DrugGrowsAt(K, C.Lat, C.Lon)) &&
+				R.Chance(Habit ? 0.8 : 0.2))
+			{
+				const float Lift = (1.0f - P.Hooked[K]) * (K == 2 ? (Has(C.Known, Factories) ? 0.45f : 0.3f) : K == 3 ? 0.1f : 0.05f); // Refined opioids hit hardest.
+				P.Dose[K] = 1.0f;
+				P.Dopamine = std::min(1.0f, P.Dopamine + Lift);
+				P.Hooked[K] = std::min(1.0f, P.Hooked[K] + (K == 0 ? 0.03f : K == 2 ? 0.05f : 0.01f));
+				if (K == 0) P.Noradrenaline = std::min(1.0f, P.Noradrenaline + 0.05f), P.Health -= 0.0002f * D; // Nicotine alerts; smoke harms the lungs.
+				if (K == 1) P.Fatigue = std::max(0.0f, P.Fatigue - 0.1f), P.Noradrenaline = std::min(1.0f, P.Noradrenaline + 0.05f);
+				if (K == 2) { P.Fear *= 0.5f, P.Cortisol *= 0.8f; if (P.Hooked[K] > 0.6f && R.Chance(0.002)) P.Health -= 0.5f; } // Numbs fear and pain; an overdose can kill.
+				if (K == 3) P.Cortisol *= 0.9f, P.Noradrenaline *= 0.9f;
+			}
+			Hooked = Hooked || P.Hooked[K] > (K == 1 ? 0.95f : 0.6f); // Caffeine dependence is mild and counts only when extreme.
+		}
+		if (Hooked) P.Conditions |= DrugAddiction;
+		else if (*std::max_element(P.Hooked.begin(), P.Hooked.end()) < 0.2f) P.Conditions &= static_cast<uint16_t>(~DrugAddiction);
 	}
 
 	static void Learn(Npc& P, int Chosen, float Reward, int Days = 1)
