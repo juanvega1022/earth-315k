@@ -76,6 +76,12 @@ inline const char* InputName(int I)
 	return (I >= 0 && I < kBrainInputs) ? Names[I] : "?";
 }
 
+// Which brain region hears each sense: 0 hypothalamus (body needs), 1 amygdala (fear), 2 social cortex, 3 sensory
+// cortex (the world around), 4 brainstem (age, health, arousal). Region 5, prefrontal, hears them all.
+inline constexpr int kInputRegion[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
+inline constexpr int kPrefrontal = 5;
+inline constexpr float kMaxInbornWeight = 4.0f; // Beyond this a neuron is stuck fully on or off whatever it senses.
+
 // What an NPC is born with: both layers of the brain plus three learning traits. The number of
 // hidden neurons can change from parent to child, with no upper limit.
 struct Genome
@@ -88,8 +94,35 @@ struct Genome
 	float Curiosity = 0.6f;     // How often it tries something other than its favourite choice.
 	float Imitation = 0.1f;     // How often it copies a successful camp mate.
 	float Kindness = 0.5f;      // Personality: how much of what it carries it gives when it shares.
+	std::vector<uint8_t> Region = std::vector<uint8_t>(kBrainHidden, kPrefrontal); // Each neuron's region, which decides the senses it is wired to.
 
 	int Hidden() const { return static_cast<int>(B1.size()); }
+
+	// A neuron hears only its own region's senses (prefrontal neurons hear all), and no inborn weight runs to saturation.
+	void Mask()
+	{
+		for (int h = 0; h < Hidden(); ++h)
+			for (int i = 0; i < kBrainInputs; ++i)
+			{
+				float& W = W1[static_cast<size_t>(h) * kBrainInputs + i];
+				W = Region[static_cast<size_t>(h)] == kPrefrontal || kInputRegion[i] == Region[static_cast<size_t>(h)] ? std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight) : 0.0f;
+			}
+		for (float& W : B1) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
+		for (float& W : W2) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
+		for (float& W : B2) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
+	}
+	// For brains from before regions were inborn: each neuron joins the region whose senses drive it most.
+	void AssignRegions()
+	{
+		Region.assign(static_cast<size_t>(Hidden()), kPrefrontal);
+		for (int h = 0; h < Hidden(); ++h)
+		{
+			std::array<float, kPrefrontal> Pull{};
+			for (int i = 0; i < kBrainInputs - 1; ++i) Pull[kInputRegion[i]] += std::abs(W1[static_cast<size_t>(h) * kBrainInputs + i]);
+			Region[static_cast<size_t>(h)] = static_cast<uint8_t>(std::max_element(Pull.begin(), Pull.end()) - Pull.begin());
+		}
+		Mask();
+	}
 
 	template <class A>
 	void Serialize(A& Ar)
@@ -102,11 +135,14 @@ struct Genome
 		Ar.Io(Curiosity);
 		Ar.Io(Imitation);
 		if (Ar.Version >= 6) Ar.Io(Kindness);
+		if (Ar.Version >= 56) Ar.Io(Region);
+		else if (Ar.IsReading()) AssignRegions();
 	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
 	void AddNeuron(Rng& Dice)
 	{
+		Region.push_back(static_cast<uint8_t>(Dice.Next() % (kPrefrontal + 1)));
 		for (int i = 0; i < kBrainInputs; ++i) W1.push_back(static_cast<float>(Dice.Gaussian()) * 0.5f);
 		B1.push_back(static_cast<float>(Dice.Gaussian()) * 0.5f);
 		for (int a = 0; a < kBrainActions; ++a) W2.push_back(static_cast<float>(Dice.Gaussian()) * 0.2f);
@@ -116,6 +152,7 @@ struct Genome
 	{
 		W1.erase(W1.begin() + H * kBrainInputs, W1.begin() + (H + 1) * kBrainInputs);
 		B1.erase(B1.begin() + H);
+		Region.erase(Region.begin() + H);
 		W2.erase(W2.begin() + H * kBrainActions, W2.begin() + (H + 1) * kBrainActions);
 	}
 };
@@ -1657,6 +1694,7 @@ public:
 	}
 	static int RegionOfNeuron(const Genome& G, int H)
 	{
+		if (G.Region.size() == static_cast<size_t>(G.Hidden())) return G.Region[static_cast<size_t>(H)];
 		static const int Group[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
 		std::array<float, kRegions> Pull{};
 		float Total = 0.0f;
@@ -2283,10 +2321,10 @@ public:
 				const double K = Smarts(P) * Smarts(P) * P.Genes->Curiosity;
 				if (P.AgeYears() >= 15.0 && K > Best) Best = K, Who = i;
 			}
-			// In a state's capital, the ruler does the thinking for the realm.
+			// Wherever the ruler lives in the realm, they do the thinking for it.
 			const Polity* Realm = C.State ? StateById(C.State) : nullptr;
 			for (int i : C.Members)
-				if (Realm && Realm->Capital == C.Id && Npcs[static_cast<size_t>(i)].Id == Realm->Ruler) Who = i;
+				if (Realm && Npcs[static_cast<size_t>(i)].Id == Realm->Ruler) Who = i;
 			if (Who < 0) continue;
 			Npc& P = Npcs[static_cast<size_t>(Who)];
 			std::string Known, Toward, Met, Made, Ways;
@@ -2903,6 +2941,7 @@ private:
 		{
 			G.W1[h * kBrainInputs + h] = 3.0f;
 			G.B1[h] = -1.5f;
+			G.Region[static_cast<size_t>(h)] = static_cast<uint8_t>(kInputRegion[h]);
 		}
 		auto Link = [&G](int Hidden, Action A, float W) { G.W2[Hidden * kBrainActions + static_cast<int>(A)] = W; };
 		Link(0, Action::Forage, 1.5f);
@@ -2941,9 +2980,11 @@ private:
 		{
 			G.RemoveNeuron(static_cast<int>(Dice.Next() % static_cast<uint64_t>(G.Hidden())));
 		}
-		G.LearningRate = std::clamp(G.LearningRate * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.001f, 0.5f);
-		G.Curiosity = std::clamp(G.Curiosity * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.1f, 2.0f);
-		G.Imitation = std::clamp(G.Imitation * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.0f, 0.5f);
+		// Learning, curiosity and copying never quite die out: every human brain keeps some plasticity.
+		G.LearningRate = std::clamp(G.LearningRate * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.02f, 0.5f);
+		G.Curiosity = std::clamp(G.Curiosity * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.2f, 2.0f);
+		G.Imitation = std::clamp(G.Imitation * static_cast<float>(std::exp(Dice.Gaussian() * 0.1)), 0.03f, 0.5f);
+		G.Mask();
 		G.Kindness = std::clamp(G.Kindness + static_cast<float>(Dice.Gaussian() * 0.05), 0.05f, 0.95f);
 		return G;
 	}
@@ -4201,9 +4242,11 @@ private:
 		const float Loss = WaterFor(Camps[CampSlot(P.Camp)], P.Lat, P.Lon) > 0.4 ? 0.05f : 0.3f;
 		const float DrinkShare = std::min(1.0f, Loss / std::max(0.01f, 1.5f * BestWater));
 		float ThirstyDays = 0.0f;
+		// Water trips the brain did not plan for come late: someone who never thinks to drink goes thirsty part of the time.
+		const float Unplanned = Shares ? std::max(0.0f, std::min(DrinkShare, 0.6f) - Drinking) / std::max(0.01f, std::min(DrinkShare, 0.6f)) : 0.0f;
 		if (DrinkShare < 0.6f)
 		{
-			P.Water = std::max(P.Water, 0.75f);
+			P.Water = std::max(P.Water, 0.75f - 0.5f * Unplanned);
 		}
 		else
 		{
@@ -5419,7 +5462,8 @@ private:
 		const float Gate = (0.5f + P.Dopamine) * (1.0f - 1.5f * std::max(0.0f, P.Cortisol - 0.6f));
 		Modulate(P, Chosen, Advantage, Days);
 		const double Age = P.AgeYears();
-		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age) * (P.Conditions & Dementia ? 0.5f : 1.0f);
+		// A month-long step holds many days of lessons; sqrt keeps the larger step stable.
+		const float Rate = P.Genes->LearningRate * Advantage / P.Genes->Curiosity * Gate * AgeGain(Age) * (P.Conditions & Dementia ? 0.5f : 1.0f) * std::sqrt(static_cast<float>(Days));
 		const bool Pruning = Age >= 12.0 && Age < 25.0; // Adolescence: weak, unused synapses are cut away.
 		const float Habit = 0.005f * P.Genes->LearningRate * AgeGain(Age); // Hebbian: what is done together is wired together, rewarded or not.
 		for (int a = 0; a < kBrainActions; ++a)
