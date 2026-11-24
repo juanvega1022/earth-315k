@@ -216,6 +216,7 @@ static void TestBrainJson()
 	EXPECT(J.find("\"health\"") != std::string::npos && J.find("\"genetics\"") != std::string::npos);
 	EXPECT(J.find("\"eeg_relative_power\"") != std::string::npos && J.find("\"hormones\"") != std::string::npos && J.find("\"attention\"") != std::string::npos);
 	EXPECT(J.find("\"cognition\"") != std::string::npos && J.find("\"connectome\"") != std::string::npos && J.find("\"glia\"") != std::string::npos);
+	EXPECT(J.find("\"cannabis\"") != std::string::npos && earth::People::DrugGrowsAt(0, 40.0, -100.0) && !earth::People::DrugGrowsAt(0, 0.0, 30.0));
 	EXPECT(J.find("\"anatomy\"") != std::string::npos && J.find("\"neuron_regions\"") != std::string::npos);
 	for (int h = 0; h < P.BrainSize(); ++h) EXPECT(earth::People::RegionOfNeuron(*P.Genes, h) >= 0 && earth::People::RegionOfNeuron(*P.Genes, h) < earth::People::kRegions);
 }
