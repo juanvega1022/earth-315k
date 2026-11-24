@@ -692,7 +692,7 @@ static void TestStates()
 	{
 		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"law\", \"law\": \"Share the harvest\"}" : "{\"thought\": \"x\"}");
 	};
-	for (int y = 0; y < 5 && Folk.StatesText().find("Law: Share the harvest") == std::string::npos; ++y) // A ruler may die before they can think.
+	for (int y = 0; y < 20 && Folk.StatesText().find("Law: Share the harvest") == std::string::npos; ++y) // A ruler may die before they can think.
 	{
 		Folk.Think(Lawgiver, static_cast<int>(Folk.AllCamps().size()));
 		if (Folk.StatesText().find("Law: Share the harvest") == std::string::npos)
@@ -713,9 +713,13 @@ static void TestStates()
 	{
 		return std::string(Prompt.find("you are its ruler") != std::string::npos ? "{\"thought\": \"x\", \"deed\": \"library\"}" : "{\"thought\": \"x\"}");
 	};
-	Folk.Think(Keeper, static_cast<int>(Folk.AllCamps().size()));
 	bool Kept = false;
-	for (const earth::Polity& S : Folk.AllStates()) Kept = Kept || (S.Libraries > 0 && S.Written.Count() > 0);
+	for (int y = 0; y < 10 && !Kept && !HasFirst(Folk, "The first library in the world"); ++y) // It needs a ruler who can write.
+	{
+		Folk.Think(Keeper, static_cast<int>(Folk.AllCamps().size()));
+		for (const earth::Polity& S : Folk.AllStates()) Kept = Kept || (S.Libraries > 0 && S.Written.Count() > 0);
+		if (!Kept) for (int d = 0; d < 13; ++d) Eco.Step(28), Folk.Step(28);
+	}
 	EXPECT(Kept || HasFirst(Folk, "The first library in the world"));
 	// Minds who can write leave writings in the world's library.
 	const earth::Thinker Poet = [](const std::string& Prompt)

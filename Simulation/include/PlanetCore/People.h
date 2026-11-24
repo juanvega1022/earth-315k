@@ -2321,10 +2321,10 @@ public:
 				const double K = Smarts(P) * Smarts(P) * P.Genes->Curiosity;
 				if (P.AgeYears() >= 15.0 && K > Best) Best = K, Who = i;
 			}
-			// In a state's capital, the ruler does the thinking for the realm.
+			// Wherever the ruler lives in the realm, they do the thinking for it.
 			const Polity* Realm = C.State ? StateById(C.State) : nullptr;
 			for (int i : C.Members)
-				if (Realm && Realm->Capital == C.Id && Npcs[static_cast<size_t>(i)].Id == Realm->Ruler) Who = i;
+				if (Realm && Npcs[static_cast<size_t>(i)].Id == Realm->Ruler) Who = i;
 			if (Who < 0) continue;
 			Npc& P = Npcs[static_cast<size_t>(Who)];
 			std::string Known, Toward, Met, Made, Ways;
