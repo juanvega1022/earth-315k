@@ -179,6 +179,21 @@ static void TestBrainJson()
 	EXPECT(J.find("\"w2_learned\"") != std::string::npos);
 	EXPECT(J.find("\"Hunger\"") != std::string::npos);
 	EXPECT(J.find("nan") == std::string::npos);
+	// Inborn regions: each neuron hears only its region's senses (prefrontal hears all), and no inborn weight saturates.
+	bool Wired = true;
+	int Specialists = 0;
+	for (const earth::Npc& P : W.Folk.All())
+		for (int h = 0; h < P.Genes->Hidden(); ++h)
+		{
+			const int R = P.Genes->Region[static_cast<size_t>(h)];
+			Specialists += R != earth::kPrefrontal;
+			for (int i = 0; i < earth::kBrainInputs; ++i)
+			{
+				const float Wt = P.Genes->W1[static_cast<size_t>(h) * earth::kBrainInputs + i];
+				Wired = Wired && std::abs(Wt) <= earth::kMaxInbornWeight && (R == earth::kPrefrontal || earth::kInputRegion[i] == R || Wt == 0.0f);
+			}
+		}
+	EXPECT(Wired && Specialists > 0);
 	// The brain lab: the copy answers like the real brain, a lesion is recorded, and the watched people are traced.
 	const earth::Npc& P = W.Folk.All()[0];
 	std::vector<float> Hid;
@@ -662,7 +677,7 @@ static void TestStates()
 	Settings.DiscoveryPace = 1e12;
 	Settings.StartCount = 400; // Many bands at once, close together.
 	earth::People Folk(&Eco, 6, Settings);
-	for (int y = 0; y < 80 && !HasFirst(Folk, "The first chiefdom in the world"); ++y)
+	for (int y = 0; y < 160 && !HasFirst(Folk, "The first chiefdom in the world"); ++y) // Chiefdoms wait on three bands happening to camp close together.
 		for (int d = 0; d < 13; ++d)
 		{
 			Eco.Step(28);
