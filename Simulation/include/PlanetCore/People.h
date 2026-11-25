@@ -47,9 +47,32 @@
 namespace earth
 {
 
-constexpr int kBrainInputs = 16;
+constexpr int kBrainInputs = 18;
 constexpr int kBrainHidden = 12; // Hidden neurons the first people are born with; brains can grow or shrink from there.
-constexpr int kBrainActions = 8;
+constexpr int kBrainActions = 11;
+// Brains saved before version 59 had 16 senses (the constant last, at 15) and 8 actions.
+constexpr int kOldInputs = 16, kOldActions = 8;
+inline int OldInputSlot(int I) { return I < kOldInputs - 1 ? I : kBrainInputs - 1; }
+// Widens a row-major table saved with OldW columns to NewW; Senses: columns are senses (the constant moves last).
+template <class T>
+void WidenRows(std::vector<T>& V, int OldW, int NewW, bool Senses, T Fill = T{})
+{
+	const size_t Rows = V.size() / static_cast<size_t>(OldW);
+	std::vector<T> W(Rows * static_cast<size_t>(NewW), Fill);
+	for (size_t r = 0; r < Rows; ++r)
+		for (int c = 0; c < OldW; ++c) W[r * static_cast<size_t>(NewW) + static_cast<size_t>(Senses ? OldInputSlot(c) : c)] = V[r * static_cast<size_t>(OldW) + static_cast<size_t>(c)];
+	V.swap(W);
+}
+// Reads a fixed array that had OldN entries before version 59 (the rest take Fill), or the whole array.
+template <class A, class T, size_t N>
+void IoGrown(A& Ar, std::array<T, N>& X, int OldN, bool Senses, T Fill = T{})
+{
+	if (!(Ar.IsReading() && Ar.Version < 59)) { Ar.Io(X); return; }
+	std::vector<T> Old(static_cast<size_t>(OldN));
+	for (T& E : Old) Ar.Io(E);
+	X.fill(Fill);
+	for (int i = 0; i < OldN; ++i) X[static_cast<size_t>(Senses ? OldInputSlot(i) : i)] = Old[static_cast<size_t>(i)];
+}
 
 enum class Action : int
 {
@@ -60,25 +83,28 @@ enum class Action : int
 	ShareFood,
 	Explore,
 	Hide,
-	Socialize
+	Socialize,
+	Teach,
+	Trade,
+	Fight
 };
 
 inline const char* ActionName(int A)
 {
-	static const char* Names[kBrainActions] = {"Forage", "Hunt", "Drink", "Rest", "Share food", "Explore", "Hide", "Socialize"};
+	static const char* Names[kBrainActions] = {"Forage", "Hunt", "Drink", "Rest", "Share food", "Explore", "Hide", "Socialize", "Teach", "Trade", "Fight"};
 	return (A >= 0 && A < kBrainActions) ? Names[A] : "?";
 }
 
 inline const char* InputName(int I)
 {
 	static const char* Names[kBrainInputs] = {"Hunger", "Thirst", "Tiredness", "Fear", "Loneliness", "Urge to mate",
-		"Plants here", "Game here", "Water here", "Season", "Age", "Health", "Band size", "Food carried", "Hunting skill", "Always on"};
+		"Plants here", "Game here", "Water here", "Season", "Age", "Health", "Band size", "Food carried", "Hunting skill", "Strangers near", "Leader's standing", "Always on"};
 	return (I >= 0 && I < kBrainInputs) ? Names[I] : "?";
 }
 
 // Which brain region hears each sense: 0 hypothalamus (body needs), 1 amygdala (fear), 2 social cortex, 3 sensory
 // cortex (the world around), 4 brainstem (age, health, arousal). Region 5, prefrontal, hears them all.
-inline constexpr int kInputRegion[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
+inline constexpr int kInputRegion[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 1, 2, 4};
 inline constexpr int kPrefrontal = 5;
 inline constexpr float kMaxInbornWeight = 3.0f; // Beyond this a neuron is stuck fully on or off whatever it senses (the first instincts use 3).
 inline constexpr float kMaxInbornBias = 1.5f;   // Output leanings: a habit, never so strong that no need can overrule it.
@@ -142,7 +168,8 @@ struct Genome
 		Ar.Io(W1);
 		Ar.Io(B1);
 		Ar.Io(W2);
-		Ar.Io(B2);
+		IoGrown(Ar, B2, kOldActions, false, -1.5f); // Teaching, trading and fighting start out as faint urges.
+		if (Ar.IsReading() && Ar.Version < 59) WidenRows(W1, kOldInputs, kBrainInputs, true), WidenRows(W2, kOldActions, kBrainActions, false);
 		Ar.Io(LearningRate);
 		Ar.Io(Curiosity);
 		Ar.Io(Imitation);
@@ -181,7 +208,7 @@ struct Episode
 	std::array<int8_t, kBrainInputs> Cue{}; // The senses, in hundredths.
 
 	template <class A>
-	void Serialize(A& Ar) { Ar.Io(AgeDays), Ar.Io(Act), Ar.Io(Value), Ar.Io(Strength), Ar.Io(Replays), Ar.Io(Cue); }
+	void Serialize(A& Ar) { Ar.Io(AgeDays), Ar.Io(Act), Ar.Io(Value), Ar.Io(Strength), Ar.Io(Replays), IoGrown(Ar, Cue, kOldInputs, true, int8_t{0}); }
 };
 inline constexpr int kEpisodes = 6;
 enum BrainCondition : uint16_t { Epilepsy = 1, Depression = 2, Ptsd = 4, Dementia = 8, BrainInjury = 16, Encephalitis = 32, AlcoholAddiction = 64, DrugAddiction = 128 };
@@ -344,8 +371,9 @@ struct Npc
 		Ar.Io(Energy), Ar.Io(Water), Ar.Io(Fatigue), Ar.Io(Health), Ar.Io(Fear), Ar.Io(Loneliness), Ar.Io(SocialNeed);
 		Ar.Io(CarriedKg), Ar.Io(HuntSkill), Ar.Io(ForageSkill), Ar.Io(Heading), Ar.Io(OffsetLat), Ar.Io(OffsetLon);
 		Ar.Io(PregnantDays), Ar.Io(LastBirthDay), Ar.Io(BabyFather), Ar.Io(BabyFatherGenes), Ar.Io(Children);
-		Ar.Io(Genes), Ar.Io(LearnedW2), Ar.Io(LearnedB2);
-		Ar.Io(LastInputs), Ar.Io(LastHidden), Ar.Io(LastChoice), Ar.Io(LastAction), Ar.Io(ActionCounts);
+		Ar.Io(Genes), Ar.Io(LearnedW2), IoGrown(Ar, LearnedB2, kOldActions, false);
+		if (Ar.IsReading() && Ar.Version < 59) WidenRows(LearnedW2, kOldActions, kBrainActions, false);
+		IoGrown(Ar, LastInputs, kOldInputs, true), Ar.Io(LastHidden), IoGrown(Ar, LastChoice, kOldActions, false), Ar.Io(LastAction), IoGrown(Ar, ActionCounts, kOldActions, false);
 		Ar.Io(Skills), Ar.Io(Pleasure), Ar.Io(RewardBaseline), Ar.Io(Wellbeing), Ar.Io(BandSize), Ar.Io(Alive);
 		if (Ar.Version >= 4) Ar.Io(Name), Ar.Io(BondWith), Ar.Io(Trust), Ar.Io(Leads);
 		if (Ar.Version >= 5) Ar.Io(RefugeLat), Ar.Io(RefugeLon), Ar.Io(RefugeWater);
@@ -407,6 +435,10 @@ struct Camp
 	float SeenGame = 0.0f;
 	float SeenWater = 0.0f;
 	float SeenSeason = 0.0f;
+	float SeenStrangers = 0.0f;  // Other bands within a day or two's walk, 0..1; not saved.
+	float LeaderStanding = 0.0f; // How well thought of the band's leader is, 0..1 (0 with no leader); not saved.
+	// Share of grown-ups' time spent teaching, trading and fighting this step; not saved.
+	float Teachers = 0.0f, Traders = 0.0f, Fighters = 0.0f;
 	// Share of what the land around the camp can feed that is still free (0 = full).
 	float Room = 1.0f;
 	// What anyone in camp knows, and what that does for everyone there.
@@ -1707,9 +1739,9 @@ public:
 	std::vector<std::pair<std::string, std::array<float, kBrainInputs>>> BrainSituations(const Npc& P) const
 	{
 		std::array<float, kBrainInputs> Calm = {0.3f, 0.3f, 0.3f, 0.0f, 0.2f, 0.2f, 0.5f, 0.3f, 0.5f, 0.7f,
-			static_cast<float>(std::clamp(P.AgeYears() / 70.0, 0.0, 1.0)), P.Health, std::clamp(static_cast<float>(P.BandSize) / 30.0f, 0.0f, 1.0f), 0.2f, P.HuntSkill, 1.0f};
+			static_cast<float>(std::clamp(P.AgeYears() / 70.0, 0.0, 1.0)), P.Health, std::clamp(static_cast<float>(P.BandSize) / 30.0f, 0.0f, 1.0f), 0.2f, P.HuntSkill, 0.0f, 0.3f, 1.0f};
 		std::vector<std::pair<std::string, std::array<float, kBrainInputs>>> L = {{"calm", Calm}};
-		const std::pair<const char*, int> Pushed[] = {{"starving", 0}, {"parched", 1}, {"exhausted", 2}, {"terrified", 3}, {"lonely", 4}, {"wants a mate", 5}};
+		const std::pair<const char*, int> Pushed[] = {{"starving", 0}, {"parched", 1}, {"exhausted", 2}, {"terrified", 3}, {"lonely", 4}, {"wants a mate", 5}, {"strangers near", 15}};
 		for (const auto& [Name, i] : Pushed) { auto In = Calm; In[i] = 0.95f; L.emplace_back(Name, In); }
 		auto Bare = Calm; Bare[6] = Bare[7] = 0.0f; L.emplace_back("no food around", Bare);
 		auto Winter = Calm; Winter[9] = 0.0f; L.emplace_back("deep winter", Winter);
@@ -1730,7 +1762,7 @@ public:
 	static int RegionOfNeuron(const Genome& G, int H)
 	{
 		if (G.Region.size() == static_cast<size_t>(G.Hidden())) return G.Region[static_cast<size_t>(H)];
-		static const int Group[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
+		static const int Group[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 1, 2, 4};
 		std::array<float, kRegions> Pull{};
 		float Total = 0.0f;
 		for (int i = 0; i < kBrainInputs; ++i)
@@ -2116,6 +2148,7 @@ public:
 			Imitate(i);
 		}
 		RecordBrains(1);
+		TallyWills();
 
 		LearnSkills(1);
 		Invent(1);
@@ -2210,7 +2243,7 @@ public:
 		std::vector<double> Meat(Camps.size(), 0.0);
 		HuntOverDays(Shares, HuntersIn, Meat, Days);
 		std::vector<float> DailyFood(Count, 0.0f);
-		std::vector<uint8_t> Occasional(Count, 0);
+		std::vector<uint16_t> Occasional(Count, 0);
 		Pool->For(Count, [&](size_t i)
 		{
 			Npc& P = Npcs[i];
@@ -2290,6 +2323,7 @@ public:
 			P.Wellbeing = P.Wellbeing * 0.95f + WellbeingOf(P) * 0.05f;
 		});
 		RecordBrains(Days);
+		TallyWills();
 		StoreFood(Carer, Spare, Days);
 		// Courting and copying stay within a band, so bands take their turns side by side, each with
 		// its own dice.
@@ -2998,6 +3032,7 @@ private:
 		G.B2[static_cast<int>(Action::Hunt)] = -0.5f;
 		G.B2[static_cast<int>(Action::ShareFood)] = -1.0f;
 		G.B2[static_cast<int>(Action::Explore)] = -0.5f;
+		for (Action A : {Action::Teach, Action::Trade, Action::Fight}) G.B2[static_cast<int>(A)] = -1.5f; // Faint urges, to be learned or evolved.
 		return G;
 	}
 
@@ -3239,6 +3274,7 @@ private:
 			Camp& C = Camps[Here];
 			C.Nearby = 0;
 			C.Neighbour = 0;
+			C.SeenStrangers = 0.0f;
 			for (int r = GridRow(C.Lat) - 1; r <= GridRow(C.Lat) + 1; ++r)
 			{
 				for (int c = GridCol(C.Lon) - 1; c <= GridCol(C.Lon) + 1; ++c)
@@ -3250,6 +3286,7 @@ private:
 						const Camp& O = Camps[Slot];
 						if (O.Id == C.Id || DistanceKm(C.Lat, C.Lon, O.Lat, O.Lon) >= 100.0) continue;
 						C.Neighbour = O.Id;
+						C.SeenStrangers = std::min(1.0f, C.SeenStrangers + 1.0f / 3.0f);
 						if (Understand(C, O)) C.Nearby |= O.Known;
 					}
 				}
@@ -3610,7 +3647,9 @@ private:
 		In[12] = std::clamp(static_cast<float>(P.BandSize) / 30.0f, 0.0f, 1.0f);
 		In[13] = std::clamp(P.CarriedKg / 10.0f, 0.0f, 1.0f);
 		In[14] = P.HuntSkill;
-		In[15] = 1.0f;
+		In[15] = C.SeenStrangers;
+		In[16] = C.LeaderStanding;
+		In[17] = 1.0f;
 	}
 
 	static int Decide(Npc& P, Rng& Dice)
@@ -3821,7 +3860,69 @@ private:
 				}
 			}
 			break;
+		case Action::Teach:
+			// A grown-up shows someone younger a skill they lack and can now take in, and some of how they go about things.
+			if (P.BandSize > 1 && P.AgeYears() >= 15.0)
+			{
+				const int j = C.Members[Dice.Next() % C.Members.size()];
+				Npc& Q = Npcs[static_cast<size_t>(j)];
+				if (j != static_cast<int>(Index) && Q.AgeDays < P.AgeDays)
+				{
+					for (int k = 0; k < static_cast<int>(AllSkills().size()); ++k)
+						if (Knows(P.Skills, k) && !Knows(Q.Skills, k) && CanDiscover(Q.Skills, k)) { Q.LearnSkill(k); break; }
+					Blend(Q, P, 0.02f);
+					Q.Feel(P.Id, 0.02f);
+					P.Pleasure += 0.05f, P.Reputation += 0.01f; // Teaching is its own reward, and wins respect.
+				}
+			}
+			break;
+		case Action::Trade:
+			// Barter with a band nearby: each side gives what it has plenty of for what it lacks.
+			if (C.Neighbour)
+			{
+				P.CarriedKg = std::min(10.0f * P.Own.Carry, P.CarriedKg + 1.0f);
+				P.Pleasure += 0.1f, P.Reputation += 0.01f;
+			}
+			P.Fatigue += 0.1f;
+			break;
+		case Action::Fight:
+			// A raid on a band nearby: food taken, or a wound.
+			if (C.Neighbour && P.AgeYears() >= 15.0)
+			{
+				if (Dice.Chance(0.5)) P.CarriedKg = std::min(10.0f * P.Own.Carry, P.CarriedKg + 3.0f), P.Pleasure += 0.1f, P.Reputation += 0.02f;
+				else P.Health -= 0.3f, HeadInjury(P, Dice);
+				P.Fear = std::min(1.0f, P.Fear + 0.2f);
+			}
+			P.Fatigue += 0.2f;
+			break;
 		}
+	}
+
+	// How much of the grown-ups' time in each camp goes to teaching, trading and fighting, from their brains' choices.
+	void TallyWills()
+	{
+		for (Camp& C : Camps)
+		{
+			double T = 0.0, Tr = 0.0, F = 0.0;
+			int N = 0;
+			for (int i : C.Members)
+			{
+				const Npc& P = Npcs[static_cast<size_t>(i)];
+				if (P.IsChild()) continue;
+				T += P.LastChoice[static_cast<int>(Action::Teach)], Tr += P.LastChoice[static_cast<int>(Action::Trade)], F += P.LastChoice[static_cast<int>(Action::Fight)], ++N;
+			}
+			C.Teachers = N ? static_cast<float>(T / N) : 0.0f, C.Traders = N ? static_cast<float>(Tr / N) : 0.0f, C.Fighters = N ? static_cast<float>(F / N) : 0.0f;
+		}
+	}
+	// A state's people's mean leaning to trade (Trade) or to fight (Fight), over its bands.
+	std::unordered_map<uint32_t, float> StateWill(Action Which) const
+	{
+		std::unordered_map<uint32_t, std::pair<double, int>> Sum;
+		for (const Camp& C : Camps)
+			if (C.State && !C.Members.empty()) { auto& E = Sum[C.State]; E.first += Which == Action::Trade ? C.Traders : C.Fighters, ++E.second; }
+		std::unordered_map<uint32_t, float> Will;
+		for (const auto& [Id, E] : Sum) Will[Id] = static_cast<float>(E.first / E.second);
+		return Will;
 	}
 
 	// Each camp's hunters over Days days: a party as big as the camp's hunters on an average day,
@@ -3890,7 +3991,7 @@ private:
 	// Days days of one NPC's own work, with Shares of the days on each action. Plant food gathered
 	// per day goes to DailyFood; hunting is done by HuntOverDays(). Returns, as bits, the actions
 	// done now and then that involve others (sharing, scouting, company), for Act() to carry out.
-	static uint8_t WorkOverDays(Npc& P, const Camp& C, const std::array<float, kBrainActions>& Shares, float Hunters, int Days, float& DailyFood, Rng& Dice)
+	static uint16_t WorkOverDays(Npc& P, const Camp& C, const std::array<float, kBrainActions>& Shares, float Hunters, int Days, float& DailyFood, Rng& Dice)
 	{
 		const float Foraging = Shares[static_cast<int>(Action::Forage)];
 		if (Foraging > 0.01f)
@@ -3910,12 +4011,12 @@ private:
 				HeadInjury(P, Dice);
 			}
 		}
-		uint8_t Occasional = 0;
-		for (Action A : {Action::ShareFood, Action::Explore, Action::Socialize})
+		uint16_t Occasional = 0;
+		for (Action A : {Action::ShareFood, Action::Explore, Action::Socialize, Action::Teach, Action::Trade, Action::Fight})
 		{
 			if (Dice.Chance(OverDays(Shares[static_cast<int>(A)], Days)))
 			{
-				Occasional |= static_cast<uint8_t>(1 << static_cast<int>(A));
+				Occasional |= static_cast<uint16_t>(1 << static_cast<int>(A));
 			}
 		}
 		return Occasional;
@@ -4185,7 +4286,7 @@ private:
 		}
 		else
 		{
-			const bool Busy = Chosen == static_cast<int>(Action::Hunt) || Chosen == static_cast<int>(Action::Explore);
+			const bool Busy = Chosen == static_cast<int>(Action::Hunt) || Chosen == static_cast<int>(Action::Explore) || Chosen == static_cast<int>(Action::Fight);
 			P.Energy -= Busy ? 0.32f : (Chosen == static_cast<int>(Action::Rest) ? 0.22f : 0.27f);
 		}
 		P.Energy -= ExtraBurn(P);
@@ -4264,8 +4365,8 @@ private:
 		float ForagePerDay = 0.0f, int Dependents = 0, float* ExtraFound = nullptr) const
 	{
 		// Food burned a day, and the effort that builds tiredness, for each action.
-		static const float Burns[kBrainActions] = {0.27f, 0.32f, 0.27f, 0.22f, 0.27f, 0.32f, 0.27f, 0.27f};
-		static const float Effort[kBrainActions] = {0.08f, 0.15f, 0.05f, 0.0f, 0.0f, 0.25f, 0.05f, 0.0f};
+		static const float Burns[kBrainActions] = {0.27f, 0.32f, 0.27f, 0.22f, 0.27f, 0.32f, 0.27f, 0.27f, 0.25f, 0.30f, 0.35f};
+		static const float Effort[kBrainActions] = {0.08f, 0.15f, 0.05f, 0.0f, 0.0f, 0.25f, 0.05f, 0.0f, 0.03f, 0.1f, 0.3f};
 		float Burn = 0.15f; // Small bodies need less.
 		float Work = 0.02f;
 		float Resting = 0.0f;
@@ -4548,7 +4649,8 @@ private:
 			const SkillSet Missing = (C.Known | C.Nearby | Written) & ~P.Skills;
 			if (Missing)
 			{
-				const double InCamp = OverDays(std::min(0.5, 0.002 * C.Effects.Teaching * Wits), Days);
+				// Bands whose grown-ups spend time teaching pass skills on faster.
+				const double InCamp = OverDays(std::min(0.5, 0.002 * C.Effects.Teaching * Wits * (1.0 + 4.0 * C.Teachers)), Days);
 				const double Neighbours = OverDays(std::min(0.5, 0.0002 * C.Effects.Teaching * Wits), Days);
 				for (int k = 0; k < Count; ++k)
 				{
@@ -4862,6 +4964,7 @@ private:
 				Npcs[static_cast<size_t>(Hungriest)].Feel(Npcs[static_cast<size_t>(Richest)].Id, -0.1f);
 			}
 			C.Leader = Leader >= 0 && Npcs[static_cast<size_t>(Leader)].Reputation >= (Leader == Sitting ? 1.0f : 2.0f) ? Npcs[static_cast<size_t>(Leader)].Id : 0;
+			C.LeaderStanding = C.Leader ? std::clamp(Npcs[static_cast<size_t>(Leader)].Reputation / 5.0f, 0.0f, 1.0f) : 0.0f;
 			if (C.Leader && !Npcs[static_cast<size_t>(Leader)].Leads)
 			{
 				const Npc& L = Npcs[static_cast<size_t>(Leader)];
@@ -7894,9 +7997,12 @@ private:
 
 		// Neighbours meet: wars begin between strangers, alliances between those who share tongue or gods.
 		Of = TallyStates();
+		const auto Fighters = StateWill(Action::Fight); // Peoples whose grown-ups choose to raid start more wars.
 		for (size_t s = 0; s < States.size(); ++s)
 		{
 			Polity& A = States[s];
+			const auto FW = Fighters.find(A.Id);
+			const double Warlike = 1.0 + 5.0 * (FW == Fighters.end() ? 0.0f : FW->second);
 			const std::vector<int>& Mine = Of[A.Id];
 			if (Mine.empty() || !Dice.Chance(0.3)) continue;
 			const Camp& Edge = Camps[static_cast<size_t>(Mine[std::min(Mine.size() - 1, static_cast<size_t>(Dice.Uniform() * static_cast<double>(Mine.size())))])];
@@ -7907,7 +8013,7 @@ private:
 				if (!B || B->Bands == 0) continue;
 				const bool Allied = std::find(A.Allies.begin(), A.Allies.end(), B->Id) != A.Allies.end();
 				const bool Kin = Understand(Edge, O), SameGods = A.Faith && A.Faith == B->Faith;
-				if (!A.Enemy && !B->Enemy && !Allied && !Deterred(A, *B) && Dice.Chance(0.04 * (Kin ? 1.0 : 2.0) * (SameGods ? 1.0 : 2.0) * (A.Laws.empty() ? 1.0 : 0.5) * (InLeague(A) && InLeague(*B) ? 0.5 : 1.0)))
+				if (!A.Enemy && !B->Enemy && !Allied && !Deterred(A, *B) && Dice.Chance(0.04 * Warlike * (Kin ? 1.0 : 2.0) * (SameGods ? 1.0 : 2.0) * (A.Laws.empty() ? 1.0 : 0.5) * (InLeague(A) && InLeague(*B) ? 0.5 : 1.0)))
 					StartWar(A, *B);
 				else if (!Allied && A.Enemy != B->Id && (Kin || SameGods) && A.Allies.size() < 4 && B->Allies.size() < 4 && Dice.Chance(0.03))
 					Ally(A, *B);
@@ -8166,9 +8272,11 @@ private:
 				return !B || B->Bands == 0 || A.Enemy == P || DistanceKm(A.Lat, A.Lon, B->Lat, B->Lon) > 1.5 * std::max(TradeKm(A), TradeKm(*B));
 			}), A.Partners.end());
 		}
+		const auto Traders = StateWill(Action::Trade); // Peoples who like to trade open more routes.
 		for (Polity& A : States)
 		{
-			if (A.Bands == 0 || A.Partners.size() >= 6 || !Dice.Chance(0.2)) continue;
+			const auto W = Traders.find(A.Id);
+			if (A.Bands == 0 || A.Partners.size() >= 6 || !Dice.Chance(std::min(0.8, 0.2 * (1.0 + 5.0 * (W == Traders.end() ? 0.0f : W->second))))) continue;
 			Polity* Best = nullptr;
 			double BestKm = TradeKm(A);
 			for (Polity& B : States)
