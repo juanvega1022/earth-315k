@@ -99,6 +99,22 @@ static void TestSynapticScaling()
 		}
 }
 
+static void TestThirstWins()
+{
+	// The worst frozen brain allowed (inborn and learned pulls maxed towards foraging) still drinks when dying of thirst.
+	World W(1);
+	earth::Npc P = W.Folk.All()[0];
+	auto G = std::make_shared<earth::Genome>(*P.Genes);
+	for (size_t k = 0; k < G->W2.size(); ++k) G->W2[k] = k % earth::kBrainActions == 0 ? 3.0f : -3.0f;
+	G->Mask();
+	P.Genes = G;
+	for (size_t k = 0; k < P.LearnedW2.size(); ++k) P.LearnedW2[k] = 0.0f;
+	P.LearnedB2.fill(0.0f), P.LearnedW2[0] = 4.0f; // Within the learned cap.
+	std::array<float, earth::kBrainInputs> In = P.LastInputs;
+	In[1] = 1.0f;
+	EXPECT(earth::People::Respond(P, In)[static_cast<int>(earth::Action::Drink)] > 0.5f);
+}
+
 static void TestStart()
 {
 	World W(1);
@@ -1046,6 +1062,7 @@ int main()
 	TestBrainResize();
 	TestSkillsSpread();
 	TestRegions();
+	TestThirstWins();
 	TestSynapticScaling();
 	TestStart();
 	TestDeterministic();
