@@ -3923,7 +3923,12 @@ private:
 		}
 		const Camp& Home = Camps[CampSlot(P.Camp)];
 		if (const Polity* S = Home.State ? StateById(Home.State) : nullptr) Room *= S->Fertility;
-		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 || !R.Chance(OverDays((Socialized ? 0.04 : 0.01) * Room * OtherKinds()[P.Kind].Fertility, Days)))
+		// Real fecundity: a girl's first cycles seldom lead to a baby, a woman in her twenties conceives in about
+		// one cycle in four, and the chance falls through her thirties to near nothing by 45.
+		const double Age = P.AgeYears();
+		const double Fecund = Age < 17.0 ? 0.2 : (Age < 20.0 ? 0.6 : (Age < 30.0 ? 1.0 : std::max(0.1, 1.0 - (Age - 30.0) / 16.0)));
+		if (!P.Female || !Fertile(P) || P.Energy < 0.4f || Room <= 0.0 ||
+			!R.Chance(OverDays((Socialized ? 0.01 : 0.0025) * Fecund * Room * OtherKinds()[P.Kind].Fertility, Days)))
 		{
 			return;
 		}
