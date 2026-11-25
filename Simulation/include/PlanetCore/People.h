@@ -5446,6 +5446,7 @@ private:
 				W = std::clamp(W + D * H[h], -4.0f, 4.0f);
 			}
 		}
+		ScaleSynapses(P);
 		E.Strength = std::min(E.Strength * 1.1f, 4.0f), ++E.Replays;
 	}
 
@@ -5559,8 +5560,25 @@ private:
 			}
 			P.LearnedB2[a] = std::clamp(P.LearnedB2[a] * 0.9995f + Push, -4.0f, 4.0f);
 		}
+		ScaleSynapses(P);
 		Remember(P, Chosen, Advantage, Days);
 		if (Chosen == static_cast<int>(Action::Rest)) Replay(P, P.Genes->LearningRate / P.Genes->Curiosity * AgeGain(Age));
+	}
+
+	// Synaptic scaling: the total learned pull towards any one action stays bounded, so no habit can outvote
+	// the inborn drives; without it, brains froze into foraging even when parched or starving.
+	static void ScaleSynapses(Npc& P)
+	{
+		constexpr float kMaxLearnedPull = 4.0f;
+		for (int a = 0; a < kBrainActions; ++a)
+		{
+			float Pull = std::abs(P.LearnedB2[a]);
+			for (int h = 0; h < P.BrainSize(); ++h) Pull += std::abs(P.LearnedW2[h * kBrainActions + a]);
+			if (Pull <= kMaxLearnedPull) continue;
+			const float K = kMaxLearnedPull / Pull;
+			P.LearnedB2[a] *= K;
+			for (int h = 0; h < P.BrainSize(); ++h) P.LearnedW2[h * kBrainActions + a] *= K;
+		}
 	}
 
 	static void Blend(Npc& Learner, const Npc& Teacher, float Amount)

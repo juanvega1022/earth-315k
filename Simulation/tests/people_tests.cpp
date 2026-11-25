@@ -79,6 +79,26 @@ static void TestRegions()
 	for (const Place& P : Places) EXPECT(earth::People::RegionOf(P.Lat, P.Lon) == P.Region);
 }
 
+static void TestSynapticScaling()
+{
+	// Brains that froze into one habit (as many did before scaling) come back within bounds after a day's lesson.
+	World W(1);
+	for (const earth::Npc& Q : W.Folk.All())
+	{
+		earth::Npc& P = const_cast<earth::Npc&>(Q);
+		for (size_t k = 0; k < P.LearnedW2.size(); ++k) P.LearnedW2[k] = k % earth::kBrainActions == 0 ? 4.0f : -4.0f;
+		P.LearnedB2.fill(-4.0f), P.LearnedB2[0] = 4.0f;
+	}
+	W.Days(2);
+	for (const earth::Npc& P : W.Folk.All())
+		for (int a = 0; a < earth::kBrainActions; ++a)
+		{
+			float Pull = std::abs(P.LearnedB2[static_cast<size_t>(a)]);
+			for (int h = 0; h < P.BrainSize(); ++h) Pull += std::abs(P.LearnedW2[static_cast<size_t>(h * earth::kBrainActions + a)]);
+			EXPECT(Pull < 4.1f);
+		}
+}
+
 static void TestStart()
 {
 	World W(1);
@@ -1026,6 +1046,7 @@ int main()
 	TestBrainResize();
 	TestSkillsSpread();
 	TestRegions();
+	TestSynapticScaling();
 	TestStart();
 	TestDeterministic();
 	TestBandLives();
