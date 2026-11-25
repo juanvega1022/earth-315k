@@ -80,7 +80,8 @@ inline const char* InputName(int I)
 // cortex (the world around), 4 brainstem (age, health, arousal). Region 5, prefrontal, hears them all.
 inline constexpr int kInputRegion[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3, 4, 4, 2, 3, 3, 4};
 inline constexpr int kPrefrontal = 5;
-inline constexpr float kMaxInbornWeight = 4.0f; // Beyond this a neuron is stuck fully on or off whatever it senses.
+inline constexpr float kMaxInbornWeight = 3.0f; // Beyond this a neuron is stuck fully on or off whatever it senses (the first instincts use 3).
+inline constexpr float kMaxInbornBias = 1.5f;   // Output leanings: a habit, never so strong that no need can overrule it.
 
 // What an NPC is born with: both layers of the brain plus three learning traits. The number of
 // hidden neurons can change from parent to child, with no upper limit.
@@ -109,7 +110,7 @@ struct Genome
 			}
 		for (float& W : B1) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
 		for (float& W : W2) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
-		for (float& W : B2) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
+		for (float& W : B2) W = std::clamp(W, -kMaxInbornBias, kMaxInbornBias);
 	}
 	// For brains from before regions were inborn: each neuron joins the region whose senses drive it most.
 	void AssignRegions()
@@ -137,6 +138,7 @@ struct Genome
 		if (Ar.Version >= 6) Ar.Io(Kindness);
 		if (Ar.Version >= 56) Ar.Io(Region);
 		else if (Ar.IsReading()) AssignRegions();
+		if (Ar.IsReading() && Ar.Version < 58) Mask(); // The living get the tighter limits too, not only the newborn.
 	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
@@ -1511,6 +1513,20 @@ public:
 	}
 
 	static float OutputBias(const Npc& P, int Act) { return P.Genes->B2[Act] + P.LearnedB2[Act]; }
+	// Hard-wired homeostatic drives (hypothalamus and brainstem circuits no human is born without): hunger calls for food,
+	// thirst for water, tiredness for rest, fear for cover, loneliness for company. Evolution and learning build on top.
+	static float Drive(const std::array<float, kBrainInputs>& In, int Act)
+	{
+		switch (static_cast<Action>(Act))
+		{
+		case Action::Forage: return 3.0f * In[0];
+		case Action::Drink: return 3.0f * In[1];
+		case Action::Rest: return 2.0f * In[2];
+		case Action::Hide: return 3.0f * In[3];
+		case Action::Socialize: return 1.5f * In[4];
+		default: return 0.0f;
+		}
+	}
 
 	// Everything about one NPC's brain, as JSON, for viewing tools.
 	std::string BrainJson(const Npc& P) const
@@ -1664,7 +1680,7 @@ public:
 		float Top = -1e9f, Total = 0.0f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Pull[a];
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Pull[a] + Drive(In, a);
 			for (int h = 0; h < G.Hidden(); ++h) Sum += Hid[h] * OutputWeight(P, h, a);
 			Out[a] = Sum / (G.Curiosity * ArousalTemperature(P));
 			Top = std::max(Top, Out[a]);
@@ -3604,7 +3620,7 @@ private:
 		float Top = -1e9f;
 		for (int a = 0; a < kBrainActions; ++a)
 		{
-			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Recall[a];
+			float Sum = OutputBias(P, a) + ModulatorBias(P, a) + Recall[a] + Drive(P.LastInputs, a);
 			for (int h = 0; h < Hidden; ++h)
 			{
 				Sum += P.LastHidden[h] * OutputWeight(P, h, a);
