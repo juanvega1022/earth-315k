@@ -82,6 +82,7 @@ inline constexpr int kInputRegion[kBrainInputs] = {0, 0, 0, 1, 2, 0, 3, 3, 3, 3,
 inline constexpr int kPrefrontal = 5;
 inline constexpr float kMaxInbornWeight = 3.0f; // Beyond this a neuron is stuck fully on or off whatever it senses (the first instincts use 3).
 inline constexpr float kMaxInbornBias = 1.5f;   // Output leanings: a habit, never so strong that no need can overrule it.
+inline constexpr float kMaxInbornPull = 4.0f;   // Total inborn pull towards any one action, over all neurons.
 
 // What an NPC is born with: both layers of the brain plus three learning traits. The number of
 // hidden neurons can change from parent to child, with no upper limit.
@@ -111,6 +112,16 @@ struct Genome
 		for (float& W : B1) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
 		for (float& W : W2) W = std::clamp(W, -kMaxInbornWeight, kMaxInbornWeight);
 		for (float& W : B2) W = std::clamp(W, -kMaxInbornBias, kMaxInbornBias);
+		// Like learning, evolution can't wire any one action so strongly that it outvotes the drives.
+		for (int a = 0; a < kBrainActions; ++a)
+		{
+			float Pull = std::abs(B2[static_cast<size_t>(a)]);
+			for (int h = 0; h < Hidden(); ++h) Pull += std::abs(W2[static_cast<size_t>(h) * kBrainActions + a]);
+			if (Pull <= kMaxInbornPull) continue;
+			const float K = kMaxInbornPull / Pull;
+			B2[static_cast<size_t>(a)] *= K;
+			for (int h = 0; h < Hidden(); ++h) W2[static_cast<size_t>(h) * kBrainActions + a] *= K;
+		}
 	}
 	// For brains from before regions were inborn: each neuron joins the region whose senses drive it most.
 	void AssignRegions()
@@ -138,7 +149,7 @@ struct Genome
 		if (Ar.Version >= 6) Ar.Io(Kindness);
 		if (Ar.Version >= 56) Ar.Io(Region);
 		else if (Ar.IsReading()) AssignRegions();
-		if (Ar.IsReading() && Ar.Version < 58) Mask(); // The living get the tighter limits too, not only the newborn.
+		if (Ar.IsReading()) Mask(); // The living get the current limits too, not only the newborn (idempotent).
 	}
 
 	// Adds a hidden neuron that starts out with weak, random connections.
@@ -1520,7 +1531,7 @@ public:
 		switch (static_cast<Action>(Act))
 		{
 		case Action::Forage: return 3.0f * In[0];
-		case Action::Drink: return 3.0f * In[1];
+		case Action::Drink: return 3.0f * In[1] + 16.0f * std::max(0.0f, In[1] - 0.6f) / 0.4f; // Dying of thirst overrides almost anything.
 		case Action::Rest: return 2.0f * In[2];
 		case Action::Hide: return 3.0f * In[3];
 		case Action::Socialize: return 1.5f * In[4];
