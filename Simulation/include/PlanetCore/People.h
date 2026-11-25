@@ -2696,6 +2696,7 @@ private:
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	AgeBands DeadLastYear{};                  // The same for last year, for the numbers file; not saved.
 	int Protests = 0;      // Mass protests so far.
 	long long Inheritances = 0; // Heirs who took up a parent's station.
 	long long Divorces = 0;
@@ -4278,7 +4279,7 @@ private:
 		const float Unplanned = Shares ? std::max(0.0f, std::min(DrinkShare, 0.6f) - Drinking) / std::max(0.01f, std::min(DrinkShare, 0.6f)) : 0.0f;
 		if (DrinkShare < 0.6f)
 		{
-			P.Water = std::max(P.Water, 0.75f - 0.5f * Unplanned);
+			P.Water = std::max(P.Water, 0.75f - 0.4f * Unplanned); // Thirsty, but not so short of water that wounds and hunger never heal.
 		}
 		else
 		{
@@ -6471,7 +6472,7 @@ private:
 		BirthRate = BirthsAtCensus < 0 ? 0.0 : 1000.0 * static_cast<double>(Births - BirthsAtCensus) / Alive; // The first year after a start or a load is partial.
 		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
 		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
-		DeathsThisYear = 0, BirthsAtCensus = Births, WorldDead = AgeBands{}, CauseLastYear = CauseThisYear, CauseThisYear = {};
+		DeathsThisYear = 0, BirthsAtCensus = Births, DeadLastYear = WorldDead, WorldDead = AgeBands{}, CauseLastYear = CauseThisYear, CauseThisYear = {};
 		for (Polity& S : States)
 		{
 			auto A = StateDead.find(S.Id);
@@ -7092,6 +7093,13 @@ public:
 		return All > 0.0 ? static_cast<float>(Farm / All) : 0.0f;
 	}
 	// Last year's deaths by cause: 0 illness or old age, 1 predators, 2 hunger, 3 thirst, 4 injury (war, crime, disaster).
+	// Last year's deaths between two ages (whole 5-year bands, From and To multiples of 5; To 0 means no upper limit).
+	int DeathsAged(int From, int To) const
+	{
+		double N = 0.0;
+		for (int b = From / 5; b < (To > 0 ? To / 5 : 20); ++b) N += DeadLastYear[static_cast<size_t>(b)];
+		return static_cast<int>(N);
+	}
 	int DeathsOf(int Cause) const { return CauseLastYear[static_cast<size_t>(std::clamp(Cause, 0, 4))]; }
 	int CompulsoryStates() const { int N = 0; for (const Polity& S : States) N += S.Compulsory; return N; }
 	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
