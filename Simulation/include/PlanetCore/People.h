@@ -1531,7 +1531,7 @@ public:
 		switch (static_cast<Action>(Act))
 		{
 		case Action::Forage: return 3.0f * In[0];
-		case Action::Drink: return 3.0f * In[1] + 16.0f * std::max(0.0f, In[1] - 0.6f) / 0.4f; // Dying of thirst overrides almost anything.
+		case Action::Drink: return 3.0f * In[1] + 16.0f * std::max(0.0f, In[1] - 0.7f) / 0.3f; // Dying of thirst overrides almost anything.
 		case Action::Rest: return 2.0f * In[2];
 		case Action::Hide: return 3.0f * In[3];
 		case Action::Socialize: return 1.5f * In[4];
@@ -2707,6 +2707,7 @@ private:
 	long long DeathsThisYear = 0, BirthsAtCensus = -1;
 	using AgeBands = std::array<double, 20>; // Five-year age groups, the last 95 and over.
 	AgeBands WorldDead{};                     // Deaths this year by age; not saved.
+	double ThirstWaterThisYear = 0.0, ThirstWaterLastYear = 0.0; // Summed best water near those who died of thirst; not saved.
 	AgeBands DeadLastYear{};                  // The same for last year, for the numbers file; not saved.
 	int Protests = 0;      // Mass protests so far.
 	long long Inheritances = 0; // Heirs who took up a parent's station.
@@ -3283,7 +3284,8 @@ private:
 		const double Water = WaterFor(Self, Lat, Lon);
 		const double Game = std::clamp(Eco->GameNear(Lat, Lon, 1000.0) / 2000.0, 0.0, 1.0);
 		const double Danger = std::clamp(Eco->PredatorsNear(Lat, Lon) / 40.0, 0.0, 1.0);
-		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger - Crowd;
+		// Too far from water to keep up by walking to it (see LiveThroughDays): no amount of food makes up for that.
+		return 0.5 * Food + 0.3 * std::min(Water, 0.6) + 0.2 * Game - 0.1 * Danger - Crowd - (Water < 0.34 ? 0.3 : 0.0);
 	}
 
 	// ---- Camps ------------------------------------------------------------------------------
@@ -3338,7 +3340,8 @@ private:
 			const double Here = PlaceScore(C.Lat, C.Lon, C);
 			const double Food = GatherableAt(C.Lat, C.Lon, Fishes(C)) / std::max(1.0, (Eco->PlantCover(C.Lat, C.Lon) + (Fishes(C) ? ShoreFood(C.Lat, C.Lon) : 0.0)) * Settings.GatherableKg);
 			const bool Crowded = C.DaysHere > 30 && CampsNear(C.Lat, C.Lon, 30.0, C.Id, 1) > 0;
-			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || Crowded || (C.DaysHere > 90 && Mine.Chance(OverDays(0.02, Days)));
+			// Water trips take more than 60% of the day below 0.34 of the best water nearby, and people start dying of thirst.
+			const bool Stressed = Food < 0.4 || WaterFor(C, C.Lat, C.Lon) < 0.2 || C.BestWater < 0.34f || Crowded || (C.DaysHere > 90 && Mine.Chance(OverDays(0.02, Days)));
 			if (!Stressed)
 			{
 				return;
@@ -4299,7 +4302,7 @@ private:
 		}
 		else
 		{
-			const float Short = Loss * Days * (1.0f - 0.6f / DrinkShare);
+			const float Short = Loss * Days * std::max(0.0f, 1.0f - std::max(0.6f, Drinking) / DrinkShare); // More time on water trips brings more water.
 			ThirstyDays = std::max(0.0f, (Short - P.Water) / Loss);
 			P.Water = std::max(0.0f, P.Water - Short);
 		}
@@ -5906,6 +5909,7 @@ private:
 		++Deaths;
 		++DeathsThisYear;
 		++CauseThisYear[static_cast<size_t>(std::clamp(Cause, 0, 4))];
+		if (Cause == 3 && !Camps.empty()) ThirstWaterThisYear += Camps[CampSlot(P.Camp)].BestWater;
 		const size_t Band = std::min<size_t>(19, static_cast<size_t>(std::max(0.0, P.AgeYears()) / 5.0));
 		WorldDead[Band] += 1.0;
 		if (!Camps.empty())
@@ -6488,7 +6492,7 @@ private:
 		BirthRate = BirthsAtCensus < 0 ? 0.0 : 1000.0 * static_cast<double>(Births - BirthsAtCensus) / Alive; // The first year after a start or a load is partial.
 		DeathRate = 1000.0 * static_cast<double>(DeathsThisYear) / Alive;
 		const bool Enough = DeathsThisYear >= 50 && BirthsAtCensus >= 0;
-		DeathsThisYear = 0, BirthsAtCensus = Births, DeadLastYear = WorldDead, WorldDead = AgeBands{}, CauseLastYear = CauseThisYear, CauseThisYear = {};
+		DeathsThisYear = 0, BirthsAtCensus = Births, DeadLastYear = WorldDead, WorldDead = AgeBands{}, ThirstWaterLastYear = ThirstWaterThisYear, ThirstWaterThisYear = 0.0, CauseLastYear = CauseThisYear, CauseThisYear = {};
 		for (Polity& S : States)
 		{
 			auto A = StateDead.find(S.Id);
@@ -7116,6 +7120,8 @@ public:
 		for (int b = From / 5; b < (To > 0 ? To / 5 : 20); ++b) N += DeadLastYear[static_cast<size_t>(b)];
 		return static_cast<int>(N);
 	}
+	// Mean best water near camp for last year's deaths of thirst (-1 if none): tells a dry camp from a planning failure.
+	double ThirstDeathWater() const { return CauseLastYear[3] ? ThirstWaterLastYear / CauseLastYear[3] : -1.0; }
 	int DeathsOf(int Cause) const { return CauseLastYear[static_cast<size_t>(std::clamp(Cause, 0, 4))]; }
 	int CompulsoryStates() const { int N = 0; for (const Polity& S : States) N += S.Compulsory; return N; }
 	int TolerantStates() const { int N = 0; for (const Polity& S : States) N += S.Tolerant; return N; }
