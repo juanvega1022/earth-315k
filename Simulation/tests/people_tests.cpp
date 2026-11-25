@@ -115,6 +115,21 @@ static void TestThirstWins()
 	EXPECT(earth::People::Respond(P, In)[static_cast<int>(earth::Action::Drink)] > 0.5f);
 }
 
+static void TestNewChoices()
+{
+	// Teaching, trading and fighting start as faint urges, and the brain senses strangers and the leader.
+	World W(1);
+	W.Days(30);
+	for (const earth::Npc& P : W.Folk.All())
+	{
+		float Sum = 0.0f;
+		for (float C : P.LastChoice) Sum += C;
+		EXPECT(std::abs(Sum - 1.0f) < 1e-3f);
+		for (earth::Action A : {earth::Action::Teach, earth::Action::Trade, earth::Action::Fight}) EXPECT(P.LastChoice[static_cast<size_t>(A)] < 0.3f);
+		EXPECT(P.LastInputs[earth::kBrainInputs - 1] == 1.0f);
+	}
+}
+
 static void TestStart()
 {
 	World W(1);
@@ -1062,6 +1077,7 @@ int main()
 	TestBrainResize();
 	TestSkillsSpread();
 	TestRegions();
+	TestNewChoices();
 	TestThirstWins();
 	TestSynapticScaling();
 	TestStart();
