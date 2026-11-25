@@ -2666,6 +2666,7 @@ private:
 	double WorldCourt = 0.0;      // Year the world court first sat; 0 before.
 	double NextRealMark = 1e6;
 	int WorldWars = 0, NuclearWars = 0;
+	double WorldWarBegan = -1e9; // Not saved: after a load, a world war under way counts from then.
 	double WorldWarEnded = -1e9; // shortcut: not saved, so a load right after a world war may allow the next one sooner.
 	bool InWorldWar = false, AnyBomb = false, AnyWeb = false, AnyAI = false;
 	double LeagueYear = 0.0;
@@ -6294,17 +6295,26 @@ private:
 		const double World = std::max(1, Alive());
 		// World war: industrial states holding a third of the world's people fight industrial
 		// enemies at once, on three or more continents.
+		// Only the great powers (the eight biggest states) make a world war: with a hundred nations,
+		// some small ones are always fighting somewhere, which is not a world war.
+		std::vector<const Polity*> Powers;
+		for (const Polity& S : States) if (S.Bands > 0) Powers.push_back(&S);
+		std::partial_sort(Powers.begin(), Powers.begin() + std::min<size_t>(8, Powers.size()), Powers.end(), [](const Polity* A, const Polity* B) { return A->Members > B->Members; });
+		Powers.resize(std::min<size_t>(8, Powers.size()));
 		int Fighting = 0, Sides = 0, Lands = 0;
-		for (const Polity& S : States)
-			if (const Polity* E = S.Enemy ? StateById(S.Enemy) : nullptr; E && Has(S.Known, Engines) && Has(E->Known, Engines))
-				Fighting += S.Members, ++Sides, Lands |= 1 << RegionOf(S.Lat, S.Lon);
-		const bool Big = Sides >= 4 && Fighting >= World / 3.0 && std::bitset<32>(static_cast<unsigned>(Lands)).count() >= 3;
+		for (const Polity* S : Powers)
+			if (const Polity* E = S->Enemy ? StateById(S->Enemy) : nullptr; E && Has(S->Known, Engines) && Has(E->Known, Engines))
+				Fighting += S->Members, ++Sides, Lands |= 1 << RegionOf(S->Lat, S->Lon);
+		// Once begun, it lasts while three great powers still fight.
+		const bool Big = InWorldWar ? Sides >= 3 : Sides >= 4 && Fighting >= World / 3.0 && std::bitset<32>(static_cast<unsigned>(Lands)).count() >= 3;
 		if (Big && !InWorldWar && Eco->Years() - WorldWarEnded > 20.0) // Fighting that flares again within 20 years is the same war.
 		{
-			InWorldWar = true, ++WorldWars;
+			InWorldWar = true, ++WorldWars, WorldWarBegan = Eco->Years();
 			AddEvent("World war " + std::to_string(WorldWars) + ": " + std::to_string(Sides) + " industrial states, with " + std::to_string(Fighting) + " people, are at war at once");
 		}
-		else if (!Big && InWorldWar) InWorldWar = false, WorldWarEnded = Eco->Years(), AddEvent("World war " + std::to_string(WorldWars) + " ends");
+		if (InWorldWar && WorldWarBegan < -1e8) WorldWarBegan = Eco->Years();
+		// Exhaustion: a world war ends within eight years; the great powers settle even if small wars go on.
+		else if ((!Big || Eco->Years() - WorldWarBegan >= 8.0) && InWorldWar) InWorldWar = false, WorldWarEnded = Eco->Years(), AddEvent("World war " + std::to_string(WorldWars) + " ends");
 		// Nuclear weapons: the first, their use in a war, and accidents.
 		for (Polity& S : States)
 		{
